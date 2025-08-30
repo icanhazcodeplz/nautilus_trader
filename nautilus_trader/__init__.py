@@ -18,9 +18,11 @@ algorithmic trading platform, providing quantitative traders with the ability to
 portfolios of automated trading strategies on historical data with an event-driven engine,
 and also deploy those same strategies live, with no code changes.
 """
-
+import os
 from pathlib import Path
 from typing import Final
+
+from dotenv import load_dotenv
 
 from nautilus_trader.core import nautilus_pyo3
 
@@ -31,3 +33,9 @@ PACKAGE_ROOT: Final[Path] = Path(__file__).resolve().parent.parent
 TEST_DATA_DIR: Final[Path] = PACKAGE_ROOT / "tests" / "test_data"
 
 NAUTILUS_USER_AGENT: Final[str] = nautilus_pyo3.NAUTILUS_USER_AGENT
+
+load_dotenv(PACKAGE_ROOT / ".env")
+
+class ENV:
+    DATABENTO_API_KEY = os.environ["DATABENTO_API_KEY"]
+
