@@ -38,9 +38,13 @@ from nautilus_trader.execution.messages import SubmitOrderList
 from nautilus_trader.execution.reports import FillReport
 from nautilus_trader.execution.reports import OrderStatusReport
 from nautilus_trader.execution.reports import PositionStatusReport
+from nautilus_trader.live.cancellation import DEFAULT_FUTURE_CANCELLATION_TIMEOUT
+from nautilus_trader.live.cancellation import cancel_tasks_with_timeout
 from nautilus_trader.live.execution_client import LiveExecutionClient
 from nautilus_trader.model.enums import AccountType
 from nautilus_trader.model.enums import OmsType
+from nautilus_trader.model.events import AccountState
+from nautilus_trader.model.identifiers import AccountId
 from nautilus_trader.model.identifiers import ClientId
 from nautilus_trader.model.identifiers import ClientOrderId
 from nautilus_trader.model.identifiers import VenueOrderId
@@ -102,16 +106,26 @@ class BitmexExecutionClient(LiveExecutionClient):
         self._log.info(f"config.testnet={config.testnet}", LogColor.BLUE)
         self._log.info(f"config.http_timeout_secs={config.http_timeout_secs}", LogColor.BLUE)
 
+        # Set initial account ID (will be updated with actual account number on connect)
+        self._account_id_prefix = name or BITMEX_VENUE.value
+        account_id = AccountId(f"{self._account_id_prefix}-master")  # Temporary, like OKX
+        self._set_account_id(account_id)
+
+        # Create pyo3 account ID for Rust HTTP client
+        self.pyo3_account_id = nautilus_pyo3.AccountId(account_id.value)
+
         # HTTP API
         self._http_client = client
         self._log.info(f"REST API key {self._http_client.api_key}", LogColor.BLUE)
 
         # WebSocket API
         ws_url = self._determine_ws_url(config)
+
         self._ws_client = nautilus_pyo3.BitmexWebSocketClient(
-            url=ws_url,
+            url=ws_url,  # TODO: Move this to Rust
             api_key=config.api_key,
             api_secret=config.api_secret,
+            account_id=self.pyo3_account_id,
             heartbeat=30,
         )
         self._ws_client_futures: set[asyncio.Future] = set()
@@ -130,9 +144,6 @@ class BitmexExecutionClient(LiveExecutionClient):
         return self._instrument_provider  # type: ignore
 
     def _determine_ws_url(self, config: BitmexExecClientConfig) -> str:
-        """
-        Determine the WebSocket URL based on configuration.
-        """
         if config.base_url_ws:
             return config.base_url_ws
         elif config.testnet:
@@ -140,15 +151,58 @@ class BitmexExecutionClient(LiveExecutionClient):
         else:
             return "wss://ws.bitmex.com/realtime"
 
+    def _cache_instruments(self) -> None:
+        # Ensures instrument definitions are available for correct
+        # price and size precisions when parsing responses
+        instruments_pyo3 = self._instrument_provider.instruments_pyo3()  # type: ignore
+
+        for inst in instruments_pyo3:
+            self._http_client.add_instrument(inst)
+
+        self._log.debug("Cached instruments", LogColor.MAGENTA)
+
     async def _connect(self) -> None:
-        # Connect WebSocket client (non-blocking)
-        future = asyncio.ensure_future(
-            self._ws_client.connect(
-                self._handle_msg,
-            ),
+        await self._instrument_provider.initialize()
+        self._cache_instruments()
+
+        instruments = self._instrument_provider.instruments_pyo3()  # type: ignore
+
+        await self._ws_client.connect(
+            instruments,
+            self._handle_msg,
         )
-        self._ws_client_futures.add(future)
+
+        # Wait for connection to be established
+        await self._ws_client.wait_until_active(timeout_secs=10.0)
         self._log.info(f"Connected to WebSocket {self._ws_client.url}", LogColor.BLUE)
+
+        # Update account state on connection
+        await self._update_account_state()
+
+    async def _update_account_state(self) -> None:
+        try:
+            # First get the margin data to extract the actual account number
+            account_number = await self._http_client.http_get_margin("XBt")  # type: ignore[attr-defined]
+
+            # Update account ID with actual account number from BitMEX
+            if account_number:
+                actual_account_id = AccountId(f"{self._account_id_prefix}-{account_number}")
+                self._set_account_id(actual_account_id)
+                self.pyo3_account_id = nautilus_pyo3.AccountId(actual_account_id.value)
+                self._log.info(f"Updated account ID to {actual_account_id}", LogColor.BLUE)
+
+            # Now request the account state with the correct account ID
+            pyo3_account_state = await self._http_client.request_account_state(self.pyo3_account_id)
+            account_state = AccountState.from_dict(pyo3_account_state.to_dict())
+
+            self.generate_account_state(
+                balances=account_state.balances,
+                margins=[],  # TBD
+                reported=True,
+                ts_event=self._clock.timestamp_ns(),
+            )
+        except Exception as e:
+            self._log.error(f"Failed to update account state: {e}")
 
     async def _disconnect(self) -> None:
         # Delay to allow websocket to send any unsubscribe messages
@@ -165,19 +219,11 @@ class BitmexExecutionClient(LiveExecutionClient):
             )
 
         # Cancel any pending futures
-        for future in self._ws_client_futures:
-            if not future.done():
-                future.cancel()
-
-        if self._ws_client_futures:
-            try:
-                await asyncio.wait_for(
-                    asyncio.gather(*self._ws_client_futures, return_exceptions=True),
-                    timeout=2.0,
-                )
-            except TimeoutError:
-                self._log.warning("Timeout while waiting for websockets shutdown to complete")
-
+        await cancel_tasks_with_timeout(
+            self._ws_client_futures,
+            self._log,
+            timeout_secs=DEFAULT_FUTURE_CANCELLATION_TIMEOUT,
+        )
         self._ws_client_futures.clear()
 
     async def _submit_order(self, command: SubmitOrder) -> None:
@@ -292,12 +338,19 @@ class BitmexExecutionClient(LiveExecutionClient):
             return []
 
     def _handle_msg(self, msg: Any) -> None:
-        """
-        Handle WebSocket messages from the exchange.
-        """
         try:
-            # TODO: Implement message handling for execution messages
-            self._log.debug(f"Received message: {msg}")
+            if isinstance(msg, nautilus_pyo3.AccountState):
+                account_state = AccountState.from_dict(msg.to_dict())
+
+                self.generate_account_state(
+                    balances=account_state.balances,
+                    margins=account_state.margins,
+                    reported=account_state.is_reported,
+                    ts_event=account_state.ts_event,
+                )
+            else:
+                # TODO: Implement other message handling for execution messages
+                self._log.debug(f"Received message: {msg}")
         except Exception as e:
             self._log.exception("Error handling websocket message", e)
 

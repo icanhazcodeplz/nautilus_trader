@@ -39,7 +39,7 @@ use nautilus_core::{
 };
 use nautilus_model::{
     data::BarType,
-    enums::{OrderSide, OrderStatus, OrderType, PositionSide},
+    enums::{OrderSide, OrderStatus, OrderType, PositionSide, TimeInForce},
     events::{AccountState, OrderCancelRejected, OrderModifyRejected, OrderRejected},
     identifiers::{AccountId, ClientOrderId, InstrumentId, StrategyId, TraderId, VenueOrderId},
     instruments::{Instrument, InstrumentAny},
@@ -51,7 +51,6 @@ use nautilus_network::{
 };
 use reqwest::header::USER_AGENT;
 use serde_json::Value;
-use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::{Error, Message};
 use ustr::Ustr;
 
@@ -68,7 +67,10 @@ use super::{
 };
 use crate::{
     common::{
-        consts::{OKX_NAUTILUS_BROKER_ID, OKX_WS_PUBLIC_URL},
+        consts::{
+            OKX_NAUTILUS_BROKER_ID, OKX_SUPPORTED_ORDER_TYPES, OKX_SUPPORTED_TIME_IN_FORCE,
+            OKX_WS_PUBLIC_URL,
+        },
         credential::Credential,
         enums::{OKXInstrumentType, OKXOrderType, OKXPositionSide, OKXSide, OKXTradeMode},
         parse::{bar_spec_as_okx_channel, okx_instrument_type, parse_account_state},
@@ -121,15 +123,15 @@ pub struct OKXWebSocketClient {
     account_id: AccountId,
     credential: Option<Credential>,
     heartbeat: Option<u64>,
-    inner: Option<Arc<WebSocketClient>>,
+    inner: Arc<tokio::sync::RwLock<Option<WebSocketClient>>>,
     auth_state: Arc<tokio::sync::watch::Sender<bool>>,
     auth_state_rx: tokio::sync::watch::Receiver<bool>,
     rx: Option<Arc<tokio::sync::mpsc::UnboundedReceiver<NautilusWsMessage>>>,
     signal: Arc<AtomicBool>,
     task_handle: Option<Arc<tokio::task::JoinHandle<()>>>,
-    subscriptions_inst_type: Arc<Mutex<AHashMap<OKXWsChannel, AHashSet<OKXInstrumentType>>>>,
-    subscriptions_inst_family: Arc<Mutex<AHashMap<OKXWsChannel, AHashSet<Ustr>>>>,
-    subscriptions_inst_id: Arc<Mutex<AHashMap<OKXWsChannel, AHashSet<Ustr>>>>,
+    subscriptions_inst_type: Arc<DashMap<OKXWsChannel, AHashSet<OKXInstrumentType>>>,
+    subscriptions_inst_family: Arc<DashMap<OKXWsChannel, AHashSet<Ustr>>>,
+    subscriptions_inst_id: Arc<DashMap<OKXWsChannel, AHashSet<Ustr>>>,
     request_id_counter: Arc<AtomicU64>,
     pending_place_requests: Arc<DashMap<String, PlaceRequestData>>,
     pending_cancel_requests: Arc<DashMap<String, CancelRequestData>>,
@@ -180,9 +182,9 @@ impl OKXWebSocketClient {
         };
 
         let signal = Arc::new(AtomicBool::new(false));
-        let subscriptions_inst_type = Arc::new(Mutex::new(AHashMap::new()));
-        let subscriptions_inst_family = Arc::new(Mutex::new(AHashMap::new()));
-        let subscriptions_inst_id = Arc::new(Mutex::new(AHashMap::new()));
+        let subscriptions_inst_type = Arc::new(DashMap::new());
+        let subscriptions_inst_family = Arc::new(DashMap::new());
+        let subscriptions_inst_id = Arc::new(DashMap::new());
         let (auth_tx, auth_rx) = tokio::sync::watch::channel(false);
 
         Ok(Self {
@@ -190,7 +192,7 @@ impl OKXWebSocketClient {
             account_id,
             credential,
             heartbeat,
-            inner: None,
+            inner: Arc::new(tokio::sync::RwLock::new(None)),
             auth_state: Arc::new(auth_tx),
             auth_state_rx: auth_rx,
             rx: None,
@@ -258,27 +260,57 @@ impl OKXWebSocketClient {
         self.credential.clone().map(|c| c.api_key.as_str())
     }
 
+    /// Get a read lock on the inner client
     /// Returns a value indicating whether the client is active.
     pub fn is_active(&self) -> bool {
-        match &self.inner {
-            Some(inner) => inner.is_active(),
-            None => false,
+        // Use try_read to avoid blocking
+        match self.inner.try_read() {
+            Ok(guard) => match &*guard {
+                Some(inner) => inner.is_active(),
+                None => false,
+            },
+            Err(_) => false, // If we can't get the lock, assume not active
         }
     }
 
     /// Returns a value indicating whether the client is closed.
     pub fn is_closed(&self) -> bool {
-        match &self.inner {
-            Some(inner) => inner.is_closed(),
-            None => true,
+        // Use try_read to avoid blocking
+        match self.inner.try_read() {
+            Ok(guard) => match &*guard {
+                Some(inner) => inner.is_closed(),
+                None => true,
+            },
+            Err(_) => true, // If we can't get the lock, assume closed
         }
     }
 
-    pub async fn connect(&mut self, instruments: Vec<InstrumentAny>) -> anyhow::Result<()> {
+    /// Initialize the instruments cache with the given `instruments`.
+    pub fn initialize_instruments_cache(&mut self, instruments: Vec<InstrumentAny>) {
+        let mut instruments_cache: AHashMap<Ustr, InstrumentAny> = AHashMap::new();
+        for inst in instruments {
+            instruments_cache.insert(inst.symbol().inner(), inst.clone());
+        }
+
+        self.instruments_cache = Arc::new(instruments_cache)
+    }
+
+    pub async fn connect(&mut self) -> anyhow::Result<()> {
         let client = self.clone();
         let post_reconnect = Arc::new(move || {
             let client = client.clone();
-            tokio::spawn(async move { client.resubscribe_all().await });
+            tokio::spawn(async move {
+                // Re-authenticate first if we have credentials
+                if client.credential.is_some() {
+                    if let Err(e) = client.authenticate().await {
+                        tracing::error!("Failed to re-authenticate after reconnect: {e}");
+                        return;
+                    }
+                    tracing::info!("Successfully re-authenticated after reconnect");
+                }
+
+                client.resubscribe_all().await;
+            });
         });
 
         let config = WebSocketConfig {
@@ -317,16 +349,13 @@ impl OKXWebSocketClient {
         )
         .await?;
 
-        self.inner = Some(Arc::new(client));
-
-        let account_id = self.account_id;
-        let mut instruments_map: AHashMap<Ustr, InstrumentAny> = AHashMap::new();
-        for inst in instruments {
-            instruments_map.insert(inst.symbol().inner(), inst.clone());
+        // Set the inner client with write lock
+        {
+            let mut inner_guard = self.inner.write().await;
+            *inner_guard = Some(client);
         }
 
-        self.instruments_cache = Arc::new(instruments_map.clone());
-
+        let account_id = self.account_id;
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<NautilusWsMessage>();
 
         self.rx = Some(Arc::new(rx));
@@ -336,10 +365,11 @@ impl OKXWebSocketClient {
         let pending_amend_requests = self.pending_amend_requests.clone();
         let auth_state = self.auth_state.clone();
 
+        let instruments_cache = self.instruments_cache.clone();
         let stream_handle = get_runtime().spawn(async move {
             OKXWsMessageHandler::new(
                 account_id,
-                instruments_map,
+                instruments_cache,
                 reader,
                 signal,
                 tx,
@@ -365,7 +395,7 @@ impl OKXWebSocketClient {
     }
 
     /// Authenticates the WebSocket session with OKX.
-    async fn authenticate(&mut self) -> Result<(), Error> {
+    async fn authenticate(&self) -> Result<(), Error> {
         let credential = match &self.credential {
             Some(credential) => credential,
             None => {
@@ -390,14 +420,17 @@ impl OKXWebSocketClient {
             }]
         });
 
-        if let Some(inner) = &self.inner {
-            if let Err(e) = inner.send_text(auth_message.to_string(), None).await {
-                tracing::error!("Error sending auth message: {e:?}");
-                return Err(Error::Io(std::io::Error::other(e.to_string())));
+        {
+            let inner_guard = self.inner.read().await;
+            if let Some(inner) = &*inner_guard {
+                if let Err(e) = inner.send_text(auth_message.to_string(), None).await {
+                    tracing::error!("Error sending auth message: {e:?}");
+                    return Err(Error::Io(std::io::Error::other(e.to_string())));
+                }
+            } else {
+                log::error!("Cannot authenticate: not connected");
+                return Err(Error::ConnectionClosed);
             }
-        } else {
-            log::error!("Cannot authenticate: not connected");
-            return Err(Error::ConnectionClosed);
         }
 
         // Wait for authentication to complete
@@ -442,23 +475,51 @@ impl OKXWebSocketClient {
         }
     }
 
+    /// Wait until the WebSocket connection is active.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection times out.
+    pub async fn wait_until_active(&self, timeout_secs: f64) -> Result<(), OKXWsError> {
+        let timeout = tokio::time::Duration::from_secs_f64(timeout_secs);
+
+        tokio::time::timeout(timeout, async {
+            while !self.is_active() {
+                tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .map_err(|_| {
+            OKXWsError::ClientError(format!(
+                "WebSocket connection timeout after {timeout_secs} seconds"
+            ))
+        })?;
+
+        Ok(())
+    }
+
     /// Closes the client.
     pub async fn close(&mut self) -> Result<(), Error> {
         log::debug!("Starting close process");
 
         self.signal.store(true, Ordering::Relaxed);
 
-        if let Some(inner) = &self.inner {
-            log::debug!("Disconnecting websocket");
+        {
+            let inner_guard = self.inner.read().await;
+            if let Some(inner) = &*inner_guard {
+                log::debug!("Disconnecting websocket");
 
-            match tokio::time::timeout(Duration::from_secs(3), inner.disconnect()).await {
-                Ok(()) => log::debug!("Websocket disconnected successfully"),
-                Err(_) => {
-                    log::warn!("Timeout waiting for websocket disconnect, continuing with cleanup")
+                match tokio::time::timeout(Duration::from_secs(3), inner.disconnect()).await {
+                    Ok(()) => log::debug!("Websocket disconnected successfully"),
+                    Err(_) => {
+                        log::warn!(
+                            "Timeout waiting for websocket disconnect, continuing with cleanup"
+                        )
+                    }
                 }
+            } else {
+                log::debug!("No active connection to disconnect");
             }
-        } else {
-            log::debug!("No active connection to disconnect");
         }
 
         // Clean up stream handle with timeout
@@ -493,6 +554,21 @@ impl OKXWebSocketClient {
         Ok(())
     }
 
+    /// Get active subscriptions for a specific instrument.
+    pub fn get_subscriptions(&self, instrument_id: InstrumentId) -> Vec<OKXWsChannel> {
+        let symbol = instrument_id.symbol.inner();
+        let mut channels = Vec::new();
+
+        for entry in self.subscriptions_inst_id.iter() {
+            let (channel, instruments) = entry.pair();
+            if instruments.contains(&symbol) {
+                channels.push(channel.clone());
+            }
+        }
+
+        channels
+    }
+
     fn generate_unique_request_id(&self) -> String {
         self.request_id_counter
             .fetch_add(1, Ordering::SeqCst)
@@ -503,28 +579,25 @@ impl OKXWebSocketClient {
         for arg in &args {
             // Update instrument type subscriptions
             if let Some(inst_type) = &arg.inst_type {
-                let mut active_subs = self.subscriptions_inst_type.lock().await;
-                active_subs
+                self.subscriptions_inst_type
                     .entry(arg.channel.clone())
-                    .or_insert_with(AHashSet::new)
+                    .or_default()
                     .insert(*inst_type);
             }
 
             // Update instrument family subscriptions
             if let Some(inst_family) = &arg.inst_family {
-                let mut active_subs = self.subscriptions_inst_family.lock().await;
-                active_subs
+                self.subscriptions_inst_family
                     .entry(arg.channel.clone())
-                    .or_insert_with(AHashSet::new)
+                    .or_default()
                     .insert(*inst_family);
             }
 
             // Update instrument ID subscriptions
             if let Some(inst_id) = &arg.inst_id {
-                let mut active_subs = self.subscriptions_inst_family.lock().await;
-                active_subs
+                self.subscriptions_inst_id
                     .entry(arg.channel.clone())
-                    .or_insert_with(AHashSet::new)
+                    .or_default()
                     .insert(*inst_id);
             }
         }
@@ -537,49 +610,59 @@ impl OKXWebSocketClient {
         let json_txt =
             serde_json::to_string(&message).map_err(|e| OKXWsError::JsonError(e.to_string()))?;
 
-        if let Some(inner) = &self.inner {
-            if let Err(e) = inner
-                .send_text(json_txt, Some(vec!["subscription".to_string()]))
-                .await
-            {
-                tracing::error!("Error sending message: {e:?}")
+        {
+            let inner_guard = self.inner.read().await;
+            if let Some(inner) = &*inner_guard {
+                if let Err(e) = inner
+                    .send_text(json_txt, Some(vec!["subscription".to_string()]))
+                    .await
+                {
+                    tracing::error!("Error sending message: {e:?}")
+                }
+            } else {
+                return Err(OKXWsError::ClientError(
+                    "Cannot send message: not connected".to_string(),
+                ));
             }
-        } else {
-            return Err(OKXWsError::ClientError(
-                "Cannot send message: not connected".to_string(),
-            ));
         }
 
         Ok(())
     }
 
+    #[allow(clippy::collapsible_if)]
     async fn unsubscribe(&self, args: Vec<OKXSubscriptionArg>) -> Result<(), OKXWsError> {
         for arg in &args {
             // Update instrument type subscriptions
             if let Some(inst_type) = &arg.inst_type {
-                let mut active_subs = self.subscriptions_inst_type.lock().await;
-                active_subs
-                    .entry(arg.channel.clone())
-                    .or_insert_with(AHashSet::new)
-                    .remove(inst_type);
+                if let Some(mut entry) = self.subscriptions_inst_type.get_mut(&arg.channel) {
+                    entry.remove(inst_type);
+                    if entry.is_empty() {
+                        drop(entry);
+                        self.subscriptions_inst_type.remove(&arg.channel);
+                    }
+                }
             }
 
             // Update instrument family subscriptions
             if let Some(inst_family) = &arg.inst_family {
-                let mut active_subs = self.subscriptions_inst_family.lock().await;
-                active_subs
-                    .entry(arg.channel.clone())
-                    .or_insert_with(AHashSet::new)
-                    .remove(inst_family);
+                if let Some(mut entry) = self.subscriptions_inst_family.get_mut(&arg.channel) {
+                    entry.remove(inst_family);
+                    if entry.is_empty() {
+                        drop(entry);
+                        self.subscriptions_inst_family.remove(&arg.channel);
+                    }
+                }
             }
 
             // Update instrument ID subscriptions
             if let Some(inst_id) = &arg.inst_id {
-                let mut active_subs = self.subscriptions_inst_family.lock().await;
-                active_subs
-                    .entry(arg.channel.clone())
-                    .or_insert_with(AHashSet::new)
-                    .remove(inst_id);
+                if let Some(mut entry) = self.subscriptions_inst_id.get_mut(&arg.channel) {
+                    entry.remove(inst_id);
+                    if entry.is_empty() {
+                        drop(entry);
+                        self.subscriptions_inst_id.remove(&arg.channel);
+                    }
+                }
             }
         }
 
@@ -590,24 +673,47 @@ impl OKXWebSocketClient {
 
         let json_txt = serde_json::to_string(&message).expect("Must be valid JSON");
 
-        if let Some(inner) = &self.inner {
-            if let Err(e) = inner
-                .send_text(json_txt, Some(vec!["subscription".to_string()]))
-                .await
-            {
-                tracing::error!("Error sending message: {e:?}")
+        {
+            let inner_guard = self.inner.read().await;
+            if let Some(inner) = &*inner_guard {
+                if let Err(e) = inner
+                    .send_text(json_txt, Some(vec!["subscription".to_string()]))
+                    .await
+                {
+                    tracing::error!("Error sending message: {e:?}")
+                }
+            } else {
+                log::error!("Cannot send message: not connected");
             }
-        } else {
-            log::error!("Cannot send message: not connected");
         }
 
         Ok(())
     }
 
     async fn resubscribe_all(&self) {
-        let subs_inst_type = self.subscriptions_inst_type.lock().await.clone();
-        let subs_inst_family = self.subscriptions_inst_family.lock().await.clone();
-        let subs_inst_id = self.subscriptions_inst_id.lock().await.clone();
+        let mut subs_inst_type = Vec::new();
+        for entry in self.subscriptions_inst_type.iter() {
+            let (channel, inst_types) = entry.pair();
+            if !inst_types.is_empty() {
+                subs_inst_type.push((channel.clone(), inst_types.clone()));
+            }
+        }
+
+        let mut subs_inst_family = Vec::new();
+        for entry in self.subscriptions_inst_family.iter() {
+            let (channel, inst_families) = entry.pair();
+            if !inst_families.is_empty() {
+                subs_inst_family.push((channel.clone(), inst_families.clone()));
+            }
+        }
+
+        let mut subs_inst_id = Vec::new();
+        for entry in self.subscriptions_inst_id.iter() {
+            let (channel, inst_ids) = entry.pair();
+            if !inst_ids.is_empty() {
+                subs_inst_id.push((channel.clone(), inst_ids.clone()));
+            }
+        }
 
         // Process instrument type subscriptions
         for (channel, inst_types) in subs_inst_type {
@@ -1175,17 +1281,21 @@ impl OKXWebSocketClient {
             id: Some(request_id),
             op: OKXWsOperation::CancelOrder,
             args: vec![params],
+            exp_time: None,
         };
 
         let txt = serde_json::to_string(&req).map_err(|e| OKXWsError::JsonError(e.to_string()))?;
 
-        if let Some(inner) = &self.inner {
-            if let Err(e) = inner.send_text(txt, Some(vec!["cancel".to_string()])).await {
-                tracing::error!("Error sending message: {e:?}");
+        {
+            let inner_guard = self.inner.read().await;
+            if let Some(inner) = &*inner_guard {
+                if let Err(e) = inner.send_text(txt, Some(vec!["cancel".to_string()])).await {
+                    tracing::error!("Error sending message: {e:?}");
+                }
+                Ok(())
+            } else {
+                Err(OKXWsError::ClientError("Not connected".to_string()))
             }
-            Ok(())
-        } else {
-            Err(OKXWsError::ClientError("Not connected".to_string()))
         }
     }
 
@@ -1206,17 +1316,21 @@ impl OKXWebSocketClient {
             id: Some(request_id),
             op: OKXWsOperation::MassCancel,
             args,
+            exp_time: None,
         };
 
         let txt = serde_json::to_string(&req).map_err(|e| OKXWsError::JsonError(e.to_string()))?;
 
-        if let Some(inner) = &self.inner {
-            if let Err(e) = inner.send_text(txt, Some(vec!["cancel".to_string()])).await {
-                tracing::error!("Error sending message: {e:?}");
+        {
+            let inner_guard = self.inner.read().await;
+            if let Some(inner) = &*inner_guard {
+                if let Err(e) = inner.send_text(txt, Some(vec!["cancel".to_string()])).await {
+                    tracing::error!("Error sending message: {e:?}");
+                }
+                Ok(())
+            } else {
+                Err(OKXWsError::ClientError("Not connected".to_string()))
             }
-            Ok(())
-        } else {
-            Err(OKXWsError::ClientError("Not connected".to_string()))
         }
     }
 
@@ -1236,17 +1350,21 @@ impl OKXWebSocketClient {
             id: Some(request_id),
             op: OKXWsOperation::AmendOrder,
             args: vec![params],
+            exp_time: None,
         };
 
         let txt = serde_json::to_string(&req).map_err(|e| OKXWsError::JsonError(e.to_string()))?;
 
-        if let Some(inner) = &self.inner {
-            if let Err(e) = inner.send_text(txt, Some(vec!["amend".to_string()])).await {
-                tracing::error!("Error sending message: {e:?}");
+        {
+            let inner_guard = self.inner.read().await;
+            if let Some(inner) = &*inner_guard {
+                if let Err(e) = inner.send_text(txt, Some(vec!["amend".to_string()])).await {
+                    tracing::error!("Error sending message: {e:?}");
+                }
+                Ok(())
+            } else {
+                Err(OKXWsError::ClientError("Not connected".to_string()))
             }
-            Ok(())
-        } else {
-            Err(OKXWsError::ClientError("Not connected".to_string()))
         }
     }
 
@@ -1262,17 +1380,21 @@ impl OKXWebSocketClient {
             id: Some(request_id),
             op: OKXWsOperation::BatchOrders,
             args,
+            exp_time: None,
         };
 
         let txt = serde_json::to_string(&req).map_err(|e| OKXWsError::JsonError(e.to_string()))?;
 
-        if let Some(inner) = &self.inner {
-            if let Err(e) = inner.send_text(txt, Some(vec!["order".to_string()])).await {
-                tracing::error!("Error sending message: {e:?}");
+        {
+            let inner_guard = self.inner.read().await;
+            if let Some(inner) = &*inner_guard {
+                if let Err(e) = inner.send_text(txt, Some(vec!["order".to_string()])).await {
+                    tracing::error!("Error sending message: {e:?}");
+                }
+                Ok(())
+            } else {
+                Err(OKXWsError::ClientError("Not connected".to_string()))
             }
-            Ok(())
-        } else {
-            Err(OKXWsError::ClientError("Not connected".to_string()))
         }
     }
 
@@ -1288,17 +1410,21 @@ impl OKXWebSocketClient {
             id: Some(request_id),
             op: OKXWsOperation::BatchCancelOrders,
             args,
+            exp_time: None,
         };
 
         let txt = serde_json::to_string(&req).map_err(|e| OKXWsError::JsonError(e.to_string()))?;
 
-        if let Some(inner) = &self.inner {
-            if let Err(e) = inner.send_text(txt, Some(vec!["cancel".to_string()])).await {
-                tracing::error!("Error sending message: {e:?}");
+        {
+            let inner_guard = self.inner.read().await;
+            if let Some(inner) = &*inner_guard {
+                if let Err(e) = inner.send_text(txt, Some(vec!["cancel".to_string()])).await {
+                    tracing::error!("Error sending message: {e:?}");
+                }
+                Ok(())
+            } else {
+                Err(OKXWsError::ClientError("Not connected".to_string()))
             }
-            Ok(())
-        } else {
-            Err(OKXWsError::ClientError("Not connected".to_string()))
         }
     }
 
@@ -1314,17 +1440,21 @@ impl OKXWebSocketClient {
             id: Some(request_id),
             op: OKXWsOperation::BatchAmendOrders,
             args,
+            exp_time: None,
         };
 
         let txt = serde_json::to_string(&req).map_err(|e| OKXWsError::JsonError(e.to_string()))?;
 
-        if let Some(inner) = &self.inner {
-            if let Err(e) = inner.send_text(txt, Some(vec!["amend".to_string()])).await {
-                tracing::error!("Error sending message: {e:?}");
+        {
+            let inner_guard = self.inner.read().await;
+            if let Some(inner) = &*inner_guard {
+                if let Err(e) = inner.send_text(txt, Some(vec!["amend".to_string()])).await {
+                    tracing::error!("Error sending message: {e:?}");
+                }
+                Ok(())
+            } else {
+                Err(OKXWsError::ClientError("Not connected".to_string()))
             }
-            Ok(())
-        } else {
-            Err(OKXWsError::ClientError("Not connected".to_string()))
         }
     }
 
@@ -1344,6 +1474,7 @@ impl OKXWebSocketClient {
         order_side: OrderSide,
         order_type: OrderType,
         quantity: Quantity,
+        time_in_force: Option<TimeInForce>,
         price: Option<Price>,
         trigger_price: Option<Price>,
         post_only: Option<bool>,
@@ -1351,6 +1482,20 @@ impl OKXWebSocketClient {
         quote_quantity: Option<bool>,
         position_side: Option<PositionSide>,
     ) -> Result<(), OKXWsError> {
+        if !OKX_SUPPORTED_ORDER_TYPES.contains(&order_type) {
+            return Err(OKXWsError::ClientError(format!(
+                "Unsupported order type: {order_type:?}",
+            )));
+        }
+
+        if let Some(tif) = time_in_force
+            && !OKX_SUPPORTED_TIME_IN_FORCE.contains(&tif)
+        {
+            return Err(OKXWsError::ClientError(format!(
+                "Unsupported time in force: {tif:?}",
+            )));
+        }
+
         let mut builder = WsPostOrderParamsBuilder::default();
 
         builder.inst_id(instrument_id.symbol.as_str());
@@ -1414,11 +1559,20 @@ impl OKXWebSocketClient {
             builder.pos_side(pos_side);
         };
 
+        // Determine OKX order type based on order type and post_only
         let okx_ord_type = if post_only.unwrap_or(false) {
             OKXOrderType::PostOnly
         } else {
             OKXOrderType::from(order_type)
         };
+
+        log::debug!(
+            "Order type mapping: order_type={:?}, time_in_force={:?}, post_only={:?} -> okx_ord_type={:?}",
+            order_type,
+            time_in_force,
+            post_only,
+            okx_ord_type
+        );
 
         builder.ord_type(okx_ord_type);
         builder.sz(quantity.to_string());
@@ -1434,6 +1588,9 @@ impl OKXWebSocketClient {
         let params = builder
             .build()
             .map_err(|e| OKXWsError::ClientError(format!("Build order params error: {e}")))?;
+
+        // TODO: Log the full order parameters being sent (for development)
+        log::debug!("Sending order params to OKX: {:?}", params);
 
         let request_id = self.generate_unique_request_id();
 
@@ -1504,18 +1661,22 @@ impl OKXWebSocketClient {
         let req = OKXWsRequest {
             id: Some(request_id),
             op: OKXWsOperation::Order,
+            exp_time: None,
             args: vec![params],
         };
 
         let txt = serde_json::to_string(&req).map_err(|e| OKXWsError::JsonError(e.to_string()))?;
 
-        if let Some(inner) = &self.inner {
-            if let Err(e) = inner.send_text(txt, Some(vec!["order".to_string()])).await {
-                tracing::error!("Error sending message: {e:?}");
+        {
+            let inner_guard = self.inner.read().await;
+            if let Some(inner) = &*inner_guard {
+                if let Err(e) = inner.send_text(txt, Some(vec!["order".to_string()])).await {
+                    tracing::error!("Error sending message: {e:?}");
+                }
+                Ok(())
+            } else {
+                Err(OKXWsError::ClientError("Not connected".to_string()))
             }
-            Ok(())
-        } else {
-            Err(OKXWsError::ClientError("Not connected".to_string()))
         }
     }
 
@@ -1899,7 +2060,7 @@ struct OKXWsMessageHandler {
     pending_place_requests: Arc<DashMap<String, PlaceRequestData>>,
     pending_cancel_requests: Arc<DashMap<String, CancelRequestData>>,
     pending_amend_requests: Arc<DashMap<String, AmendRequestData>>,
-    instruments: AHashMap<Ustr, InstrumentAny>,
+    instruments_cache: Arc<AHashMap<Ustr, InstrumentAny>>,
     last_account_state: Option<AccountState>,
     fee_cache: AHashMap<Ustr, Money>, // Key is order ID
     funding_rate_cache: AHashMap<Ustr, (Ustr, u64)>, // Cache (funding_rate, funding_time) by inst_id
@@ -1911,7 +2072,7 @@ impl OKXWsMessageHandler {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         account_id: AccountId,
-        instruments: AHashMap<Ustr, InstrumentAny>,
+        instruments_cache: Arc<AHashMap<Ustr, InstrumentAny>>,
         reader: MessageReader,
         signal: Arc<AtomicBool>,
         tx: tokio::sync::mpsc::UnboundedSender<NautilusWsMessage>,
@@ -1927,7 +2088,7 @@ impl OKXWsMessageHandler {
             pending_place_requests,
             pending_cancel_requests,
             pending_amend_requests,
-            instruments,
+            instruments_cache,
             last_account_state: None,
             fee_cache: AHashMap::new(),
             funding_rate_cache: AHashMap::new(),
@@ -1970,16 +2131,19 @@ impl OKXWsMessageHandler {
 
             if let OKXWebSocketEvent::BookData { arg, action, data } = event {
                 let inst = match arg.inst_id {
-                    Some(inst_id) => self.instruments.get(&inst_id),
+                    Some(inst_id) => match self.instruments_cache.get(&inst_id) {
+                        Some(inst_ref) => inst_ref.clone(),
+                        None => continue,
+                    },
                     None => {
                         tracing::error!("Instrument ID missing for book data event");
                         continue;
                     }
                 };
 
-                let instrument_id = inst?.id();
-                let price_precision = inst?.price_precision();
-                let size_precision = inst?.size_precision();
+                let instrument_id = inst.id();
+                let price_precision = inst.price_precision();
+                let size_precision = inst.size_precision();
 
                 match parse_book_msg_vec(
                     data,
@@ -2196,7 +2360,7 @@ impl OKXWsMessageHandler {
                         match parse_order_msg_vec(
                             vec![msg],
                             self.account_id,
-                            &self.instruments,
+                            &self.instruments_cache,
                             &self.fee_cache,
                             ts_init,
                         ) {
@@ -2241,7 +2405,7 @@ impl OKXWsMessageHandler {
                     }
                 }
 
-                let inst = match arg.inst_id.and_then(|id| self.instruments.get(&id)) {
+                let inst = match arg.inst_id.and_then(|id| self.instruments_cache.get(&id)) {
                     Some(inst) => inst,
                     None => {
                         tracing::error!(
