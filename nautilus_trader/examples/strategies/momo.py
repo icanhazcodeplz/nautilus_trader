@@ -2,7 +2,6 @@ from decimal import Decimal
 
 import pandas as pd
 
-from examples.backtest_helpers import BACKTESTING_CATALOG
 from nautilus_trader.common.enums import LogColor
 from nautilus_trader.config import PositiveInt
 from nautilus_trader.config import StrategyConfig
@@ -27,6 +26,28 @@ from nautilus_trader.trading.strategy import Strategy
 
 
 class MomoConfig(StrategyConfig, frozen=True):
+    """
+    Configuration for ``EMACrossLongOnly`` instances.
+
+    Parameters
+    ----------
+    instrument_id : InstrumentId
+        The instrument ID for the strategy.
+    bar_type : BarType
+        The bar type for the strategy.
+    trade_size : Decimal
+        The position size per trade.
+    fast_ema_period : int, default 10
+        The fast EMA period.
+    slow_ema_period : int, default 20
+        The slow EMA period.
+    request_historical_bars : bool, default True
+        If historical bars should be requested on start.
+    close_positions_on_stop : bool, default True
+        If all open positions should be closed on strategy stop.
+
+    """
+
     instrument_id: InstrumentId
     bar_type: BarType
     trade_size: Decimal
@@ -77,8 +98,7 @@ class Momo(Strategy):
         self.subscribe_bars(self.config.bar_type)
         # self.subscribe_quote_ticks(self.config.instrument_id)
         self.subscribe_trade_ticks(self.config.instrument_id)
-        # self.subscribe_order_book_depth(self.config.instrument_id, book_type=BookType.L3_MBO)
-        self.subscribe_order_book_deltas(self.config.instrument_id, depth=20)  # For debugging
+        # self.subscribe_order_book_deltas(self.config.instrument_id, depth=20)  # For debugging
         # self.subscribe_order_book_at_interval(self.config.instrument_id, depth=20)  # For debugging
 
 
@@ -94,13 +114,10 @@ class Momo(Strategy):
         self.unsubscribe_bars(self.config.bar_type)
         # self.unsubscribe_quote_ticks(self.config.instrument_id)
         self.unsubscribe_trade_ticks(self.config.instrument_id)
-        self.unsubscribe_order_book_deltas(self.config.instrument_id)
+        # self.unsubscribe_order_book_deltas(self.config.instrument_id)
         # self.unsubscribe_order_book_at_interval(self.config.instrument_id)
 
-        # TODO: Only save if not already existing
-        bars_list = self.cache.bars(self.config.bar_type)
-        bars_list.sort(key=lambda x: x.ts_init)
-        BACKTESTING_CATALOG.write_data(bars_list)
+        num_bars = len(self.cache.bars(self.config.bar_type))
 
 
     def on_instrument(self, instrument: Instrument) -> None:
@@ -166,12 +183,8 @@ class Momo(Strategy):
             The tick received.
 
         """
+        # For debugging (must add a subscription)
         # self.log.info(repr(tick), LogColor.CYAN)
-
-        # NOTE: Need to be subscribed to order book deltas to get best bid/ask prices
-        ob = self.cache.order_book(self.config.instrument_id)
-        best_bid = ob.best_bid_price()
-        best_ask = ob.best_ask_price()
 
     def on_bar(self, bar: Bar) -> None:
         """
