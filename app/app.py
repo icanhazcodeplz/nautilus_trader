@@ -1,15 +1,13 @@
 import os
 import sys
 
-import numpy as np
-
 sys.path.append(os.getcwd())
 from flask import Flask, render_template, jsonify
 
 from flask_restful import Resource, Api
 from flask_cors import CORS, cross_origin
 
-from examples.backtest_helpers import BACKTESTING_CATALOG, get_one_min_bars, get_tbbo
+from examples.backtest_helpers import get_one_min_bars, get_tbbo
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, expose_headers=["Content-Range"])
@@ -34,12 +32,12 @@ def convert_bar_to_json(bar):
 def convert_tbbo_to_json(tbbo):
 
     return {
-        "time": int(tbbo.ts_event / 1e9),
+        "time": tbbo.ts_event / 1e9,
         "price": float(tbbo.price),
         # "size": int(tbbo.size),
         "bid": float(tbbo.bid if str(tbbo.ask) != 'nan' else float(tbbo.price) - 1.0),
         # "bid_size": int(tbbo.bid_size),
-        # "ask": float(tbbo.ask if str(tbbo.ask) != 'nan' else tbbo.price + 1.0),
+        "ask": float(tbbo.ask if str(tbbo.ask) != 'nan' else tbbo.price + 1.0),
         # "ask_size": int(tbbo.ask_size),
     }
 
@@ -52,12 +50,16 @@ def index():
 def get_data():
     bars = get_one_min_bars()
     ticks = get_tbbo()
-    print()
+    ticks_ = [convert_tbbo_to_json(t) for t in ticks]
+
+    # FIXME: get average price instead of dropping duplicates?
+    seen_times = set()
+    ticks_ = [t for t in ticks_ if not (t['time'] in seen_times or seen_times.add(t['time']))]
+
     records = dict(
-        ticks=[convert_tbbo_to_json(t) for t in ticks],
+        ticks=ticks_,
         ten_sec=[],
-        # one_min=[convert_bar_to_json(bar) for bar in bars],
-        one_min=[],
+        one_min=[convert_bar_to_json(bar) for bar in bars],
         macd=[],
         bid_markers=[],
         ask_markers=[],

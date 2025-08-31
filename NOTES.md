@@ -7,3 +7,8 @@ export PYO3_PYTHON=$(pwd)/.venv/bin/python
 # After merging in develop branch
 From root repo:
 `make build`
+
+
+# TODO
+- write mbo to tbbo converter
+- Rethink plotting to get nanosecond resolution?

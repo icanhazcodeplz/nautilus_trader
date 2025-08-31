@@ -1,5 +1,3 @@
-from examples.backtest_helpers import BACKTESTING_CATALOG
-from examples.databento_utils import DatabentoClient
 from nautilus_trader.core import Data
 
 from nautilus_trader.model.custom import customdataclass
@@ -79,22 +77,22 @@ if __name__ == "__main__":
     symbol = "PAPL"
     schema = "tbbo"
 
-    df = DatabentoClient.load_data(symbol, schema, start_dt, end_dt)
-    tbbo_list = []
-    instrument_id = TestInstrumentProvider.equity(symbol=symbol, venue="SIM").id
-    for index, row in df.iterrows():
-        ts_recv = int(index.timestamp() * 1e9)
-        ts_event = int(row["ts_event"].timestamp() * 1e9)
-        tbbo = TBBOData(instrument_id, ts_event, ts_recv, row["price"], row["size"], row["side"], row["bid_px_00"], row["ask_px_00"], row["bid_sz_00"], row["ask_sz_00"])
-        tbbo_list.append(tbbo)
-
-    BACKTESTING_CATALOG.write_data(tbbo_list)
-
-    t = BACKTESTING_CATALOG.query(
-        data_cls=TBBOData,
-        identifiers=[f"{symbol}.SIM"],
-        start=start_dt,
-        end=end_dt
-    )
-    print(t[0].data.price)
-    print()
+    # df = DatabentoClient.load_data(symbol, schema, start_dt, end_dt)
+    # tbbo_list = []
+    # instrument_id = TestInstrumentProvider.equity(symbol=symbol, venue="SIM").id
+    # for index, row in df.iterrows():
+    #     ts_recv = int(index.timestamp() * 1e9)
+    #     ts_event = int(row["ts_event"].timestamp() * 1e9)
+    #     tbbo = TBBOData(instrument_id, ts_event, ts_recv, row["price"], row["size"], row["side"], row["bid_px_00"], row["ask_px_00"], row["bid_sz_00"], row["ask_sz_00"])
+    #     tbbo_list.append(tbbo)
+    #
+    # BACKTESTING_CATALOG.write_data(tbbo_list)
+    #
+    # t = BACKTESTING_CATALOG.query(
+    #     data_cls=TBBOData,
+    #     identifiers=[f"{symbol}.SIM"],
+    #     start=start_dt,
+    #     end=end_dt
+    # )
+    # print(t[0].data.price)
+    # print()

@@ -54,9 +54,10 @@ def get_one_min_bars():
     )
 
 def get_tbbo():
-    t = BACKTESTING_CATALOG.query(
+    tbbo =  BACKTESTING_CATALOG.query(
         data_cls=TBBOData,
         identifiers=[f"{SYMBOL}.{VENUE}"],
         start=START,
         end=END
     )
+    return [t.data for t in tbbo]

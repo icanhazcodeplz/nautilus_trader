@@ -64,6 +64,11 @@ class _DatabentoClient:
 
 
     def mbo_to_tbbo(self, mbo_df):
+        # TODO
+        pass
+
+    def save_to_catalog(self, mbo_df):
+        # TODO
         pass
 
     def save_tbbo_catalog(self, tbbo_df):
