@@ -518,7 +518,7 @@ class LiveMarketDataClient(MarketDataClient):
                 f"Error running '{coro_name}': {exception!r}\n{tb_str}",
             )
         else:
-            self._log.debug(f"Coroutine '{coro_name}' completed")
+            self._log.debug(f"Coroutine '{coro_name}' completed successfully")
 
             if actions:
                 try:

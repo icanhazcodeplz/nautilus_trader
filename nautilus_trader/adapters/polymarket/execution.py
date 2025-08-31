@@ -311,7 +311,6 @@ class PolymarketExecutionClient(LiveExecutionClient):
             params = None
 
         # Check active orders with venue
-        # Note: py_clob_client.get_orders() handles pagination internally
         retry_manager = await self._retry_manager_pool.acquire()
         try:
             response: list[JSON] | None = await retry_manager.run(
@@ -320,10 +319,11 @@ class PolymarketExecutionClient(LiveExecutionClient):
                 asyncio.to_thread,
                 self._http_client.get_orders,
                 params=params,
+                # TODO: Handle cursor for lookback
             )
             if response:
                 # Uncomment for development
-                # self._log.info(f"Processing {len(response)} orders", LogColor.MAGENTA)
+                # self._log.info(str(response), LogColor.MAGENTA)
                 for json_obj in response:
                     raw = msgspec.json.encode(json_obj)
                     polymarket_order = self._decoder_order_report.decode(raw)
@@ -548,7 +548,6 @@ class PolymarketExecutionClient(LiveExecutionClient):
         if command.instrument_id:
             details.append(command.instrument_id)
 
-        # Note: py_clob_client.get_trades() handles pagination internally
         retry_manager = await self._retry_manager_pool.acquire()
         try:
             response: JSON | None = await retry_manager.run(
@@ -560,7 +559,7 @@ class PolymarketExecutionClient(LiveExecutionClient):
             )
             if response:
                 # Uncomment for development
-                # self._log.info(f"Processing {len(response)} trades", LogColor.MAGENTA)
+                # self._log.info(str(response), LogColor.MAGENTA)
                 trade_ids: set[TradeId] = set()
                 for json_obj in response:
                     raw = msgspec.json.encode(json_obj)

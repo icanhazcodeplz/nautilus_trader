@@ -16,8 +16,6 @@
 from decimal import Decimal
 from typing import Any
 
-import pandas as pd
-
 from nautilus_trader.common.enums import LogColor
 from nautilus_trader.config import PositiveInt
 from nautilus_trader.config import StrategyConfig
@@ -52,7 +50,6 @@ class ExecTesterConfig(StrategyConfig, frozen=True):
 
     instrument_id: InstrumentId
     order_qty: Decimal
-    order_expire_time_delta_mins: PositiveInt | None = None
     order_params: dict[str, Any] | None = None
     client_id: ClientId | None = None
     subscribe_quotes: bool = True
@@ -65,7 +62,6 @@ class ExecTesterConfig(StrategyConfig, frozen=True):
     enable_buys: bool = True
     enable_sells: bool = True
     open_position_on_start_qty: Decimal | None = None
-    open_position_time_in_force: TimeInForce = TimeInForce.GTC
     tob_offset_ticks: PositiveInt = 500  # Definitely out of the market
     use_post_only: bool = True
     use_quote_quantity: bool = False
@@ -79,7 +75,6 @@ class ExecTesterConfig(StrategyConfig, frozen=True):
     dry_run: bool = False
     log_data: bool = True
     test_reject_post_only: bool = False
-    can_unsubscribe: bool = True
 
 
 class ExecTester(Strategy):
@@ -222,7 +217,7 @@ class ExecTester(Strategy):
                 else:
                     price = self.instrument.make_price(best_ask + market_offset)
 
-                self.submit_sell_limit_order(price)
+                self.submit_sell_limit_order(best_ask)
             # elif self.sell_order.price != best_ask:
             #     self.cancel_order(self.sell_order)
             #     self.create_sell_order(best_ask)
@@ -240,7 +235,6 @@ class ExecTester(Strategy):
             instrument_id=self.config.instrument_id,
             order_side=OrderSide.BUY if net_qty > 0 else OrderSide.SELL,
             quantity=self.instrument.make_qty(self.config.order_qty),
-            time_in_force=self.config.open_position_time_in_force,
             quote_quantity=self.config.use_quote_quantity,
         )
 
@@ -269,22 +263,13 @@ class ExecTester(Strategy):
             self.log.warning("BUY orders not enabled, skipping")
             return
 
-        if self.config.order_expire_time_delta_mins is not None:
-            time_in_force = TimeInForce.GTD
-            expire_time = self.clock.utc_now() + pd.Timedelta(
-                minutes=self.config.order_expire_time_delta_mins,
-            )
-        else:
-            time_in_force = TimeInForce.GTC
-            expire_time = None
-
         order: LimitOrder = self.order_factory.limit(
             instrument_id=self.config.instrument_id,
             order_side=OrderSide.BUY,
             quantity=self.instrument.make_qty(self.config.order_qty),
             price=price,
-            time_in_force=time_in_force,
-            expire_time=expire_time,
+            # time_in_force=TimeInForce.GTD,
+            # expire_time=self.clock.utc_now() + pd.Timedelta(minutes=10),
             post_only=self.config.use_post_only,
             quote_quantity=self.config.use_quote_quantity,
             emulation_trigger=TriggerType[self.config.emulation_trigger],
@@ -310,22 +295,13 @@ class ExecTester(Strategy):
             self.log.warning("SELL orders not enabled, skipping")
             return
 
-        if self.config.order_expire_time_delta_mins is not None:
-            time_in_force = TimeInForce.GTD
-            expire_time = self.clock.utc_now() + pd.Timedelta(
-                minutes=self.config.order_expire_time_delta_mins,
-            )
-        else:
-            time_in_force = TimeInForce.GTC
-            expire_time = None
-
         order: LimitOrder = self.order_factory.limit(
             instrument_id=self.config.instrument_id,
             order_side=OrderSide.SELL,
             quantity=self.instrument.make_qty(self.config.order_qty),
             price=price,
-            time_in_force=time_in_force,
-            expire_time=expire_time,
+            # time_in_force=TimeInForce.GTD,
+            # expire_time=self.clock.utc_now() + pd.Timedelta(minutes=10),
             post_only=self.config.use_post_only,
             quote_quantity=self.config.use_quote_quantity,
             emulation_trigger=TriggerType[self.config.emulation_trigger],
@@ -365,16 +341,15 @@ class ExecTester(Strategy):
                 reduce_only=self.config.reduce_only_on_stop,
             )
 
-        # Unsubscribe from data (if supported)
-        if self.config.can_unsubscribe:
-            if self.config.subscribe_quotes:
-                self.unsubscribe_quote_ticks(self.config.instrument_id, client_id=self.client_id)
+        # Unsubscribe from data
+        if self.config.subscribe_quotes:
+            self.unsubscribe_quote_ticks(self.config.instrument_id, client_id=self.client_id)
 
-            if self.config.subscribe_trades:
-                self.unsubscribe_trade_ticks(self.config.instrument_id, client_id=self.client_id)
+        if self.config.subscribe_trades:
+            self.unsubscribe_trade_ticks(self.config.instrument_id, client_id=self.client_id)
 
-            if self.config.subscribe_book:
-                self.unsubscribe_order_book_at_interval(
-                    self.config.instrument_id,
-                    client_id=self.client_id,
-                )
+        if self.config.subscribe_book:
+            self.unsubscribe_order_book_at_interval(
+                self.config.instrument_id,
+                client_id=self.client_id,
+            )

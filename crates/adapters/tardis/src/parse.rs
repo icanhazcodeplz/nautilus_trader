@@ -24,7 +24,7 @@ use serde::{Deserialize, Deserializer};
 use ustr::Ustr;
 use uuid::Uuid;
 
-use super::enums::{TardisExchange, TardisInstrumentType, TardisOptionType};
+use super::enums::{Exchange, InstrumentType, OptionType};
 
 /// Deserialize a string and convert to uppercase `Ustr`.
 ///
@@ -63,46 +63,42 @@ where
 #[inline]
 pub fn normalize_symbol_str(
     symbol: Ustr,
-    exchange: &TardisExchange,
-    instrument_type: &TardisInstrumentType,
+    exchange: &Exchange,
+    instrument_type: &InstrumentType,
     is_inverse: Option<bool>,
 ) -> Ustr {
     match exchange {
-        TardisExchange::Binance
-        | TardisExchange::BinanceFutures
-        | TardisExchange::BinanceUs
-        | TardisExchange::BinanceDex
-        | TardisExchange::BinanceJersey
-            if instrument_type == &TardisInstrumentType::Perpetual =>
+        Exchange::Binance
+        | Exchange::BinanceFutures
+        | Exchange::BinanceUs
+        | Exchange::BinanceDex
+        | Exchange::BinanceJersey
+            if instrument_type == &InstrumentType::Perpetual =>
         {
             append_suffix(symbol, "-PERP")
         }
 
-        TardisExchange::Bybit | TardisExchange::BybitSpot | TardisExchange::BybitOptions => {
-            match instrument_type {
-                TardisInstrumentType::Spot => append_suffix(symbol, "-SPOT"),
-                TardisInstrumentType::Perpetual if !is_inverse.unwrap_or(false) => {
-                    append_suffix(symbol, "-LINEAR")
-                }
-                TardisInstrumentType::Future if !is_inverse.unwrap_or(false) => {
-                    append_suffix(symbol, "-LINEAR")
-                }
-                TardisInstrumentType::Perpetual if is_inverse == Some(true) => {
-                    append_suffix(symbol, "-INVERSE")
-                }
-                TardisInstrumentType::Future if is_inverse == Some(true) => {
-                    append_suffix(symbol, "-INVERSE")
-                }
-                TardisInstrumentType::Option => append_suffix(symbol, "-OPTION"),
-                _ => symbol,
+        Exchange::Bybit | Exchange::BybitSpot | Exchange::BybitOptions => match instrument_type {
+            InstrumentType::Spot => append_suffix(symbol, "-SPOT"),
+            InstrumentType::Perpetual if !is_inverse.unwrap_or(false) => {
+                append_suffix(symbol, "-LINEAR")
             }
-        }
+            InstrumentType::Future if !is_inverse.unwrap_or(false) => {
+                append_suffix(symbol, "-LINEAR")
+            }
+            InstrumentType::Perpetual if is_inverse == Some(true) => {
+                append_suffix(symbol, "-INVERSE")
+            }
+            InstrumentType::Future if is_inverse == Some(true) => append_suffix(symbol, "-INVERSE"),
+            InstrumentType::Option => append_suffix(symbol, "-OPTION"),
+            _ => symbol,
+        },
 
-        TardisExchange::Dydx if instrument_type == &TardisInstrumentType::Perpetual => {
+        Exchange::Dydx if instrument_type == &InstrumentType::Perpetual => {
             append_suffix(symbol, "-PERP")
         }
 
-        TardisExchange::GateIoFutures if instrument_type == &TardisInstrumentType::Perpetual => {
+        Exchange::GateIoFutures if instrument_type == &InstrumentType::Perpetual => {
             append_suffix(symbol, "-PERP")
         }
 
@@ -118,16 +114,16 @@ fn append_suffix(symbol: Ustr, suffix: &str) -> Ustr {
 
 /// Parses a Nautilus instrument ID from the given Tardis `exchange` and `symbol` values.
 #[must_use]
-pub fn parse_instrument_id(exchange: &TardisExchange, symbol: Ustr) -> InstrumentId {
+pub fn parse_instrument_id(exchange: &Exchange, symbol: Ustr) -> InstrumentId {
     InstrumentId::new(Symbol::from_ustr_unchecked(symbol), exchange.as_venue())
 }
 
 /// Parses a Nautilus instrument ID with a normalized symbol from the given Tardis `exchange` and `symbol` values.
 #[must_use]
 pub fn normalize_instrument_id(
-    exchange: &TardisExchange,
+    exchange: &Exchange,
     symbol: Ustr,
-    instrument_type: &TardisInstrumentType,
+    instrument_type: &InstrumentType,
     is_inverse: Option<bool>,
 ) -> InstrumentId {
     let symbol = normalize_symbol_str(symbol, exchange, instrument_type, is_inverse);
@@ -175,10 +171,10 @@ pub fn parse_aggressor_side(value: &str) -> AggressorSide {
 
 /// Parses a Nautilus option kind from the given Tardis enum `value`.
 #[must_use]
-pub const fn parse_option_kind(value: TardisOptionType) -> OptionKind {
+pub const fn parse_option_kind(value: OptionType) -> OptionKind {
     match value {
-        TardisOptionType::Call => OptionKind::Call,
-        TardisOptionType::Put => OptionKind::Put,
+        OptionType::Call => OptionKind::Call,
+        OptionType::Put => OptionKind::Put,
     }
 }
 
@@ -264,13 +260,13 @@ mod tests {
     use super::*;
 
     #[rstest]
-    #[case(TardisExchange::Binance, "ETHUSDT", "ETHUSDT.BINANCE")]
-    #[case(TardisExchange::Bitmex, "XBTUSD", "XBTUSD.BITMEX")]
-    #[case(TardisExchange::Bybit, "BTCUSDT", "BTCUSDT.BYBIT")]
-    #[case(TardisExchange::OkexFutures, "BTC-USD-200313", "BTC-USD-200313.OKEX")]
-    #[case(TardisExchange::HuobiDmLinearSwap, "FOO-BAR", "FOO-BAR.HUOBI")]
+    #[case(Exchange::Binance, "ETHUSDT", "ETHUSDT.BINANCE")]
+    #[case(Exchange::Bitmex, "XBTUSD", "XBTUSD.BITMEX")]
+    #[case(Exchange::Bybit, "BTCUSDT", "BTCUSDT.BYBIT")]
+    #[case(Exchange::OkexFutures, "BTC-USD-200313", "BTC-USD-200313.OKEX")]
+    #[case(Exchange::HuobiDmLinearSwap, "FOO-BAR", "FOO-BAR.HUOBI")]
     fn test_parse_instrument_id(
-        #[case] exchange: TardisExchange,
+        #[case] exchange: Exchange,
         #[case] symbol: Ustr,
         #[case] expected: &str,
     ) {
@@ -281,51 +277,51 @@ mod tests {
 
     #[rstest]
     #[case(
-        TardisExchange::Binance,
+        Exchange::Binance,
         "SOLUSDT",
-        TardisInstrumentType::Spot,
+        InstrumentType::Spot,
         None,
         "SOLUSDT.BINANCE"
     )]
     #[case(
-        TardisExchange::BinanceFutures,
+        Exchange::BinanceFutures,
         "SOLUSDT",
-        TardisInstrumentType::Perpetual,
+        InstrumentType::Perpetual,
         None,
         "SOLUSDT-PERP.BINANCE"
     )]
     #[case(
-        TardisExchange::Bybit,
+        Exchange::Bybit,
         "BTCUSDT",
-        TardisInstrumentType::Spot,
+        InstrumentType::Spot,
         None,
         "BTCUSDT-SPOT.BYBIT"
     )]
     #[case(
-        TardisExchange::Bybit,
+        Exchange::Bybit,
         "BTCUSDT",
-        TardisInstrumentType::Perpetual,
+        InstrumentType::Perpetual,
         None,
         "BTCUSDT-LINEAR.BYBIT"
     )]
     #[case(
-        TardisExchange::Bybit,
+        Exchange::Bybit,
         "BTCUSDT",
-        TardisInstrumentType::Perpetual,
+        InstrumentType::Perpetual,
         Some(true),
         "BTCUSDT-INVERSE.BYBIT"
     )]
     #[case(
-        TardisExchange::Dydx,
+        Exchange::Dydx,
         "BTC-USD",
-        TardisInstrumentType::Perpetual,
+        InstrumentType::Perpetual,
         None,
         "BTC-USD-PERP.DYDX"
     )]
     fn test_normalize_instrument_id(
-        #[case] exchange: TardisExchange,
+        #[case] exchange: Exchange,
         #[case] symbol: Ustr,
-        #[case] instrument_type: TardisInstrumentType,
+        #[case] instrument_type: InstrumentType,
         #[case] is_inverse: Option<bool>,
         #[case] expected: &str,
     ) {

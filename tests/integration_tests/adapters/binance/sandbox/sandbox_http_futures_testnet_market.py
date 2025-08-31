@@ -27,7 +27,7 @@ from nautilus_trader.common.component import LiveClock
 async def test_binance_futures_testnet_market_http_client():
     clock = LiveClock()
 
-    account_type = BinanceAccountType.USDT_FUTURES
+    account_type = BinanceAccountType.USDT_FUTURE
 
     client = get_cached_binance_http_client(
         clock=clock,
@@ -40,7 +40,7 @@ async def test_binance_futures_testnet_market_http_client():
     provider = BinanceFuturesInstrumentProvider(
         client=client,
         clock=clock,
-        account_type=BinanceAccountType.USDT_FUTURES,
+        account_type=BinanceAccountType.USDT_FUTURE,
     )
 
     await provider.load_all_async()

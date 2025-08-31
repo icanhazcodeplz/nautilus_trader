@@ -33,15 +33,12 @@ use super::{
     message::{
         BarMsg, BookChangeMsg, BookLevel, BookSnapshotMsg, DerivativeTickerMsg, TradeMsg, WsMessage,
     },
-    types::TardisInstrumentMiniInfo,
+    types::InstrumentMiniInfo,
 };
 use crate::parse::{normalize_amount, parse_aggressor_side, parse_bar_spec, parse_book_action};
 
 #[must_use]
-pub fn parse_tardis_ws_message(
-    msg: WsMessage,
-    info: Arc<TardisInstrumentMiniInfo>,
-) -> Option<Data> {
+pub fn parse_tardis_ws_message(msg: WsMessage, info: Arc<InstrumentMiniInfo>) -> Option<Data> {
     match msg {
         WsMessage::BookChange(msg) => {
             if msg.bids.is_empty() && msg.asks.is_empty() {
@@ -128,7 +125,7 @@ pub fn parse_tardis_ws_message(
 #[must_use]
 pub fn parse_tardis_ws_message_funding_rate(
     msg: WsMessage,
-    info: Arc<TardisInstrumentMiniInfo>,
+    info: Arc<InstrumentMiniInfo>,
 ) -> Option<FundingRateUpdate> {
     match msg {
         WsMessage::DerivativeTicker(msg) => {

@@ -349,11 +349,9 @@ impl BaseAccount {
 
 #[cfg(all(test, feature = "stubs"))]
 mod tests {
-    use rstest::rstest;
-
     use super::*;
 
-    #[rstest]
+    #[test]
     fn test_base_purge_account_events_retains_latest_when_all_purged() {
         use crate::{
             enums::AccountType,

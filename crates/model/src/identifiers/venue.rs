@@ -221,9 +221,10 @@ pub fn validate_blockchain_venue(venue_part: &str) -> anyhow::Result<()> {
 mod tests {
     use rstest::rstest;
 
-    #[cfg(feature = "defi")]
-    use crate::defi::{Blockchain, DexType};
-    use crate::identifiers::{Venue, stubs::*};
+    use crate::{
+        defi::{Blockchain, DexType},
+        identifiers::{Venue, stubs::*},
+    };
 
     #[rstest]
     fn test_string_reprs(venue_binance: Venue) {

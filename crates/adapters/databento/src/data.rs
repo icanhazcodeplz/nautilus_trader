@@ -13,10 +13,7 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
-//! Provides a unified data client that combines Databento's live streaming and historical data capabilities.
-//!
-//! This module implements a data client that manages connections to multiple Databento datasets,
-//! handles live market data subscriptions, and provides access to historical data on demand.
+//! Databento data client implementation leveraging existing live and historical clients.
 
 use std::{
     path::PathBuf,
@@ -170,10 +167,6 @@ impl DatabentoDataClient {
     }
 
     /// Gets the dataset for a given venue using the data loader.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the venue-to-dataset mapping cannot be found.
     fn get_dataset_for_venue(&self, venue: Venue) -> anyhow::Result<String> {
         self.loader
             .get_dataset_for_venue(&venue)
@@ -321,31 +314,19 @@ impl DatabentoDataClient {
 
 #[async_trait::async_trait]
 impl DataClient for DatabentoDataClient {
-    /// Returns the client identifier.
     fn client_id(&self) -> ClientId {
         self.client_id
     }
 
-    /// Returns the venue associated with this client (None for multi-venue clients).
     fn venue(&self) -> Option<Venue> {
         None
     }
 
-    /// Starts the data client.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the client fails to start.
     fn start(&mut self) -> anyhow::Result<()> {
         tracing::debug!("Starting");
         Ok(())
     }
 
-    /// Stops the data client and cancels all active subscriptions.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the client fails to stop cleanly.
     fn stop(&mut self) -> anyhow::Result<()> {
         tracing::debug!("Stopping");
 
@@ -427,7 +408,6 @@ impl DataClient for DatabentoDataClient {
         Ok(())
     }
 
-    /// Returns whether the client is currently connected.
     fn is_connected(&self) -> bool {
         self.is_connected.load(Ordering::Relaxed)
     }
@@ -436,11 +416,7 @@ impl DataClient for DatabentoDataClient {
         !self.is_connected()
     }
 
-    /// Subscribes to quote tick data for the specified instruments.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the subscription request fails.
+    // Live subscription methods using the feed handler
     fn subscribe_quotes(&mut self, cmd: &SubscribeQuotes) -> anyhow::Result<()> {
         tracing::debug!("Subscribe quotes: {cmd:?}");
 
@@ -472,11 +448,6 @@ impl DataClient for DatabentoDataClient {
         Ok(())
     }
 
-    /// Subscribes to trade tick data for the specified instruments.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the subscription request fails.
     fn subscribe_trades(&mut self, cmd: &SubscribeTrades) -> anyhow::Result<()> {
         tracing::debug!("Subscribe trades: {cmd:?}");
 
@@ -508,11 +479,6 @@ impl DataClient for DatabentoDataClient {
         Ok(())
     }
 
-    /// Subscribes to order book delta updates for the specified instruments.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the subscription request fails.
     fn subscribe_book_deltas(&mut self, cmd: &SubscribeBookDeltas) -> anyhow::Result<()> {
         tracing::debug!("Subscribe book deltas: {cmd:?}");
 
@@ -544,11 +510,6 @@ impl DataClient for DatabentoDataClient {
         Ok(())
     }
 
-    /// Subscribes to instrument status updates for the specified instruments.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the subscription request fails.
     fn subscribe_instrument_status(
         &mut self,
         cmd: &SubscribeInstrumentStatus,

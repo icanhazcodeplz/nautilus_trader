@@ -75,7 +75,6 @@ impl BlockchainDataClientCore {
     /// # Panics
     ///
     /// Panics if `use_hypersync_for_live_data` is false but `wss_rpc_url` is None.
-    #[must_use]
     pub fn new(
         config: BlockchainDataClientConfig,
         hypersync_tx: Option<tokio::sync::mpsc::UnboundedSender<BlockchainMessage>>,
@@ -173,8 +172,7 @@ impl BlockchainDataClientCore {
         // self.sync_blocks(Some(from_block), None).await?;
         for dex in self.config.dex_ids.clone() {
             self.register_dex_exchange(dex).await?;
-            self.sync_exchange_pools(&dex, from_block, None, false)
-                .await?;
+            self.sync_exchange_pools(&dex, from_block, None).await?;
         }
 
         Ok(())
@@ -615,20 +613,15 @@ impl BlockchainDataClientCore {
         dex: &DexType,
         from_block: u64,
         to_block: Option<u64>,
-        reset: bool,
     ) -> anyhow::Result<()> {
-        // Check for last synced block and use it as starting point if higher (unless reset is true)
-        let (last_synced_block, effective_from_block) = if reset {
-            (None, from_block)
-        } else {
-            let last_synced_block = self
-                .cache
-                .get_dex_last_synced_block(&dex.to_string())
-                .await?;
-            let effective_from_block = last_synced_block
-                .map_or(from_block, |last_synced| max(from_block, last_synced + 1));
-            (last_synced_block, effective_from_block)
-        };
+        // Check for last synced block and use it as starting point if higher
+        let last_synced_block = self
+            .cache
+            .get_dex_last_synced_block(&dex.to_string())
+            .await?;
+
+        let effective_from_block =
+            last_synced_block.map_or(from_block, |last_synced| max(from_block, last_synced + 1));
 
         let to_block = match to_block {
             Some(block) => block,
@@ -653,7 +646,7 @@ impl BlockchainDataClientCore {
             to_block,
             total_blocks,
             if let Some(last_synced) = last_synced_block {
-                format!(" - resuming from last synced block {last_synced}")
+                format!(" - resuming from last synced block {}", last_synced)
             } else {
                 String::new()
             }
@@ -771,6 +764,10 @@ impl BlockchainDataClientCore {
         pool_buffer: &mut Vec<PoolCreatedEvent>,
         dex: SharedDex,
     ) -> anyhow::Result<()> {
+        if token_buffer.is_empty() {
+            return Ok(());
+        }
+
         let batch_addresses: Vec<Address> = token_buffer.drain().collect();
         let token_infos = self.tokens.batch_fetch_token_info(&batch_addresses).await?;
 

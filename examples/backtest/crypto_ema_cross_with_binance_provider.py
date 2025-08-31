@@ -50,7 +50,7 @@ async def create_provider():
 
     client = get_cached_binance_http_client(
         clock=clock,
-        account_type=BinanceAccountType.USDT_FUTURES,
+        account_type=BinanceAccountType.USDT_FUTURE,
         is_testnet=True,
     )
 

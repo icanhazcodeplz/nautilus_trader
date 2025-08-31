@@ -27,7 +27,6 @@ from nautilus_trader.model.data cimport QuoteTick
 from nautilus_trader.model.events.account cimport AccountState
 from nautilus_trader.model.events.order cimport OrderEvent
 from nautilus_trader.model.events.position cimport PositionEvent
-from nautilus_trader.model.identifiers cimport AccountId
 from nautilus_trader.model.identifiers cimport InstrumentId
 from nautilus_trader.model.identifiers cimport PositionId
 from nautilus_trader.model.identifiers cimport Venue
@@ -55,8 +54,6 @@ cdef class Portfolio(PortfolioFacade):
 
     cdef dict[InstrumentId, Money] _unrealized_pnls
     cdef dict[InstrumentId, Money] _realized_pnls
-    cdef dict[InstrumentId, Money] _snapshot_realized_pnls
-    cdef dict[PositionId, int] _snapshot_processed_counts
     cdef dict[InstrumentId, Decimal] _net_positions
     cdef dict[PositionId, object] _bet_positions
     cdef object _index_bet_positions
@@ -86,7 +83,6 @@ cdef class Portfolio(PortfolioFacade):
     cdef void _update_instrument_id(self, InstrumentId instrument_id)
     cdef void _update_net_position(self, InstrumentId instrument_id, list positions_open)
     cdef object _net_position(self, InstrumentId instrument_id)
-    cdef void _ensure_snapshot_pnls_cached_for(self, InstrumentId instrument_id)
     cdef Money _calculate_realized_pnl(self, InstrumentId instrument_id)
     cdef Money _calculate_unrealized_pnl(self, InstrumentId instrument_id, Price price=*)
     cdef Price _get_price(self, Position position)

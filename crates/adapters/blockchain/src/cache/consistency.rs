@@ -27,8 +27,7 @@ pub struct CachedBlocksConsistencyStatus {
 }
 
 impl CachedBlocksConsistencyStatus {
-    #[must_use]
-    pub const fn new(max_block: u64, last_continuous_block: u64) -> Self {
+    pub fn new(max_block: u64, last_continuous_block: u64) -> Self {
         Self {
             max_block,
             last_continuous_block,
@@ -36,8 +35,7 @@ impl CachedBlocksConsistencyStatus {
     }
 
     /// Returns true if the cached blocks form a continuous sequence without gaps.
-    #[must_use]
-    pub const fn is_consistent(&self) -> bool {
+    pub fn is_consistent(&self) -> bool {
         self.max_block == self.last_continuous_block
     }
 }

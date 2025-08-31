@@ -19,17 +19,7 @@ use strum::{AsRefStr, Display, EnumIter, EnumString};
 
 /// Represents the type of book action.
 #[derive(
-    Copy,
-    Clone,
-    Debug,
-    Display,
-    PartialEq,
-    Eq,
-    AsRefStr,
-    EnumIter,
-    EnumString,
-    Serialize,
-    Deserialize,
+    Clone, Debug, Display, PartialEq, Eq, AsRefStr, EnumIter, EnumString, Serialize, Deserialize,
 )]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum CoinbaseIntxFeeTierType {
@@ -39,17 +29,7 @@ pub enum CoinbaseIntxFeeTierType {
 
 /// Represents the type of book action.
 #[derive(
-    Copy,
-    Clone,
-    Debug,
-    Display,
-    PartialEq,
-    Eq,
-    AsRefStr,
-    EnumIter,
-    EnumString,
-    Serialize,
-    Deserialize,
+    Clone, Debug, Display, PartialEq, Eq, AsRefStr, EnumIter, EnumString, Serialize, Deserialize,
 )]
 #[serde(rename_all = "lowercase")]
 pub enum CoinbaseIntxBookAction {
@@ -61,17 +41,7 @@ pub enum CoinbaseIntxBookAction {
 
 /// Represents the possible states of an order throughout its lifecycle.
 #[derive(
-    Copy,
-    Clone,
-    Debug,
-    Display,
-    PartialEq,
-    Eq,
-    AsRefStr,
-    EnumIter,
-    EnumString,
-    Serialize,
-    Deserialize,
+    Clone, Debug, Display, PartialEq, Eq, AsRefStr, EnumIter, EnumString, Serialize, Deserialize,
 )]
 pub enum CoinbaseIntxCandleConfirm {
     /// K-line is "uncompleted".
@@ -84,17 +54,7 @@ pub enum CoinbaseIntxCandleConfirm {
 
 /// Represents the side of an order or trade (Buy/Sell).
 #[derive(
-    Copy,
-    Clone,
-    Debug,
-    Display,
-    PartialEq,
-    Eq,
-    AsRefStr,
-    EnumIter,
-    EnumString,
-    Serialize,
-    Deserialize,
+    Clone, Debug, Display, PartialEq, Eq, AsRefStr, EnumIter, EnumString, Serialize, Deserialize,
 )]
 #[serde(rename_all = "UPPERCASE")]
 pub enum CoinbaseIntxSide {
@@ -144,17 +104,7 @@ impl From<CoinbaseIntxSide> for AggressorSide {
 
 /// Represents an order type.
 #[derive(
-    Copy,
-    Clone,
-    Debug,
-    Display,
-    PartialEq,
-    Eq,
-    AsRefStr,
-    EnumIter,
-    EnumString,
-    Serialize,
-    Deserialize,
+    Clone, Debug, Display, PartialEq, Eq, AsRefStr, EnumIter, EnumString, Serialize, Deserialize,
 )]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum CoinbaseIntxOrderType {
@@ -192,17 +142,7 @@ impl From<OrderType> for CoinbaseIntxOrderType {
 
 /// Represents an overall order status.
 #[derive(
-    Copy,
-    Clone,
-    Debug,
-    Display,
-    PartialEq,
-    Eq,
-    AsRefStr,
-    EnumIter,
-    EnumString,
-    Serialize,
-    Deserialize,
+    Clone, Debug, Display, PartialEq, Eq, AsRefStr, EnumIter, EnumString, Serialize, Deserialize,
 )]
 #[serde(rename_all = "UPPERCASE")]
 pub enum CoinbaseIntxOrderStatus {
@@ -212,7 +152,6 @@ pub enum CoinbaseIntxOrderStatus {
 
 /// Represents an order time in force.
 #[derive(
-    Copy,
     Clone,
     Debug,
     Default,
@@ -259,17 +198,7 @@ impl From<CoinbaseIntxTimeInForce> for TimeInForce {
 
 /// Represents a self trade protection (STP) mode.
 #[derive(
-    Copy,
-    Clone,
-    Debug,
-    Display,
-    PartialEq,
-    Eq,
-    AsRefStr,
-    EnumIter,
-    EnumString,
-    Serialize,
-    Deserialize,
+    Clone, Debug, Display, PartialEq, Eq, AsRefStr, EnumIter, EnumString, Serialize, Deserialize,
 )]
 #[serde(rename_all = "UPPERCASE")]
 pub enum CoinbaseIntxSTPMode {
@@ -282,17 +211,7 @@ pub enum CoinbaseIntxSTPMode {
 
 /// Represents an order event type.
 #[derive(
-    Copy,
-    Clone,
-    Debug,
-    Display,
-    PartialEq,
-    Eq,
-    AsRefStr,
-    EnumIter,
-    EnumString,
-    Serialize,
-    Deserialize,
+    Clone, Debug, Display, PartialEq, Eq, AsRefStr, EnumIter, EnumString, Serialize, Deserialize,
 )]
 #[serde(rename_all = "UPPERCASE")]
 pub enum CoinbaseIntxOrderEventType {
@@ -310,17 +229,7 @@ pub enum CoinbaseIntxOrderEventType {
 
 /// Represents an algo strategy.
 #[derive(
-    Copy,
-    Clone,
-    Debug,
-    Display,
-    PartialEq,
-    Eq,
-    AsRefStr,
-    EnumIter,
-    EnumString,
-    Serialize,
-    Deserialize,
+    Clone, Debug, Display, PartialEq, Eq, AsRefStr, EnumIter, EnumString, Serialize, Deserialize,
 )]
 #[serde(rename_all = "UPPERCASE")]
 pub enum CoinbaseIntxAlgoStrategy {
@@ -329,17 +238,7 @@ pub enum CoinbaseIntxAlgoStrategy {
 
 /// Represents the type of execution that generated a trade.
 #[derive(
-    Copy,
-    Clone,
-    Debug,
-    Display,
-    PartialEq,
-    Eq,
-    AsRefStr,
-    EnumIter,
-    EnumString,
-    Serialize,
-    Deserialize,
+    Clone, Debug, Display, PartialEq, Eq, AsRefStr, EnumIter, EnumString, Serialize, Deserialize,
 )]
 pub enum CoinbaseIntxExecType {
     #[serde(rename = "T")]
@@ -352,17 +251,7 @@ pub enum CoinbaseIntxExecType {
 
 /// Represents instrument types on Coinbase International.
 #[derive(
-    Copy,
-    Clone,
-    Debug,
-    Display,
-    PartialEq,
-    Eq,
-    AsRefStr,
-    EnumIter,
-    EnumString,
-    Serialize,
-    Deserialize,
+    Clone, Debug, Display, PartialEq, Eq, AsRefStr, EnumIter, EnumString, Serialize, Deserialize,
 )]
 #[serde(rename_all = "UPPERCASE")]
 pub enum CoinbaseIntxInstrumentType {
@@ -376,17 +265,7 @@ pub enum CoinbaseIntxInstrumentType {
 
 /// Represents an asset status on Coinbase International.
 #[derive(
-    Copy,
-    Clone,
-    Debug,
-    Display,
-    PartialEq,
-    Eq,
-    AsRefStr,
-    EnumIter,
-    EnumString,
-    Serialize,
-    Deserialize,
+    Clone, Debug, Display, PartialEq, Eq, AsRefStr, EnumIter, EnumString, Serialize, Deserialize,
 )]
 #[serde(rename_all = "UPPERCASE")]
 pub enum CoinbaseIntxAssetStatus {
@@ -396,17 +275,7 @@ pub enum CoinbaseIntxAssetStatus {
 
 /// Represents an instrument status on Coinbase International.
 #[derive(
-    Copy,
-    Clone,
-    Debug,
-    Display,
-    PartialEq,
-    Eq,
-    AsRefStr,
-    EnumIter,
-    EnumString,
-    Serialize,
-    Deserialize,
+    Clone, Debug, Display, PartialEq, Eq, AsRefStr, EnumIter, EnumString, Serialize, Deserialize,
 )]
 #[serde(rename_all = "UPPERCASE")]
 pub enum CoinbaseIntxTradingState {

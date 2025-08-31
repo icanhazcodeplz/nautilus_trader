@@ -30,39 +30,28 @@
 use std::{
     collections::HashMap,
     num::NonZeroU32,
-    sync::{Arc, LazyLock, Mutex},
+    sync::{Arc, LazyLock},
 };
 
-use ahash::AHashMap;
 use chrono::Utc;
 use nautilus_core::{consts::NAUTILUS_USER_AGENT, env::get_env_var};
-use nautilus_model::{
-    identifiers::Symbol,
-    instruments::{Instrument as InstrumentTrait, InstrumentAny},
-};
+use nautilus_model::identifiers::Symbol;
 use nautilus_network::{http::HttpClient, ratelimiter::quota::Quota};
 use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
-use ustr::Ustr;
 
 use super::{
     error::{BitmexErrorResponse, BitmexHttpError},
-    models::{
-        BitmexExecution, BitmexInstrument, BitmexMargin, BitmexOrder, BitmexPosition, BitmexTrade,
-        BitmexWallet,
-    },
+    models::{Execution, Instrument, Order, Position, Trade, Wallet},
     query::{
         DeleteOrderParams, GetExecutionParams, GetOrderParams, GetPositionParams, GetTradeParams,
         PostOrderParams, PutOrderParams,
     },
 };
 use crate::{
-    common::{
-        consts::{BITMEX_HTTP_TESTNET_URL, BITMEX_HTTP_URL},
-        credential::Credential,
-    },
-    websocket::messages::BitmexMarginMsg,
+    consts::{BITMEX_HTTP_TESTNET_URL, BITMEX_HTTP_URL},
+    credential::Credential,
 };
 
 /// Default BitMEX REST API rate limit.
@@ -167,7 +156,7 @@ impl BitmexHttpInnerClient {
         let full_path = if endpoint.starts_with("/api/v1") {
             endpoint.to_string()
         } else {
-            format!("/api/v1{endpoint}")
+            format!("/api/v1{}", endpoint)
         };
 
         tracing::debug!("Signing with body: '{}'", body_str);
@@ -232,7 +221,7 @@ impl BitmexHttpInnerClient {
     pub async fn http_get_instruments(
         &self,
         active_only: bool,
-    ) -> Result<Vec<BitmexInstrument>, BitmexHttpError> {
+    ) -> Result<Vec<Instrument>, BitmexHttpError> {
         let path = if active_only {
             "/instrument/active"
         } else {
@@ -249,7 +238,7 @@ impl BitmexHttpInnerClient {
     pub async fn http_get_instrument(
         &self,
         symbol: &str,
-    ) -> Result<Vec<BitmexInstrument>, BitmexHttpError> {
+    ) -> Result<Vec<Instrument>, BitmexHttpError> {
         let path = &format!("/instrument?symbol={symbol}");
         self.send_request(Method::GET, path, None, false).await
     }
@@ -259,19 +248,9 @@ impl BitmexHttpInnerClient {
     /// # Errors
     ///
     /// Returns an error if credentials are missing, the request fails, or the API returns an error.
-    pub async fn http_get_wallet(&self) -> Result<BitmexWallet, BitmexHttpError> {
+    pub async fn http_get_wallet(&self) -> Result<Wallet, BitmexHttpError> {
         let endpoint = "/user/wallet";
         self.send_request(Method::GET, endpoint, None, true).await
-    }
-
-    /// Get user margin information.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if credentials are missing, the request fails, or the API returns an error.
-    pub async fn http_get_margin(&self, currency: &str) -> Result<BitmexMargin, BitmexHttpError> {
-        let path = format!("/user/margin?currency={currency}");
-        self.send_request(Method::GET, &path, None, true).await
     }
 
     /// Get historical trades.
@@ -286,7 +265,7 @@ impl BitmexHttpInnerClient {
     pub async fn http_get_trades(
         &self,
         params: GetTradeParams,
-    ) -> Result<Vec<BitmexTrade>, BitmexHttpError> {
+    ) -> Result<Vec<Trade>, BitmexHttpError> {
         let query = serde_urlencoded::to_string(&params).expect("Invalid parameters");
         let path = format!("/trade?{query}");
         self.send_request(Method::GET, &path, None, true).await
@@ -304,7 +283,7 @@ impl BitmexHttpInnerClient {
     pub async fn http_get_orders(
         &self,
         params: GetOrderParams,
-    ) -> Result<Vec<BitmexOrder>, BitmexHttpError> {
+    ) -> Result<Vec<Order>, BitmexHttpError> {
         let query = serde_urlencoded::to_string(&params).expect("Invalid parameters");
         let path = format!("/order?{query}");
         self.send_request(Method::GET, &path, None, true).await
@@ -373,7 +352,7 @@ impl BitmexHttpInnerClient {
     pub async fn http_get_executions(
         &self,
         params: GetExecutionParams,
-    ) -> Result<Vec<BitmexExecution>, BitmexHttpError> {
+    ) -> Result<Vec<Execution>, BitmexHttpError> {
         let query = serde_urlencoded::to_string(&params).expect("Invalid parameters");
         let path = format!("/execution/tradeHistory?{query}");
         self.send_request(Method::GET, &path, None, true).await
@@ -391,7 +370,7 @@ impl BitmexHttpInnerClient {
     pub async fn http_get_positions(
         &self,
         params: GetPositionParams,
-    ) -> Result<Vec<BitmexPosition>, BitmexHttpError> {
+    ) -> Result<Vec<Position>, BitmexHttpError> {
         let query = serde_urlencoded::to_string(&params).expect("Invalid parameters");
         let path = format!("/position?{query}");
         self.send_request(Method::GET, &path, None, true).await
@@ -409,7 +388,6 @@ impl BitmexHttpInnerClient {
 )]
 pub struct BitmexHttpClient {
     inner: Arc<BitmexHttpInnerClient>,
-    instruments_cache: Arc<Mutex<AHashMap<Ustr, InstrumentAny>>>,
 }
 
 impl Default for BitmexHttpClient {
@@ -420,7 +398,6 @@ impl Default for BitmexHttpClient {
 
 impl BitmexHttpClient {
     /// Creates a new [`BitmexHttpClient`] instance.
-    #[must_use]
     pub fn new(
         base_url: Option<String>,
         api_key: Option<String>,
@@ -446,7 +423,6 @@ impl BitmexHttpClient {
 
         Self {
             inner: Arc::new(inner),
-            instruments_cache: Arc::new(Mutex::new(AHashMap::new())),
         }
     }
 
@@ -479,7 +455,10 @@ impl BitmexHttpClient {
         let api_secret = api_secret.or_else(|| get_env_var("BITMEX_API_SECRET").ok());
 
         // Determine testnet from URL if provided
-        let testnet = base_url.as_ref().is_some_and(|url| url.contains("testnet"));
+        let testnet = base_url
+            .as_ref()
+            .map(|url| url.contains("testnet"))
+            .unwrap_or(false);
 
         // If we're trying to create an authenticated client, we need both key and secret
         if api_key.is_some() && api_secret.is_none() {
@@ -499,13 +478,11 @@ impl BitmexHttpClient {
     }
 
     /// Returns the base url being used by the client.
-    #[must_use]
     pub fn base_url(&self) -> &str {
         self.inner.base_url.as_str()
     }
 
     /// Returns the public API key being used by the client.
-    #[must_use]
     pub fn api_key(&self) -> Option<&str> {
         self.inner.credential.as_ref().map(|c| c.api_key.as_str())
     }
@@ -522,7 +499,7 @@ impl BitmexHttpClient {
     pub async fn get_instruments(
         &self,
         active_only: bool,
-    ) -> Result<Vec<BitmexInstrument>, BitmexHttpError> {
+    ) -> Result<Vec<Instrument>, BitmexHttpError> {
         let inner = self.inner.clone();
         inner.http_get_instruments(active_only).await
     }
@@ -539,7 +516,7 @@ impl BitmexHttpClient {
     pub async fn get_instrument(
         &self,
         symbol: &Symbol,
-    ) -> Result<Vec<BitmexInstrument>, BitmexHttpError> {
+    ) -> Result<Vec<Instrument>, BitmexHttpError> {
         let inner = self.inner.clone();
         inner.http_get_instrument(symbol.as_ref()).await
     }
@@ -553,7 +530,7 @@ impl BitmexHttpClient {
     /// # Panics
     ///
     /// Panics if the inner mutex is poisoned.
-    pub async fn get_wallet(&self) -> Result<BitmexWallet, BitmexHttpError> {
+    pub async fn get_wallet(&self) -> Result<Wallet, BitmexHttpError> {
         let inner = self.inner.clone();
         inner.http_get_wallet().await
     }
@@ -567,10 +544,7 @@ impl BitmexHttpClient {
     /// # Panics
     ///
     /// Panics if the inner mutex is poisoned.
-    pub async fn get_trades(
-        &self,
-        params: GetTradeParams,
-    ) -> Result<Vec<BitmexTrade>, BitmexHttpError> {
+    pub async fn get_trades(&self, params: GetTradeParams) -> Result<Vec<Trade>, BitmexHttpError> {
         let inner = self.inner.clone();
         inner.http_get_trades(params).await
     }
@@ -584,10 +558,7 @@ impl BitmexHttpClient {
     /// # Panics
     ///
     /// Panics if the inner mutex is poisoned.
-    pub async fn get_orders(
-        &self,
-        params: GetOrderParams,
-    ) -> Result<Vec<BitmexOrder>, BitmexHttpError> {
+    pub async fn get_orders(&self, params: GetOrderParams) -> Result<Vec<Order>, BitmexHttpError> {
         let inner = self.inner.clone();
         inner.http_get_orders(params).await
     }
@@ -646,7 +617,7 @@ impl BitmexHttpClient {
     pub async fn get_executions(
         &self,
         params: GetExecutionParams,
-    ) -> Result<Vec<BitmexExecution>, BitmexHttpError> {
+    ) -> Result<Vec<Execution>, BitmexHttpError> {
         let inner = self.inner.clone();
         inner.http_get_executions(params).await
     }
@@ -663,87 +634,8 @@ impl BitmexHttpClient {
     pub async fn get_positions(
         &self,
         params: GetPositionParams,
-    ) -> Result<Vec<BitmexPosition>, BitmexHttpError> {
+    ) -> Result<Vec<Position>, BitmexHttpError> {
         let inner = self.inner.clone();
         inner.http_get_positions(params).await
-    }
-
-    /// Add an instrument to the cache for precision lookups.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the instruments cache mutex is poisoned.
-    pub fn add_instrument(&mut self, instrument: InstrumentAny) {
-        self.instruments_cache
-            .lock()
-            .unwrap()
-            .insert(instrument.raw_symbol().inner(), instrument);
-    }
-
-    /// Get user margin information.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if credentials are missing, the request fails, or the API returns an error.
-    pub async fn http_get_margin(&self, currency: &str) -> anyhow::Result<BitmexMargin> {
-        self.inner
-            .http_get_margin(currency)
-            .await
-            .map_err(|e| anyhow::anyhow!(e))
-    }
-
-    /// Request account state for the given account.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the HTTP request fails or no account state is returned.
-    pub async fn request_account_state(
-        &self,
-        account_id: nautilus_model::identifiers::AccountId,
-    ) -> anyhow::Result<nautilus_model::events::AccountState> {
-        // Get margin data for XBt (Bitcoin) by default
-        let margin = self
-            .inner
-            .http_get_margin("XBt")
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?;
-
-        let ts_init = nautilus_core::nanos::UnixNanos::from(
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default() as u64,
-        );
-
-        // Convert HTTP Margin to WebSocket MarginMsg for parsing
-        let margin_msg = BitmexMarginMsg {
-            account: margin.account,
-            currency: margin.currency,
-            risk_limit: margin.risk_limit,
-            amount: margin.amount,
-            prev_realised_pnl: margin.prev_realised_pnl,
-            gross_comm: margin.gross_comm,
-            gross_open_cost: margin.gross_open_cost,
-            gross_open_premium: margin.gross_open_premium,
-            gross_exec_cost: margin.gross_exec_cost,
-            gross_mark_value: margin.gross_mark_value,
-            risk_value: margin.risk_value,
-            init_margin: margin.init_margin,
-            maint_margin: margin.maint_margin,
-            target_excess_margin: margin.target_excess_margin,
-            realised_pnl: margin.realised_pnl,
-            unrealised_pnl: margin.unrealised_pnl,
-            wallet_balance: margin.wallet_balance,
-            margin_balance: margin.margin_balance,
-            margin_leverage: margin.margin_leverage,
-            margin_used_pcnt: margin.margin_used_pcnt,
-            excess_margin: margin.excess_margin,
-            available_margin: margin.available_margin,
-            withdrawable_margin: margin.withdrawable_margin,
-            maker_fee_discount: None, // Not in HTTP response
-            taker_fee_discount: None, // Not in HTTP response
-            timestamp: margin.timestamp.unwrap_or_else(chrono::Utc::now),
-            foreign_margin_balance: None,
-            foreign_requirement: None,
-        };
-
-        crate::common::parse::parse_account_state(&margin_msg, account_id, ts_init)
     }
 }

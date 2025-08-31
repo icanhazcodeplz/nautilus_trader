@@ -111,11 +111,12 @@ impl BlockchainCache {
     ///
     /// Returns an error if the database is not initialized or the operation fails.
     pub async fn toggle_performance_settings(&self, enable: bool) -> anyhow::Result<()> {
-        if let Some(database) = &self.database {
-            database.toggle_perf_sync_settings(enable).await
-        } else {
-            tracing::warn!("Database not initialized, skipping performance settings toggle");
-            Ok(())
+        match &self.database {
+            Some(database) => database.toggle_perf_sync_settings(enable).await,
+            None => {
+                tracing::warn!("Database not initialized, skipping performance settings toggle");
+                Ok(())
+            }
         }
     }
 
@@ -131,8 +132,9 @@ impl BlockchainCache {
                     "Error seeding chain in database: {e}. Continuing without database cache functionality"
                 );
                 return;
+            } else {
+                tracing::info!("Chain seeded in the database");
             }
-            tracing::info!("Chain seeded in the database");
 
             match database.create_block_partition(&self.chain).await {
                 Ok(message) => tracing::info!("Executing block partition creation: {}", message),
@@ -251,10 +253,8 @@ impl BlockchainCache {
                     pool_row.creation_block as u64,
                     token0.clone(),
                     token1.clone(),
-                    pool_row.fee.map(|fee| fee as u32),
-                    pool_row
-                        .tick_spacing
-                        .map(|tick_spacing| tick_spacing as u32),
+                    pool_row.fee as u32,
+                    pool_row.tick_spacing as u32,
                     UnixNanos::default(), // TODO use default for now
                 );
 

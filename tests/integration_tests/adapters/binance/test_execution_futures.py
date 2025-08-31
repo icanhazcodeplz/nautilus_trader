@@ -116,7 +116,7 @@ class TestBinanceFuturesExecutionClient:
             instrument_provider=self.provider,
             base_url_ws="",
             config=BinanceExecClientConfig(),
-            account_type=BinanceAccountType.USDT_FUTURES,
+            account_type=BinanceAccountType.USDT_FUTURE,
         )
 
         self.strategy = Strategy()

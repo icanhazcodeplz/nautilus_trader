@@ -16,7 +16,7 @@
 use nautilus_core::UnixNanos;
 use nautilus_model::instruments::Instrument;
 use nautilus_tardis::{
-    enums::TardisExchange,
+    enums::Exchange,
     http::{client::TardisHttpClient, query::InstrumentFilterBuilder},
 };
 
@@ -29,9 +29,7 @@ async fn main() {
     let client = TardisHttpClient::new(None, None, None, true).unwrap();
 
     // Tardis instrument definitions
-    let resp = client
-        .instruments_info(TardisExchange::Binance, None, None)
-        .await;
+    let resp = client.instruments_info(Exchange::Binance, None, None).await;
     println!("Received: {resp:?}");
 
     let start = UnixNanos::from("2020-1-1");
@@ -41,7 +39,7 @@ async fn main() {
         .unwrap();
 
     let resp = client
-        .instruments_info(TardisExchange::Binance, Some("BTCUSDT"), Some(&filter))
+        .instruments_info(Exchange::Binance, Some("BTCUSDT"), Some(&filter))
         .await;
     println!("Received: {resp:?}");
 
@@ -50,7 +48,7 @@ async fn main() {
         .build()
         .unwrap();
     let resp = client
-        .instruments_info(TardisExchange::Bitmex, Some("XBTUSD"), Some(&filter))
+        .instruments_info(Exchange::Bitmex, Some("XBTUSD"), Some(&filter))
         .await;
 
     for inst in resp.unwrap() {
@@ -68,7 +66,7 @@ async fn main() {
     // Nautilus instrument definitions
     let resp = client
         .instruments(
-            TardisExchange::Bitmex,
+            Exchange::Bitmex,
             Some("XBTUSD"),
             Some(&filter),
             None,

@@ -19,9 +19,8 @@ use strum::{AsRefStr, Display, EnumIter, EnumString, FromRepr};
 use ustr::Ustr;
 
 #[derive(
-    Copy,
-    Clone,
     Debug,
+    Clone,
     PartialEq,
     Eq,
     Hash,
@@ -37,7 +36,7 @@ use ustr::Ustr;
 #[strum(serialize_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
 /// The instrument type for the symbol.
-pub enum TardisInstrumentType {
+pub enum InstrumentType {
     Spot,
     Perpetual,
     Future,
@@ -46,9 +45,8 @@ pub enum TardisInstrumentType {
 }
 
 #[derive(
-    Copy,
-    Clone,
     Debug,
+    Clone,
     PartialEq,
     Eq,
     Hash,
@@ -62,16 +60,15 @@ pub enum TardisInstrumentType {
 )]
 #[serde(rename_all = "lowercase")]
 /// The type of option.
-pub enum TardisOptionType {
+pub enum OptionType {
     Call,
     Put,
 }
 
 /// The aggressor side of the trade.
 #[derive(
-    Copy,
-    Clone,
     Debug,
+    Clone,
     PartialEq,
     Eq,
     Hash,
@@ -84,7 +81,7 @@ pub enum TardisOptionType {
     FromRepr,
 )]
 #[serde(rename_all = "lowercase")]
-pub enum TardisTradeSide {
+pub enum TradeSide {
     Buy,
     Sell,
     Unknown,
@@ -93,9 +90,8 @@ pub enum TardisTradeSide {
 /// The bar kind.
 #[allow(missing_docs)]
 #[derive(
-    Copy,
-    Clone,
     Debug,
+    Clone,
     PartialEq,
     Eq,
     Hash,
@@ -108,16 +104,15 @@ pub enum TardisTradeSide {
     FromRepr,
 )]
 #[serde(rename_all = "lowercase")]
-pub enum TardisBarKind {
+pub enum BarKind {
     Time,
     Volume,
     Tick,
 }
 
 #[derive(
-    Copy,
-    Clone,
     Debug,
+    Clone,
     PartialEq,
     Eq,
     Hash,
@@ -134,7 +129,7 @@ pub enum TardisBarKind {
 #[serde(rename_all = "kebab-case")]
 /// Represents a crypto exchange.
 /// See <https://api.tardis.dev/v1/exchanges> for all supported exchanges.
-pub enum TardisExchange {
+pub enum Exchange {
     Ascendex,
     Binance,
     BinanceDelivery,
@@ -196,7 +191,7 @@ pub enum TardisExchange {
     WooX,
 }
 
-impl TardisExchange {
+impl Exchange {
     #[must_use]
     pub fn from_venue_str(s: &str) -> Vec<Self> {
         let s = s.to_ascii_uppercase();
@@ -342,7 +337,7 @@ mod tests {
 
     #[rstest]
     fn test_exchange_to_venue_mapping() {
-        for exchange in TardisExchange::iter() {
+        for exchange in Exchange::iter() {
             let venue_str = exchange.as_venue_str();
             assert!(
                 Venue::new_checked(venue_str).is_ok(),
@@ -380,7 +375,7 @@ mod tests {
 
         for venue_str in test_venues {
             let venue = Venue::new(venue_str);
-            let exchanges = TardisExchange::from_venue_str(venue.as_str());
+            let exchanges = Exchange::from_venue_str(venue.as_str());
 
             for exchange in exchanges {
                 assert_eq!(

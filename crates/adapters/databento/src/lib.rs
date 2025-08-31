@@ -13,7 +13,7 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
-//! [NautilusTrader](http://nautilustrader.io) adapter for [Databento](https://databento.com).
+//! NautilusTrader adapter for the [Databento](https://databento.com) market data provider.
 //!
 //! The `nautilus-databento` crate provides a complete integration with the Databento API for
 //! accessing institutional-grade market data feeds across multiple venues and asset classes.
@@ -31,12 +31,11 @@
 //! # Feature flags
 //!
 //! This crate provides feature flags to control source code inclusion during compilation,
-//! depending on the intended use case:
+//! depending on the intended use case, i.e. whether to provide Python bindings
+//! for the [nautilus_trader](https://pypi.org/project/nautilus_trader) Python package,
+//! or as part of a Rust only build.
 //!
-//! - `live` (default): Enables live data functionality including the `data`, `factories`, and `live` modules.
 //! - `python`: Enables Python bindings from [PyO3](https://pyo3.rs).
-//! - `extension-module`: Builds as a Python extension module (used with `python`).
-//! - `high-precision`: Enables [high-precision mode](https://nautilustrader.io/docs/nightly/getting_started/installation#precision-mode) to use 128-bit value types.
 
 #![warn(rustc::all)]
 #![deny(unsafe_code)]

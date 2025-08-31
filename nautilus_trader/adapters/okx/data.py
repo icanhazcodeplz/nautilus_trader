@@ -25,6 +25,7 @@ from nautilus_trader.common.component import MessageBus
 from nautilus_trader.common.enums import LogColor
 from nautilus_trader.core import nautilus_pyo3
 from nautilus_trader.core.correctness import PyCondition
+from nautilus_trader.core.datetime import dt_to_unix_nanos
 from nautilus_trader.core.datetime import ensure_pydatetime_utc
 from nautilus_trader.data.messages import RequestBars
 from nautilus_trader.data.messages import RequestInstrument
@@ -140,7 +141,7 @@ class OKXDataClient(LiveMarketDataClient):
         self._ws_business_client_futures: set[asyncio.Future] = set()
 
     @property
-    def instrument_provider(self) -> OKXInstrumentProvider:
+    def okx_instrument_provider(self) -> OKXInstrumentProvider:
         return self._instrument_provider
 
     async def _connect(self) -> None:
@@ -148,30 +149,31 @@ class OKXDataClient(LiveMarketDataClient):
         self._cache_instruments()
         self._send_all_instruments_to_data_engine()
 
-        instruments = self.instrument_provider.instruments_pyo3()
-
-        await self._ws_client.connect(
-            instruments=instruments,
-            callback=self._handle_msg,
+        # Connect public WebSocket client
+        future = asyncio.ensure_future(
+            self._ws_client.connect(
+                instruments=self.okx_instrument_provider.instruments_pyo3(),
+                callback=self._handle_msg,
+            ),
         )
-
-        # Wait for connection to be established
-        await self._ws_client.wait_until_active(timeout_secs=10.0)
+        self._ws_client_futures.add(future)
         self._log.info(f"Connected to public websocket {self._ws_client.url}", LogColor.BLUE)
 
-        await self._ws_business_client.connect(
-            instruments=instruments,
-            callback=self._handle_msg,
+        # Connect business WebSocket client
+        business_future = asyncio.ensure_future(
+            self._ws_business_client.connect(
+                instruments=self.okx_instrument_provider.instruments_pyo3(),
+                callback=self._handle_msg,
+            ),
         )
-
-        # Wait for connection to be established
-        await self._ws_client.wait_until_active(timeout_secs=10.0)
+        self._ws_business_client_futures.add(business_future)
         self._log.info(
             f"Connected to business websocket {self._ws_business_client.url}",
             LogColor.BLUE,
         )
         self._log.info("OKX API key authenticated", LogColor.GREEN)
 
+        # Subscribe to instruments for updates
         for instrument_type in self._instrument_provider.instrument_types:
             await self._ws_client.subscribe_instruments(instrument_type)
 
@@ -215,11 +217,17 @@ class OKXDataClient(LiveMarketDataClient):
     def _cache_instruments(self) -> None:
         # Ensures instrument definitions are available for correct
         # price and size precisions when parsing responses
-        instruments_pyo3 = self.instrument_provider.instruments_pyo3()
+        instruments_pyo3 = self.okx_instrument_provider.instruments_pyo3()
         for inst in instruments_pyo3:
             self._http_client.add_instrument(inst)
 
         self._log.debug("Cached instruments", LogColor.MAGENTA)
+
+    def _cache_instrument(self, instrument: Instrument) -> None:
+        self._instrument_provider.add(instrument)
+        self._http_client.add_instrument(instrument)
+
+        self._log.debug(f"Cached instrument {instrument.id}", LogColor.MAGENTA)
 
     def _send_all_instruments_to_data_engine(self) -> None:
         for currency in self._instrument_provider.currencies().values():
@@ -302,27 +310,18 @@ class OKXDataClient(LiveMarketDataClient):
 
     async def _unsubscribe_order_book_deltas(self, command: UnsubscribeOrderBook) -> None:
         pyo3_instrument_id = nautilus_pyo3.InstrumentId.from_str(command.instrument_id.value)
-        active_channels = self._ws_client.get_subscriptions(pyo3_instrument_id)
 
-        tasks = []
-
-        for channel in active_channels:
-            if channel == "books":
-                tasks.append(self._ws_client.unsubscribe_book(pyo3_instrument_id))
-            elif channel == "books50-l2-tbt":
-                tasks.append(self._ws_client.unsubscribe_book50_l2_tbt(pyo3_instrument_id))
-            elif channel == "books-l2-tbt":
-                tasks.append(self._ws_client.unsubscribe_book_l2_tbt(pyo3_instrument_id))
-
-        if tasks:
-            await asyncio.gather(*tasks)
+        if self._config.vip_level and self._config.vip_level >= 5:
+            await self._ws_client.unsubscribe_book_l2_tbt(pyo3_instrument_id)
+        elif self._config.vip_level and self._config.vip_level >= 4:
+            await self._ws_client.unsubscribe_book_l2_tbt(pyo3_instrument_id)
+            await self._ws_client.unsubscribe_book50_l2_tbt(pyo3_instrument_id)
+        else:
+            await self._ws_client.unsubscribe_book(pyo3_instrument_id)
 
     async def _unsubscribe_order_book_snapshots(self, command: UnsubscribeOrderBook) -> None:
         pyo3_instrument_id = nautilus_pyo3.InstrumentId.from_str(command.instrument_id.value)
-        active_channels = self._ws_client.get_subscriptions(pyo3_instrument_id)
-
-        if "books5" in active_channels:
-            await self._ws_client.unsubscribe_book_depth5(pyo3_instrument_id)
+        await self._ws_client.unsubscribe_book_depth5(pyo3_instrument_id)
 
     async def _unsubscribe_quote_ticks(self, command: UnsubscribeQuoteTicks) -> None:
         pyo3_instrument_id = nautilus_pyo3.InstrumentId.from_str(command.instrument_id.value)
@@ -351,12 +350,18 @@ class OKXDataClient(LiveMarketDataClient):
     # -- REQUESTS ---------------------------------------------------------------------------------
 
     async def _request_instrument(self, request: RequestInstrument) -> None:
-        if request.start is not None:
+        # Check if start/end times are too far from current time
+        now = self._clock.utc_now()
+        now_ns = dt_to_unix_nanos(now)
+        start_ns = dt_to_unix_nanos(request.start)
+        end_ns = dt_to_unix_nanos(request.end)
+
+        if abs(start_ns - now_ns) > 10_000_000:  # More than 10ms difference
             self._log.warning(
                 f"Requesting instrument {request.instrument_id} with specified `start` which has no effect",
             )
 
-        if request.end is not None:
+        if abs(end_ns - now_ns) > 10_000_000:  # More than 10ms difference
             self._log.warning(
                 f"Requesting instrument {request.instrument_id} with specified `end` which has no effect",
             )
@@ -375,12 +380,18 @@ class OKXDataClient(LiveMarketDataClient):
         )
 
     async def _request_instruments(self, request: RequestInstruments) -> None:
-        if request.start is not None:
+        # Check if start/end times are too far from current time
+        now = self._clock.utc_now()
+        now_ns = dt_to_unix_nanos(now)
+        start_ns = dt_to_unix_nanos(request.start)
+        end_ns = dt_to_unix_nanos(request.end)
+
+        if abs(start_ns - now_ns) > 10_000_000:  # More than 10ms difference
             self._log.warning(
                 f"Requesting instruments for {request.venue} with specified `start` which has no effect",
             )
 
-        if request.end is not None:
+        if abs(end_ns - now_ns) > 10_000_000:  # More than 10ms difference
             self._log.warning(
                 f"Requesting instruments for {request.venue} with specified `end` which has no effect",
             )

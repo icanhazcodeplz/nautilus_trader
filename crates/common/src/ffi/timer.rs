@@ -201,13 +201,12 @@ impl Drop for TimeEventHandler {
 mod tests {
     use nautilus_core::UUID4;
     use pyo3::{Py, Python, types::PyList};
-    use rstest::rstest;
     use ustr::Ustr;
 
     use super::*;
     use crate::timer::{TimeEvent, TimeEventCallback};
 
-    #[rstest]
+    #[test]
     fn registry_clears_after_handler_drop() {
         pyo3::prepare_freethreaded_python();
 

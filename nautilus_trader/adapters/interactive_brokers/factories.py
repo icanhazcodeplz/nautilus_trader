@@ -15,6 +15,7 @@
 
 import asyncio
 import os
+from functools import lru_cache
 
 # fmt: off
 from nautilus_trader.adapters.interactive_brokers.client import InteractiveBrokersClient
@@ -40,7 +41,6 @@ from nautilus_trader.model.identifiers import AccountId
 
 GATEWAY = None
 IB_CLIENTS: dict[tuple, InteractiveBrokersClient] = {}
-IB_INSTRUMENT_PROVIDERS: dict[tuple, InteractiveBrokersInstrumentProvider] = {}
 
 
 def get_cached_ib_client(
@@ -122,6 +122,7 @@ def get_cached_ib_client(
     return IB_CLIENTS[client_key]
 
 
+@lru_cache(1)
 def get_cached_interactive_brokers_instrument_provider(
     client: InteractiveBrokersClient,
     clock: LiveClock,
@@ -131,7 +132,6 @@ def get_cached_interactive_brokers_instrument_provider(
     Cache and return a InteractiveBrokersInstrumentProvider.
 
     If a cached provider already exists, then that cached provider will be returned.
-    The cache key is based on the client connection parameters and config hash.
 
     Parameters
     ----------
@@ -147,19 +147,7 @@ def get_cached_interactive_brokers_instrument_provider(
     InteractiveBrokersInstrumentProvider
 
     """
-    global IB_INSTRUMENT_PROVIDERS
-
-    # Create a cache key based on client connection info and config
-    # We use the client's connection parameters rather than the client object itself
-    # to ensure consistent caching across different client instances with same connection
-    client_key = (client._host, client._port, client._client_id)
-    provider_key = (client_key, hash(config))
-
-    if provider_key not in IB_INSTRUMENT_PROVIDERS:
-        provider = InteractiveBrokersInstrumentProvider(client=client, clock=clock, config=config)
-        IB_INSTRUMENT_PROVIDERS[provider_key] = provider
-
-    return IB_INSTRUMENT_PROVIDERS[provider_key]
+    return InteractiveBrokersInstrumentProvider(client=client, clock=clock, config=config)
 
 
 class InteractiveBrokersLiveDataClientFactory(LiveDataClientFactory):

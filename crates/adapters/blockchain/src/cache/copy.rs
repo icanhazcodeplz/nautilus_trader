@@ -29,8 +29,7 @@ pub struct PostgresCopyHandler<'a> {
 
 impl<'a> PostgresCopyHandler<'a> {
     /// Creates a new COPY handler with a reference to the database pool.
-    #[must_use]
-    pub const fn new(pool: &'a PgPool) -> Self {
+    pub fn new(pool: &'a PgPool) -> Self {
         Self { pool }
     }
 

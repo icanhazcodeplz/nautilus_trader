@@ -694,7 +694,7 @@ mod tests {
             .build();
     }
 
-    #[rstest]
+    #[test]
     fn test_limit_if_touched_order_update() {
         // Create and accept a basic limit-if-touched order
         let order = OrderTestBuilder::new(OrderType::LimitIfTouched)
@@ -729,7 +729,7 @@ mod tests {
         assert_eq!(accepted_order.quantity(), updated_quantity);
     }
 
-    #[rstest]
+    #[test]
     fn test_limit_if_touched_order_from_order_initialized() {
         // Create an OrderInitialized event with all required fields for a LimitIfTouchedOrder
         let order_initialized = OrderInitializedBuilder::default()
@@ -760,7 +760,7 @@ mod tests {
         assert_eq!(order.trigger_type, order_initialized.trigger_type.unwrap());
     }
 
-    #[rstest]
+    #[test]
     fn test_limit_if_touched_order_sets_slippage_when_filled() {
         // Create a limit-if-touched order
         let order = OrderTestBuilder::new(OrderType::LimitIfTouched)

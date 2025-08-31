@@ -33,6 +33,7 @@ pub mod trailing_stop_market;
 pub mod stubs;
 
 // Re-exports
+use anyhow::anyhow;
 use enum_dispatch::enum_dispatch;
 use indexmap::IndexMap;
 use nautilus_core::{UUID4, UnixNanos};
@@ -138,7 +139,7 @@ pub(crate) fn check_display_qty(
     if let Some(q) = display_qty
         && q > quantity
     {
-        return Err(OrderError::Invariant(anyhow::anyhow!(
+        return Err(OrderError::Invariant(anyhow!(
             "`display_qty` may not exceed `quantity`"
         )));
     }
@@ -151,7 +152,7 @@ pub(crate) fn check_time_in_force(
     expire_time: Option<UnixNanos>,
 ) -> Result<(), OrderError> {
     if time_in_force == TimeInForce::Gtd && expire_time.unwrap_or_default() == 0 {
-        return Err(OrderError::Invariant(anyhow::anyhow!(
+        return Err(OrderError::Invariant(anyhow!(
             "`expire_time` is required for `GTD` order"
         )));
     }

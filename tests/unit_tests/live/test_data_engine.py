@@ -243,7 +243,7 @@ class TestLiveDataEngine:
     async def test_kill_when_running_and_no_messages_on_queues(self):
         # Arrange, Act
         self.engine.start()
-        await eventually(lambda: self.engine.is_running)
+        await asyncio.sleep(0)
         self.engine.kill()
 
         # Assert

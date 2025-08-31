@@ -36,8 +36,8 @@ use crate::{
     events::{burn::BurnEvent, mint::MintEvent, pool_created::PoolCreatedEvent, swap::SwapEvent},
     exchanges::extended::DexExtended,
     hypersync::helpers::{
-        extract_address_from_topic, extract_block_number, extract_log_index,
-        extract_transaction_hash, extract_transaction_index, validate_event_signature_hash,
+        extract_block_number, extract_log_index, extract_transaction_hash,
+        extract_transaction_index, validate_event_signature_hash,
     },
     math::convert_i256_to_f64,
 };
@@ -84,10 +84,22 @@ pub static UNISWAP_V3: LazyLock<DexExtended> = LazyLock::new(|| {
 pub fn parse_pool_created_event(log: Log) -> anyhow::Result<PoolCreatedEvent> {
     validate_event_signature_hash("PoolCreatedEvent", POOL_CREATED_EVENT_SIGNATURE_HASH, &log)?;
 
-    let block_number = extract_block_number(&log)?;
+    let block_number = log
+        .block_number
+        .expect("Block number should be set in logs");
 
-    let token = extract_address_from_topic(&log, 1, "token0")?;
-    let token1 = extract_address_from_topic(&log, 2, "token1")?;
+    let token = if let Some(topic) = log.topics.get(1).and_then(|t| t.as_ref()) {
+        // Address is stored in the last 20 bytes of the 32-byte topic
+        Address::from_slice(&topic.as_ref()[12..32])
+    } else {
+        anyhow::bail!("Missing token0 address in topic1 when parsing pool created event");
+    };
+
+    let token1 = if let Some(topic) = log.topics.get(2).and_then(|t| t.as_ref()) {
+        Address::from_slice(&topic.as_ref()[12..32])
+    } else {
+        anyhow::bail!("Missing token1 address in topic2 when parsing pool created event");
+    };
 
     let fee = if let Some(topic) = log.topics.get(3).and_then(|t| t.as_ref()) {
         U256::from_be_slice(topic.as_ref()).as_limbs()[0] as u32
@@ -108,12 +120,12 @@ pub fn parse_pool_created_event(log: Log) -> anyhow::Result<PoolCreatedEvent> {
         let pool_address = Address::from_slice(&pool_address_bytes[12..32]);
 
         Ok(PoolCreatedEvent::new(
-            block_number,
+            block_number.into(),
             token,
             token1,
+            fee,
+            tick_spacing,
             pool_address,
-            Some(fee),
-            Some(tick_spacing),
         ))
     } else {
         Err(anyhow::anyhow!("Missing data in pool created event log"))
@@ -145,8 +157,15 @@ sol! {
 pub fn parse_swap_event(dex: SharedDex, log: Log) -> anyhow::Result<SwapEvent> {
     validate_event_signature_hash("SwapEvent", SWAP_EVENT_SIGNATURE_HASH, &log)?;
 
-    let sender = extract_address_from_topic(&log, 1, "sender")?;
-    let recipient = extract_address_from_topic(&log, 2, "recipient")?;
+    let sender = match log.topics.get(1).and_then(|t| t.as_ref()) {
+        Some(topic) => Address::from_slice(&topic.as_ref()[12..32]),
+        None => anyhow::bail!("Missing sender address in topic1 when parsing swap event"),
+    };
+
+    let recipient = match log.topics.get(2).and_then(|t| t.as_ref()) {
+        Some(topic) => Address::from_slice(&topic.as_ref()[12..32]),
+        None => anyhow::bail!("Missing recipient address in topic2 when parsing swap event"),
+    };
 
     if let Some(data) = &log.data {
         let data_bytes = data.as_ref();
@@ -307,7 +326,10 @@ sol! {
 pub fn parse_mint_event(dex: SharedDex, log: Log) -> anyhow::Result<MintEvent> {
     validate_event_signature_hash("Mint", MINT_EVENT_SIGNATURE_HASH, &log)?;
 
-    let owner = extract_address_from_topic(&log, 1, "owner")?;
+    let owner = match log.topics.get(1).and_then(|t| t.as_ref()) {
+        Some(topic) => Address::from_slice(&topic.as_ref()[12..32]),
+        None => anyhow::bail!("Missing owner address in topic1 when parsing mint event"),
+    };
 
     // Extract int24 tickLower from topic2 (stored as a 32-byte padded value)
     let tick_lower = match log.topics.get(2).and_then(|t| t.as_ref()) {
@@ -390,7 +412,10 @@ sol! {
 pub fn parse_burn_event(dex: SharedDex, log: Log) -> anyhow::Result<BurnEvent> {
     validate_event_signature_hash("Burn", BURN_EVENT_SIGNATURE_HASH, &log)?;
 
-    let owner = extract_address_from_topic(&log, 1, "owner")?;
+    let owner = match log.topics.get(1).and_then(|t| t.as_ref()) {
+        Some(topic) => Address::from_slice(&topic.as_ref()[12..32]),
+        None => anyhow::bail!("Missing owner address in topic1 when parsing burn event"),
+    };
 
     // Extract int24 tickLower from topic2 (stored as a 32-byte padded value)
     let tick_lower = match log.topics.get(2).and_then(|t| t.as_ref()) {

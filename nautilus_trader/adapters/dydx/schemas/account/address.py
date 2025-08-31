@@ -37,7 +37,7 @@ from nautilus_trader.model.objects import Money
 from nautilus_trader.model.objects import Quantity
 
 
-class DYDXPerpetualPosition(msgspec.Struct, forbid_unknown_fields=False):
+class DYDXPerpetualPosition(msgspec.Struct, forbid_unknown_fields=True):
     """
     Define the perpetual position.
     """
@@ -131,7 +131,7 @@ class DYDXPerpetualPosition(msgspec.Struct, forbid_unknown_fields=False):
         )
 
 
-class DYDXAssetPosition(msgspec.Struct, forbid_unknown_fields=False):
+class DYDXAssetPosition(msgspec.Struct, forbid_unknown_fields=True):
     """
     Define the asset position.
     """
@@ -143,7 +143,7 @@ class DYDXAssetPosition(msgspec.Struct, forbid_unknown_fields=False):
     subaccountNumber: int
 
 
-class DYDXSubaccount(msgspec.Struct, forbid_unknown_fields=False):
+class DYDXSubaccount(msgspec.Struct, forbid_unknown_fields=True):
     """
     Define the schema for the subaccount response.
     """
@@ -159,7 +159,7 @@ class DYDXSubaccount(msgspec.Struct, forbid_unknown_fields=False):
     latestProcessedBlockHeight: str | None = None
 
 
-class DYDXSubaccountResponse(msgspec.Struct, forbid_unknown_fields=False):
+class DYDXSubaccountResponse(msgspec.Struct, forbid_unknown_fields=True):
     """
     Define the address response message.
     """
@@ -167,7 +167,7 @@ class DYDXSubaccountResponse(msgspec.Struct, forbid_unknown_fields=False):
     subaccount: DYDXSubaccount
 
 
-class DYDXAddressResponse(msgspec.Struct, forbid_unknown_fields=False):
+class DYDXAddressResponse(msgspec.Struct, forbid_unknown_fields=True):
     """
     Define the address response message.
     """

@@ -1008,7 +1008,6 @@ mod tests {
 #[cfg(test)]
 mod property_tests {
     use proptest::prelude::*;
-    use rstest::rstest;
 
     use super::*;
 
@@ -1042,7 +1041,7 @@ mod property_tests {
 
     proptest! {
         /// Property: Quantity string serialization round-trip should preserve value and precision
-        #[rstest]
+        #[test]
         fn prop_quantity_serde_round_trip(
             value in quantity_value_strategy(),
             precision in 0u8..=6u8  // Limit precision to avoid extreme floating-point cases
@@ -1063,7 +1062,7 @@ mod property_tests {
         }
 
         /// Property: Quantity arithmetic should be associative for same precision
-        #[rstest]
+        #[test]
         fn prop_quantity_arithmetic_associative(
             a in quantity_value_strategy().prop_filter("Reasonable values", |&x| x > 1e-3 && x < 1e6),
             b in quantity_value_strategy().prop_filter("Reasonable values", |&x| x > 1e-3 && x < 1e6),
@@ -1090,7 +1089,7 @@ mod property_tests {
         }
 
         /// Property: Quantity addition/subtraction should be inverse operations (when valid)
-        #[rstest]
+        #[test]
         fn prop_quantity_addition_subtraction_inverse(
             base in quantity_value_strategy().prop_filter("Reasonable values", |&x| x < 1e6),
             delta in quantity_value_strategy().prop_filter("Reasonable values", |&x| x > 1e-3 && x < 1e6),
@@ -1108,7 +1107,7 @@ mod property_tests {
         }
 
         /// Property: Quantity ordering should be transitive
-        #[rstest]
+        #[test]
         fn prop_quantity_ordering_transitive(
             a in quantity_value_strategy(),
             b in quantity_value_strategy(),
@@ -1127,7 +1126,7 @@ mod property_tests {
         }
 
         /// Property: String parsing should be consistent with precision inference
-        #[rstest]
+        #[test]
         fn prop_quantity_string_parsing_precision(
             integral in 0u32..1000000,
             fractional in 0u32..1000000,
@@ -1147,7 +1146,7 @@ mod property_tests {
         }
 
         /// Property: Quantity with higher precision should contain more or equal information
-        #[rstest]
+        #[test]
         fn prop_quantity_precision_information_preservation(
             value in quantity_value_strategy().prop_filter("Reasonable values", |&x| x < 1e6),
             precision1 in 1u8..=6u8,  // Limit precision range for more predictable behavior
@@ -1175,7 +1174,7 @@ mod property_tests {
         }
 
         /// Property: Quantity arithmetic should never produce invalid values
-        #[rstest]
+        #[test]
         fn prop_quantity_arithmetic_bounds(
             a in quantity_value_strategy(),
             b in quantity_value_strategy(),
@@ -1202,7 +1201,7 @@ mod property_tests {
         }
 
         /// Property: Multiplication should preserve non-negativity
-        #[rstest]
+        #[test]
         fn prop_quantity_multiplication_non_negative(
             a in quantity_value_strategy().prop_filter("Reasonable values", |&x| x > 0.0 && x < 10.0),
             b in quantity_value_strategy().prop_filter("Reasonable values", |&x| x > 0.0 && x < 10.0),
@@ -1226,7 +1225,7 @@ mod property_tests {
         }
 
         /// Property: Zero quantity should be identity for addition
-        #[rstest]
+        #[test]
         fn prop_quantity_zero_addition_identity(
             value in quantity_value_strategy(),
             precision in precision_strategy()

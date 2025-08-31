@@ -17,15 +17,15 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::common::enums::{
-    BitmexContingencyType, BitmexExecInstruction, BitmexInstrumentType, BitmexLiquidityIndicator,
-    BitmexOrderStatus, BitmexOrderType, BitmexPegPriceType, BitmexSide, BitmexTimeInForce,
+use crate::enums::{
+    ContingencyType, ExecInstruction, InstrumentType, LiquidityIndicator, OrderStatus, OrderType,
+    PegPriceType, Side, TimeInForce,
 };
 
-/// Custom deserializer for comma-separated `ExecInstruction` values
+/// Custom deserializer for comma-separated ExecInstruction values
 fn deserialize_exec_instructions<'de, D>(
     deserializer: D,
-) -> Result<Option<Vec<BitmexExecInstruction>>, D::Error>
+) -> Result<Option<Vec<ExecInstruction>>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -34,24 +34,23 @@ where
         None => Ok(None),
         Some(ref s) if s.is_empty() => Ok(None),
         Some(s) => {
-            let instructions: Result<Vec<BitmexExecInstruction>, _> = s
+            let instructions: Result<Vec<ExecInstruction>, _> = s
                 .split(',')
                 .map(|inst| {
                     let trimmed = inst.trim();
                     match trimmed {
-                        "ParticipateDoNotInitiate" => {
-                            Ok(BitmexExecInstruction::ParticipateDoNotInitiate)
-                        }
-                        "AllOrNone" => Ok(BitmexExecInstruction::AllOrNone),
-                        "MarkPrice" => Ok(BitmexExecInstruction::MarkPrice),
-                        "IndexPrice" => Ok(BitmexExecInstruction::IndexPrice),
-                        "LastPrice" => Ok(BitmexExecInstruction::LastPrice),
-                        "Close" => Ok(BitmexExecInstruction::Close),
-                        "ReduceOnly" => Ok(BitmexExecInstruction::ReduceOnly),
-                        "Fixed" => Ok(BitmexExecInstruction::Fixed),
-                        "" => Ok(BitmexExecInstruction::Unknown),
+                        "ParticipateDoNotInitiate" => Ok(ExecInstruction::ParticipateDoNotInitiate),
+                        "AllOrNone" => Ok(ExecInstruction::AllOrNone),
+                        "MarkPrice" => Ok(ExecInstruction::MarkPrice),
+                        "IndexPrice" => Ok(ExecInstruction::IndexPrice),
+                        "LastPrice" => Ok(ExecInstruction::LastPrice),
+                        "Close" => Ok(ExecInstruction::Close),
+                        "ReduceOnly" => Ok(ExecInstruction::ReduceOnly),
+                        "Fixed" => Ok(ExecInstruction::Fixed),
+                        "" => Ok(ExecInstruction::Unknown),
                         _ => Err(serde::de::Error::custom(format!(
-                            "Unknown ExecInstruction: {trimmed}"
+                            "Unknown ExecInstruction: {}",
+                            trimmed
                         ))),
                     }
                 })
@@ -63,12 +62,12 @@ where
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexInstrument {
+pub struct Instrument {
     pub symbol: String,
     pub root_symbol: String,
     pub state: String,
     #[serde(rename = "typ")]
-    pub instrument_type: BitmexInstrumentType,
+    pub instrument_type: InstrumentType,
     pub listing: DateTime<Utc>,
     pub front: Option<DateTime<Utc>>,
     pub expiry: Option<DateTime<Utc>>,
@@ -161,7 +160,7 @@ pub struct BitmexInstrument {
 /// Raw Order and Balance Data.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexExecution {
+pub struct Execution {
     #[serde(rename = "execID")]
     pub exec_id: Uuid,
     #[serde(rename = "orderID")]
@@ -172,26 +171,26 @@ pub struct BitmexExecution {
     pub cl_ord_link_id: Option<String>,
     pub account: Option<i64>,
     pub symbol: Option<String>,
-    pub side: Option<BitmexSide>,
+    pub side: Option<Side>,
     pub last_qty: Option<i64>,
     pub last_px: Option<f64>,
     pub underlying_last_px: Option<f64>,
     pub last_mkt: Option<String>,
-    pub last_liquidity_ind: Option<BitmexLiquidityIndicator>,
+    pub last_liquidity_ind: Option<LiquidityIndicator>,
     pub order_qty: Option<i64>,
     pub price: Option<f64>,
     pub display_qty: Option<i64>,
     pub stop_px: Option<f64>,
     pub peg_offset_value: Option<f64>,
-    pub peg_price_type: Option<BitmexPegPriceType>,
+    pub peg_price_type: Option<PegPriceType>,
     pub currency: Option<String>,
     pub settl_currency: Option<String>,
     pub exec_type: Option<String>,
-    pub ord_type: Option<BitmexOrderType>,
-    pub time_in_force: Option<BitmexTimeInForce>,
+    pub ord_type: Option<OrderType>,
+    pub time_in_force: Option<TimeInForce>,
     #[serde(default, deserialize_with = "deserialize_exec_instructions")]
-    pub exec_inst: Option<Vec<BitmexExecInstruction>>,
-    pub contingency_type: Option<BitmexContingencyType>,
+    pub exec_inst: Option<Vec<ExecInstruction>>,
+    pub contingency_type: Option<ContingencyType>,
     pub ex_destination: Option<String>,
     pub ord_status: Option<String>,
     pub triggered: Option<String>,
@@ -216,7 +215,7 @@ pub struct BitmexExecution {
 /// Swap Funding History.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexFunding {
+pub struct Funding {
     pub timestamp: DateTime<Utc>,
     pub symbol: String,
     pub funding_interval: Option<DateTime<Utc>>,
@@ -226,14 +225,14 @@ pub struct BitmexFunding {
 
 #[derive(Clone, Debug, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexInstrumentInterval {
+pub struct InstrumentInterval {
     pub intervals: Vec<String>,
     pub symbols: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexIndexComposite {
+pub struct IndexComposite {
     pub timestamp: DateTime<Utc>,
     pub symbol: Option<String>,
     pub index_symbol: Option<String>,
@@ -246,7 +245,7 @@ pub struct BitmexIndexComposite {
 /// Insurance Fund Data.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexInsurance {
+pub struct Insurance {
     pub currency: String,
     pub timestamp: DateTime<Utc>,
     pub wallet_balance: Option<i64>,
@@ -255,11 +254,11 @@ pub struct BitmexInsurance {
 /// Active Liquidations.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexLiquidation {
+pub struct Liquidation {
     #[serde(rename = "orderID")]
     pub order_id: Uuid,
     pub symbol: Option<String>,
-    pub side: Option<BitmexSide>,
+    pub side: Option<Side>,
     pub price: Option<f64>,
     pub leaves_qty: Option<i64>,
 }
@@ -267,7 +266,7 @@ pub struct BitmexLiquidation {
 /// Placement, Cancellation, Amending, and History.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexOrder {
+pub struct Order {
     #[serde(rename = "orderID")]
     pub order_id: Uuid,
     #[serde(rename = "clOrdID")]
@@ -276,22 +275,22 @@ pub struct BitmexOrder {
     pub cl_ord_link_id: Option<String>,
     pub account: Option<i64>,
     pub symbol: Option<String>,
-    pub side: Option<BitmexSide>,
+    pub side: Option<Side>,
     pub order_qty: Option<i64>,
     pub price: Option<f64>,
     pub display_qty: Option<i64>,
     pub stop_px: Option<f64>,
     pub peg_offset_value: Option<f64>,
-    pub peg_price_type: Option<BitmexPegPriceType>,
+    pub peg_price_type: Option<PegPriceType>,
     pub currency: Option<String>,
     pub settl_currency: Option<String>,
-    pub ord_type: Option<BitmexOrderType>,
-    pub time_in_force: Option<BitmexTimeInForce>,
+    pub ord_type: Option<OrderType>,
+    pub time_in_force: Option<TimeInForce>,
     #[serde(default, deserialize_with = "deserialize_exec_instructions")]
-    pub exec_inst: Option<Vec<BitmexExecInstruction>>,
-    pub contingency_type: Option<BitmexContingencyType>,
+    pub exec_inst: Option<Vec<ExecInstruction>>,
+    pub contingency_type: Option<ContingencyType>,
     pub ex_destination: Option<String>,
-    pub ord_status: Option<BitmexOrderStatus>,
+    pub ord_status: Option<OrderStatus>,
     pub triggered: Option<String>,
     pub working_indicator: Option<bool>,
     pub ord_rej_reason: Option<String>,
@@ -306,10 +305,10 @@ pub struct BitmexOrder {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexOrderBookL2 {
+pub struct OrderBookL2 {
     pub symbol: String,
     pub id: i64,
-    pub side: BitmexSide,
+    pub side: Side,
     pub size: Option<i64>,
     pub price: Option<f64>,
 }
@@ -317,7 +316,7 @@ pub struct BitmexOrderBookL2 {
 /// Position status.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexPosition {
+pub struct Position {
     pub account: i64,
     pub symbol: String,
     pub currency: Option<String>,
@@ -409,7 +408,7 @@ pub struct BitmexPosition {
 /// Best Bid/Offer Snapshots & Historical Bins.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexQuote {
+pub struct Quote {
     pub timestamp: DateTime<Utc>,
     pub symbol: String,
     pub bid_size: Option<i64>,
@@ -421,7 +420,7 @@ pub struct BitmexQuote {
 /// Historical Settlement Data.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexSettlement {
+pub struct Settlement {
     pub timestamp: DateTime<Utc>,
     pub symbol: String,
     pub settlement_type: Option<String>,
@@ -436,7 +435,7 @@ pub struct BitmexSettlement {
 /// Exchange Statistics.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexStats {
+pub struct Stats {
     pub root_symbol: String,
     pub currency: Option<String>,
     pub volume24h: Option<i64>,
@@ -447,7 +446,7 @@ pub struct BitmexStats {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexStatsHistory {
+pub struct StatsHistory {
     pub date: DateTime<Utc>,
     pub root_symbol: String,
     pub currency: Option<String>,
@@ -457,7 +456,7 @@ pub struct BitmexStatsHistory {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexStatsUSD {
+pub struct StatsUSD {
     pub root_symbol: String,
     pub currency: Option<String>,
     pub turnover24h: Option<i64>,
@@ -469,10 +468,10 @@ pub struct BitmexStatsUSD {
 /// Individual & Bucketed Trades.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexTrade {
+pub struct Trade {
     pub timestamp: DateTime<Utc>,
     pub symbol: String,
-    pub side: Option<BitmexSide>,
+    pub side: Option<Side>,
     pub size: Option<i64>,
     pub price: Option<f64>,
     pub tick_direction: Option<String>,
@@ -485,7 +484,7 @@ pub struct BitmexTrade {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexTradeBin {
+pub struct TradeBin {
     pub timestamp: DateTime<Utc>,
     pub symbol: String,
     pub open: Option<f64>,
@@ -503,7 +502,7 @@ pub struct BitmexTradeBin {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexWallet {
+pub struct Wallet {
     pub account: i64,
     pub currency: String,
     pub prev_deposited: Option<i64>,
@@ -533,7 +532,7 @@ pub struct BitmexWallet {
 
 #[derive(Clone, Debug, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexTransaction {
+pub struct Transaction {
     pub transact_id: Option<Uuid>,
     pub account: Option<i64>,
     pub currency: Option<String>,
@@ -551,7 +550,7 @@ pub struct BitmexTransaction {
 /// Public Announcements.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexAnnouncement {
+pub struct Announcement {
     pub id: i32,
     pub link: Option<String>,
     pub title: Option<String>,
@@ -562,7 +561,7 @@ pub struct BitmexAnnouncement {
 /// Persistent API Keys for Developers.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexAPIKey {
+pub struct APIKey {
     pub id: String,
     pub secret: Option<String>,
     pub name: String,
@@ -577,7 +576,7 @@ pub struct BitmexAPIKey {
 /// Account Notifications.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexGlobalNotification {
+pub struct GlobalNotification {
     pub id: Option<i32>,
     pub date: DateTime<Utc>,
     pub title: String,
@@ -592,7 +591,7 @@ pub struct BitmexGlobalNotification {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexAccessToken {
+pub struct AccessToken {
     pub id: String,
     /// The time to live in seconds (2 weeks by default).
     pub ttl: Option<f64>,
@@ -603,7 +602,7 @@ pub struct BitmexAccessToken {
 /// Daily Quote Fill Ratio Statistic.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexQuoteFillRatio {
+pub struct QuoteFillRatio {
     pub date: DateTime<Utc>,
     pub account: Option<f64>,
     pub quote_count: Option<f64>,
@@ -616,7 +615,7 @@ pub struct BitmexQuoteFillRatio {
 /// Account Operations.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexUser {
+pub struct User {
     pub id: Option<i32>,
     pub owner_id: Option<i32>,
     pub firstname: Option<String>,
@@ -626,7 +625,7 @@ pub struct BitmexUser {
     pub phone: Option<String>,
     pub created: Option<DateTime<Utc>>,
     pub last_updated: Option<DateTime<Utc>>,
-    pub preferences: BitmexUserPreferences,
+    pub preferences: UserPreferences,
     #[serde(rename = "TFAEnabled")]
     pub tfa_enabled: Option<String>,
     #[serde(rename = "affiliateID")]
@@ -640,7 +639,7 @@ pub struct BitmexUser {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexMargin {
+pub struct Margin {
     pub account: i64,
     pub currency: String,
     pub risk_limit: Option<i64>,
@@ -687,7 +686,7 @@ pub struct BitmexMargin {
 /// User communication SNS token.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexCommunicationToken {
+pub struct CommunicationToken {
     pub id: String,
     #[serde(rename = "userId")]
     pub user_id: i32,
@@ -699,7 +698,7 @@ pub struct BitmexCommunicationToken {
 /// User Events for auditing.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexUserEvent {
+pub struct UserEvent {
     pub id: Option<f64>,
     #[serde(rename = "type")]
     pub r#type: String,
@@ -716,17 +715,17 @@ pub struct BitmexUserEvent {
     #[serde(rename = "geoipSubRegion")]
     pub geoip_sub_region: Option<String>,
     #[serde(rename = "eventMeta")]
-    pub event_meta: Option<BitmexEventMetaEventMeta>,
+    pub event_meta: Option<EventMetaEventMeta>,
     pub created: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug, Deserialize, Default)]
 #[allow(dead_code)]
-pub struct BitmexEventMetaEventMeta(serde_json::Value);
+pub struct EventMetaEventMeta(serde_json::Value);
 
 #[derive(Clone, Debug, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexUserPreferences {
+pub struct UserPreferences {
     pub alert_on_liquidations: Option<bool>,
     pub animations_enabled: Option<bool>,
     pub announcements_last_seen: Option<DateTime<Utc>>,
@@ -743,7 +742,7 @@ pub struct BitmexUserPreferences {
     pub hide_notifications: Option<Vec<String>>,
     pub locale: Option<String>,
     pub msgs_seen: Option<Vec<String>>,
-    pub order_book_binning: Option<BitmexOrderBookBinning>,
+    pub order_book_binning: Option<OrderBookBinningOrderBookBinning>,
     pub order_book_type: Option<String>,
     pub order_clear_immediate: Option<bool>,
     pub order_controls_plus_minus: Option<bool>,
@@ -759,7 +758,7 @@ pub struct BitmexUserPreferences {
 
 #[derive(Clone, Debug, Deserialize, Default)]
 #[allow(dead_code)]
-pub struct BitmexOrderBookBinning(serde_json::Value);
+pub struct OrderBookBinningOrderBookBinning(serde_json::Value);
 
 ////////////////////////////////////////////////////////////////////////////////
 // Tests
@@ -775,26 +774,26 @@ mod tests {
     #[rstest]
     #[case(json!(null), None)]
     #[case(json!(""), None)]
-    #[case(json!("ParticipateDoNotInitiate"), Some(vec![BitmexExecInstruction::ParticipateDoNotInitiate]))]
-    #[case(json!("ReduceOnly"), Some(vec![BitmexExecInstruction::ReduceOnly]))]
-    #[case(json!("LastPrice,Close"), Some(vec![BitmexExecInstruction::LastPrice, BitmexExecInstruction::Close]))]
+    #[case(json!("ParticipateDoNotInitiate"), Some(vec![ExecInstruction::ParticipateDoNotInitiate]))]
+    #[case(json!("ReduceOnly"), Some(vec![ExecInstruction::ReduceOnly]))]
+    #[case(json!("LastPrice,Close"), Some(vec![ExecInstruction::LastPrice, ExecInstruction::Close]))]
     #[case(
         json!("ParticipateDoNotInitiate,ReduceOnly"),
-        Some(vec![BitmexExecInstruction::ParticipateDoNotInitiate, BitmexExecInstruction::ReduceOnly])
+        Some(vec![ExecInstruction::ParticipateDoNotInitiate, ExecInstruction::ReduceOnly])
     )]
     #[case(
         json!("MarkPrice,IndexPrice,AllOrNone"),
-        Some(vec![BitmexExecInstruction::MarkPrice, BitmexExecInstruction::IndexPrice, BitmexExecInstruction::AllOrNone])
+        Some(vec![ExecInstruction::MarkPrice, ExecInstruction::IndexPrice, ExecInstruction::AllOrNone])
     )]
-    #[case(json!("Fixed"), Some(vec![BitmexExecInstruction::Fixed]))]
+    #[case(json!("Fixed"), Some(vec![ExecInstruction::Fixed]))]
     fn test_deserialize_exec_instructions(
         #[case] input: serde_json::Value,
-        #[case] expected: Option<Vec<BitmexExecInstruction>>,
+        #[case] expected: Option<Vec<ExecInstruction>>,
     ) {
         #[derive(Deserialize)]
         struct TestStruct {
             #[serde(default, deserialize_with = "deserialize_exec_instructions")]
-            exec_inst: Option<Vec<BitmexExecInstruction>>,
+            exec_inst: Option<Vec<ExecInstruction>>,
         }
 
         let test_json = json!({
@@ -810,7 +809,7 @@ mod tests {
         #[derive(Deserialize)]
         struct TestStruct {
             #[serde(default, deserialize_with = "deserialize_exec_instructions")]
-            exec_inst: Option<Vec<BitmexExecInstruction>>,
+            exec_inst: Option<Vec<ExecInstruction>>,
         }
 
         let test_json = json!({
@@ -821,9 +820,9 @@ mod tests {
         assert_eq!(
             result.exec_inst,
             Some(vec![
-                BitmexExecInstruction::LastPrice,
-                BitmexExecInstruction::Close,
-                BitmexExecInstruction::ReduceOnly,
+                ExecInstruction::LastPrice,
+                ExecInstruction::Close,
+                ExecInstruction::ReduceOnly,
             ])
         );
     }
@@ -846,12 +845,12 @@ mod tests {
             "timestamp": "2024-01-01T00:00:00.000Z"
         });
 
-        let order: BitmexOrder = serde_json::from_value(order_json).unwrap();
+        let order: Order = serde_json::from_value(order_json).unwrap();
         assert_eq!(
             order.exec_inst,
             Some(vec![
-                BitmexExecInstruction::ParticipateDoNotInitiate,
-                BitmexExecInstruction::ReduceOnly,
+                ExecInstruction::ParticipateDoNotInitiate,
+                ExecInstruction::ReduceOnly,
             ])
         );
     }

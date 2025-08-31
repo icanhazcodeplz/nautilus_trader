@@ -20,9 +20,7 @@
 # fmt: off
 import os
 
-# import pandas as pd
-import threading
-import time
+import pandas as pd
 
 from nautilus_trader.adapters.interactive_brokers.common import IB
 from nautilus_trader.adapters.interactive_brokers.common import IB_VENUE
@@ -73,39 +71,38 @@ class DemoStrategy(Strategy):
         Handle strategy start event.
         """
         self.request_instrument(self.config.instrument_id)
+        self.instrument = self.cache.instrument(self.config.instrument_id)
 
-        # self.request_instruments(
-        #     venue=IB_VENUE,
-        #     params={
-        #         "ib_contracts": (
-        #             {
-        #                 "secType": "CONTFUT",
-        #                 "exchange": "CME",
-        #                 "symbol": "ES",
-        #                 "build_futures_chain": True,
-        #                 "build_options_chain": True,
-        #                 "min_expiry_days": 10,
-        #                 "max_expiry_days": 11,
-        #             },
-        #         ),
-        #     },
-        # )
+        self.request_instruments(
+            venue=IB_VENUE,
+            params={
+                "ib_contracts": (
+                    {
+                        "secType": "CONTFUT",
+                        "exchange": "CME",
+                        "symbol": "ES",
+                        "build_futures_chain": True,
+                        "build_options_chain": True,
+                        "min_expiry_days": 10,
+                        "max_expiry_days": 11,
+                    },
+                ),
+            },
+        )
+
+        utc_now = self._clock.utc_now()
+        start = utc_now - pd.Timedelta(
+            minutes=30,
+        )
+        self.request_bars(
+            BarType.from_str(f"{self.config.instrument_id}-1-MINUTE-LAST-EXTERNAL"),
+            start,
+        )
+
+        self.subscribe_bars(self.config.bar_type)
 
     def on_instrument(self, instrument):
         self.log.info(f"Instrument ID: {instrument.id}")
-
-        self.instrument = self.cache.instrument(self.config.instrument_id)
-
-        # utc_now = self._clock.utc_now()
-        # start = utc_now - pd.Timedelta(
-        #     minutes=30,
-        # )
-        # self.request_bars(
-        #     BarType.from_str(f"{self.config.instrument_id}-1-MINUTE-LAST-EXTERNAL"),
-        #     start,
-        # )
-
-        self.subscribe_bars(self.config.bar_type)
 
     def on_bar(self, bar: Bar):
         """
@@ -241,7 +238,7 @@ config_node = TradingNodeConfig(
             ibg_port=7497,
             instrument_provider=instrument_provider,
             routing=RoutingConfig(default=True),
-            account_id=os.environ.get("TWS_ACCOUNT"),
+            account_id=os.environ["TWS_ACCOUNT"],
         ),
     },
     data_engine=LiveDataEngineConfig(
@@ -274,29 +271,11 @@ node.add_data_client_factory(IB, InteractiveBrokersLiveDataClientFactory)
 node.add_exec_client_factory(IB, InteractiveBrokersLiveExecClientFactory)
 node.build()
 
+# %%
+node.run()
 
 # %%
-def auto_stop_node(node, delay_seconds=15):
-    """
-    Automatically stop the node after a delay.
-    """
-
-    def stop_after_delay():
-        time.sleep(delay_seconds)
-        node.stop()
-
-    thread = threading.Thread(target=stop_after_delay)
-    thread.daemon = True
-    thread.start()
-
+node.stop()
 
 # %%
-# Start auto-stop timer
-auto_stop_node(node, delay_seconds=60)
-
-try:
-    node.run()
-except KeyboardInterrupt:
-    node.stop()
-finally:
-    node.dispose()
+node.dispose()

@@ -18,12 +18,11 @@ use pyo3::prelude::*;
 use ustr::Ustr;
 
 use crate::{
-    enums::TardisExchange, machine::types::TardisInstrumentMiniInfo,
-    parse::bar_spec_to_tardis_trade_bar_string,
+    enums::Exchange, machine::types::InstrumentMiniInfo, parse::bar_spec_to_tardis_trade_bar_string,
 };
 
 #[pymethods]
-impl TardisInstrumentMiniInfo {
+impl InstrumentMiniInfo {
     #[new]
     fn py_new(
         instrument_id: InstrumentId,
@@ -32,7 +31,7 @@ impl TardisInstrumentMiniInfo {
         price_precision: u8,
         size_precision: u8,
     ) -> PyResult<Self> {
-        let exchange: TardisExchange = exchange
+        let exchange: Exchange = exchange
             .parse()
             .expect("`exchange` should be Tardis convention");
         Ok(Self::new(

@@ -46,7 +46,7 @@ impl LiveNode {
         trader_id: TraderId,
         environment: Environment,
     ) -> PyResult<LiveNodeBuilderPy> {
-        match Self::builder(name, trader_id, environment) {
+        match LiveNode::builder(name, trader_id, environment) {
             Ok(builder) => Ok(LiveNodeBuilderPy {
                 inner: Rc::new(RefCell::new(Some(builder))),
             }),
@@ -71,14 +71,14 @@ impl LiveNode {
     /// Returns the node's instance ID.
     #[getter]
     #[pyo3(name = "instance_id")]
-    const fn py_instance_id(&self) -> UUID4 {
+    fn py_instance_id(&self) -> UUID4 {
         self.instance_id()
     }
 
     /// Returns whether the node is running.
     #[getter]
     #[pyo3(name = "is_running")]
-    const fn py_is_running(&self) -> bool {
+    fn py_is_running(&self) -> bool {
         self.is_running()
     }
 
@@ -111,7 +111,7 @@ impl LiveNode {
             signal_module.call_method1("signal", (2, signal_module.getattr("SIG_DFL")?))?; // Save original SIGINT handler (signal 2)
 
         // Set up a custom signal handler that uses our handle
-        let handle_for_signal = handle;
+        let handle_for_signal = handle.clone();
         let signal_callback = pyo3::types::PyCFunction::new_closure(
             py,
             None,
@@ -244,8 +244,9 @@ impl LiveNode {
                             if let Err(e) = instance.call_method0("__post_init__") {
                                 log::error!("Failed to call __post_init__ on config instance: {e}");
                                 anyhow::bail!("__post_init__ failed: {e}");
+                            } else {
+                                log::debug!("Successfully called __post_init__ on config instance");
                             }
-                            log::debug!("Successfully called __post_init__ on config instance");
 
                             instance
                         },
@@ -271,8 +272,9 @@ impl LiveNode {
                                     if let Err(e) = instance.call_method0("__post_init__") {
                                         log::error!("Failed to call __post_init__ on config instance: {e}");
                                         anyhow::bail!("__post_init__ failed: {e}");
+                                    } else {
+                                        log::debug!("Called __post_init__ on config instance");
                                     }
-                                    log::debug!("Called __post_init__ on config instance");
 
                                     instance
                                 },

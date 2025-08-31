@@ -15,7 +15,7 @@
 
 //! Greeks calculator for options and futures.
 
-use std::{cell::RefCell, collections::HashMap, fmt::Debug, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use anyhow;
 use derive_builder::Builder;
@@ -76,7 +76,7 @@ impl GreeksFilterCallback {
     }
 }
 
-impl Debug for GreeksFilterCallback {
+impl std::fmt::Debug for GreeksFilterCallback {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Function(_) => f.write_str("GreeksFilterCallback::Function"),
@@ -838,7 +838,6 @@ mod tests {
         enums::PositionSide,
         identifiers::{InstrumentId, StrategyId, Venue},
     };
-    use rstest::rstest;
 
     use super::*;
     use crate::{cache::Cache, clock::TestClock};
@@ -849,14 +848,14 @@ mod tests {
         GreeksCalculator::new(cache, clock)
     }
 
-    #[rstest]
+    #[test]
     fn test_greeks_calculator_creation() {
         let calculator = create_test_calculator();
         // Test that the calculator can be created
         assert!(format!("{calculator:?}").contains("GreeksCalculator"));
     }
 
-    #[rstest]
+    #[test]
     fn test_greeks_calculator_debug() {
         let calculator = create_test_calculator();
         // Test the debug representation
@@ -864,7 +863,7 @@ mod tests {
         assert!(debug_str.contains("GreeksCalculator"));
     }
 
-    #[rstest]
+    #[test]
     fn test_greeks_calculator_has_python_bindings() {
         // This test just verifies that the GreeksCalculator struct
         // can be compiled with Python bindings enabled
@@ -874,7 +873,7 @@ mod tests {
         assert!(format!("{calculator:?}").contains("GreeksCalculator"));
     }
 
-    #[rstest]
+    #[test]
     fn test_instrument_greeks_params_builder_default() {
         let instrument_id = InstrumentId::from("AAPL.NASDAQ");
 
@@ -899,7 +898,7 @@ mod tests {
         assert_eq!(params.beta_weights, None);
     }
 
-    #[rstest]
+    #[test]
     fn test_instrument_greeks_params_builder_custom_values() {
         let instrument_id = InstrumentId::from("AAPL.NASDAQ");
         let index_id = InstrumentId::from("SPY.NASDAQ");
@@ -936,7 +935,7 @@ mod tests {
         assert_eq!(params.beta_weights, Some(beta_weights));
     }
 
-    #[rstest]
+    #[test]
     fn test_instrument_greeks_params_debug() {
         let instrument_id = InstrumentId::from("AAPL.NASDAQ");
 
@@ -950,7 +949,7 @@ mod tests {
         assert!(debug_str.contains("AAPL.NASDAQ"));
     }
 
-    #[rstest]
+    #[test]
     fn test_portfolio_greeks_params_builder_default() {
         let params = PortfolioGreeksParamsBuilder::default()
             .build()
@@ -974,7 +973,7 @@ mod tests {
         assert_eq!(params.beta_weights, None);
     }
 
-    #[rstest]
+    #[test]
     fn test_portfolio_greeks_params_builder_custom_values() {
         let venue = Venue::from("NASDAQ");
         let instrument_id = InstrumentId::from("AAPL.NASDAQ");
@@ -1022,7 +1021,7 @@ mod tests {
         assert_eq!(params.beta_weights, Some(beta_weights));
     }
 
-    #[rstest]
+    #[test]
     fn test_portfolio_greeks_params_debug() {
         let venue = Venue::from("NASDAQ");
 
@@ -1036,14 +1035,14 @@ mod tests {
         assert!(debug_str.contains("NASDAQ"));
     }
 
-    #[rstest]
+    #[test]
     fn test_instrument_greeks_params_builder_missing_required_field() {
         // Test that building without required instrument_id fails
         let result = InstrumentGreeksParamsBuilder::default().build();
         assert!(result.is_err());
     }
 
-    #[rstest]
+    #[test]
     fn test_portfolio_greeks_params_builder_fluent_api() {
         let instrument_id = InstrumentId::from("AAPL.NASDAQ");
 
@@ -1061,7 +1060,7 @@ mod tests {
         assert!(params.percent_greeks);
     }
 
-    #[rstest]
+    #[test]
     fn test_instrument_greeks_params_builder_fluent_chaining() {
         let instrument_id = InstrumentId::from("TSLA.NASDAQ");
 
@@ -1084,7 +1083,7 @@ mod tests {
         assert!(params.percent_greeks);
     }
 
-    #[rstest]
+    #[test]
     fn test_portfolio_greeks_params_builder_with_underlyings() {
         let underlyings = vec!["AAPL".to_string(), "MSFT".to_string(), "GOOGL".to_string()];
 
@@ -1098,7 +1097,7 @@ mod tests {
         assert_eq!(params.flat_interest_rate, 0.04);
     }
 
-    #[rstest]
+    #[test]
     fn test_builders_with_empty_beta_weights() {
         let instrument_id = InstrumentId::from("NVDA.NASDAQ");
         let empty_beta_weights = HashMap::new();
@@ -1121,7 +1120,7 @@ mod tests {
         assert_eq!(portfolio_params.beta_weights, Some(empty_beta_weights));
     }
 
-    #[rstest]
+    #[test]
     fn test_builders_with_all_shocks() {
         let instrument_id = InstrumentId::from("AMD.NASDAQ");
 
@@ -1149,7 +1148,7 @@ mod tests {
         assert_eq!(portfolio_params.time_to_expiry_shock, 0.01);
     }
 
-    #[rstest]
+    #[test]
     fn test_builders_with_all_boolean_flags() {
         let instrument_id = InstrumentId::from("META.NASDAQ");
 
@@ -1181,7 +1180,7 @@ mod tests {
         assert!(portfolio_params.percent_greeks);
     }
 
-    #[rstest]
+    #[test]
     fn test_greeks_filter_callback_function() {
         // Test function pointer filter
         fn filter_positive_delta(data: &GreeksData) -> bool {
@@ -1205,7 +1204,7 @@ mod tests {
         assert!(debug_str.contains("GreeksFilterCallback::Function"));
     }
 
-    #[rstest]
+    #[test]
     fn test_greeks_filter_callback_closure() {
         // Test closure filter that captures a variable
         let min_delta = 0.3;
@@ -1227,7 +1226,7 @@ mod tests {
         assert!(debug_str.contains("GreeksFilterCallback::Closure"));
     }
 
-    #[rstest]
+    #[test]
     fn test_greeks_filter_callback_clone() {
         fn filter_fn(data: &GreeksData) -> bool {
             data.delta > 0.0
@@ -1247,7 +1246,7 @@ mod tests {
         assert!(filter2.call(&greeks_data));
     }
 
-    #[rstest]
+    #[test]
     fn test_portfolio_greeks_params_with_filter() {
         fn filter_high_delta(data: &GreeksData) -> bool {
             data.delta.abs() > 0.1
@@ -1276,7 +1275,7 @@ mod tests {
         assert!(filter_ref.call(&greeks_data));
     }
 
-    #[rstest]
+    #[test]
     fn test_portfolio_greeks_params_with_closure_filter() {
         let min_gamma = 0.01;
         let filter =
@@ -1294,7 +1293,7 @@ mod tests {
         assert!(debug_str.contains("greeks_filter"));
     }
 
-    #[rstest]
+    #[test]
     fn test_greeks_filter_to_greeks_filter_conversion() {
         fn filter_fn(data: &GreeksData) -> bool {
             data.delta > 0.0

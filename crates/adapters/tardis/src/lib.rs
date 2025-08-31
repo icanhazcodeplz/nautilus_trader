@@ -13,7 +13,7 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
-//! [NautilusTrader](http://nautilustrader.io) adapter for [Tardis](https://tardis.dev).
+//! NautilusTrader adapter for the [Tardis](https://tardis.dev) market data provider.
 //!
 //! The `nautilus-tardis` crate provides integration with the Tardis API for accessing
 //! normalized historical and real-time market data across multiple exchanges.
@@ -36,7 +36,6 @@
 //! or as part of a Rust only build.
 //!
 //! - `python`: Enables Python bindings from [PyO3](https://pyo3.rs).
-//! - `extension-module`: Builds as a Python extension module (used with `python`).
 
 #![warn(rustc::all)]
 #![deny(unsafe_code)]

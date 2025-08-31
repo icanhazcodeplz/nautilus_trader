@@ -24,10 +24,10 @@ use serde::Deserialize;
 use strum::Display;
 use uuid::Uuid;
 
-use super::enums::{BitmexAction, BitmexSide, BitmexTickDirection};
-use crate::common::enums::{
-    BitmexContingencyType, BitmexExecInstruction, BitmexExecType, BitmexLiquidityIndicator,
-    BitmexOrderStatus, BitmexOrderType, BitmexPegPriceType, BitmexTimeInForce,
+use super::enums::{Action, Side, TickDirection};
+use crate::enums::{
+    ContingencyType, ExecInstruction, ExecType, LiquidityIndicator, OrderStatus, OrderType,
+    PegPriceType, TimeInForce,
 };
 
 /// Unified WebSocket message type for BitMEX.
@@ -38,15 +38,14 @@ pub enum NautilusWsMessage {
     FillReports(Vec<FillReport>),
     PositionStatusReport(Box<PositionStatusReport>),
     FundingRateUpdates(Vec<FundingRateUpdate>),
-    AccountState(Box<nautilus_model::events::AccountState>),
 }
 
-/// Represents all possible message types from the BitMEX WebSocket API.
+/// Represents all possible message types from the `BitMEX` WebSocket API.
 #[derive(Debug, Display, Deserialize)]
 #[serde(untagged)]
-pub enum BitmexWsMessage {
+pub enum WsMessage {
     /// Table websocket message.
-    Table(BitmexTableMessage),
+    Table(TableMessage),
     /// Initial welcome message received when connecting to the WebSocket.
     Welcome {
         /// Welcome message text.
@@ -61,7 +60,7 @@ pub enum BitmexWsMessage {
         #[serde(rename = "heartbeatEnabled")]
         heartbeat_enabled: bool,
         /// Rate limit information.
-        limit: BitmexRateLimit,
+        limit: RateLimit,
     },
     /// Subscription response messages.
     Subscription {
@@ -76,19 +75,19 @@ pub enum BitmexWsMessage {
         status: u16,
         error: String,
         meta: HashMap<String, String>,
-        request: BitmexHttpRequest,
+        request: HttpRequest,
     },
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-pub struct BitmexHttpRequest {
+pub struct HttpRequest {
     pub op: String,
     pub args: Vec<String>,
 }
 
-/// Rate limit information from BitMEX API.
+/// Rate limit information from `BitMEX` API.
 #[derive(Debug, Deserialize)]
-pub struct BitmexRateLimit {
+pub struct RateLimit {
     /// Number of requests remaining in the current time window.
     pub remaining: i32,
 }
@@ -97,91 +96,91 @@ pub struct BitmexRateLimit {
 #[derive(Debug, Display, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[serde(tag = "table")]
-pub enum BitmexTableMessage {
+pub enum TableMessage {
     OrderBookL2 {
-        action: BitmexAction,
-        data: Vec<BitmexOrderBookMsg>,
+        action: Action,
+        data: Vec<OrderBookMsg>,
     },
     OrderBookL2_25 {
-        action: BitmexAction,
-        data: Vec<BitmexOrderBookMsg>,
+        action: Action,
+        data: Vec<OrderBookMsg>,
     },
     OrderBook10 {
-        action: BitmexAction,
-        data: Vec<BitmexOrderBook10Msg>,
+        action: Action,
+        data: Vec<OrderBook10Msg>,
     },
     Quote {
-        action: BitmexAction,
-        data: Vec<BitmexQuoteMsg>,
+        action: Action,
+        data: Vec<QuoteMsg>,
     },
     Trade {
-        action: BitmexAction,
-        data: Vec<BitmexTradeMsg>,
+        action: Action,
+        data: Vec<TradeMsg>,
     },
     TradeBin1m {
-        action: BitmexAction,
-        data: Vec<BitmexTradeBinMsg>,
+        action: Action,
+        data: Vec<TradeBinMsg>,
     },
     TradeBin5m {
-        action: BitmexAction,
-        data: Vec<BitmexTradeBinMsg>,
+        action: Action,
+        data: Vec<TradeBinMsg>,
     },
     TradeBin1h {
-        action: BitmexAction,
-        data: Vec<BitmexTradeBinMsg>,
+        action: Action,
+        data: Vec<TradeBinMsg>,
     },
     TradeBin1d {
-        action: BitmexAction,
-        data: Vec<BitmexTradeBinMsg>,
+        action: Action,
+        data: Vec<TradeBinMsg>,
     },
     Instrument {
-        action: BitmexAction,
-        data: Vec<BitmexInstrumentMsg>,
+        action: Action,
+        data: Vec<InstrumentMsg>,
     },
     Order {
-        action: BitmexAction,
-        data: Vec<BitmexOrderMsg>,
+        action: Action,
+        data: Vec<OrderMsg>,
     },
     Execution {
-        action: BitmexAction,
-        data: Vec<BitmexExecutionMsg>,
+        action: Action,
+        data: Vec<ExecutionMsg>,
     },
     Position {
-        action: BitmexAction,
-        data: Vec<BitmexPositionMsg>,
+        action: Action,
+        data: Vec<PositionMsg>,
     },
     Wallet {
-        action: BitmexAction,
-        data: Vec<BitmexWalletMsg>,
+        action: Action,
+        data: Vec<WalletMsg>,
     },
     Margin {
-        action: BitmexAction,
-        data: Vec<BitmexMarginMsg>,
+        action: Action,
+        data: Vec<MarginMsg>,
     },
     Funding {
-        action: BitmexAction,
-        data: Vec<BitmexFundingMsg>,
+        action: Action,
+        data: Vec<FundingMsg>,
     },
     Insurance {
-        action: BitmexAction,
-        data: Vec<BitmexInsuranceMsg>,
+        action: Action,
+        data: Vec<InsuranceMsg>,
     },
     Liquidation {
-        action: BitmexAction,
-        data: Vec<BitmexLiquidationMsg>,
+        action: Action,
+        data: Vec<LiquidationMsg>,
     },
 }
 
-/// Represents a single order book entry in the BitMEX order book.
+/// Represents a single order book entry in the `BitMEX` order book.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexOrderBookMsg {
+pub struct OrderBookMsg {
     /// The instrument symbol (e.g., "XBTUSD").
     pub symbol: String,
     /// Unique order ID.
     pub id: u64,
     /// Side of the order ("Buy" or "Sell").
-    pub side: BitmexSide,
+    pub side: Side,
     /// Size of the order, can be None for deletes.
     pub size: Option<u64>,
     /// Price level of the order.
@@ -192,10 +191,10 @@ pub struct BitmexOrderBookMsg {
     pub transact_time: DateTime<Utc>,
 }
 
-/// Represents a single order book entry in the BitMEX order book.
+/// Represents a single order book entry in the `BitMEX` order book.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexOrderBook10Msg {
+pub struct OrderBook10Msg {
     /// The instrument symbol (e.g., "XBTUSD").
     pub symbol: String,
     /// Array of bid levels, each containing [price, size].
@@ -209,7 +208,7 @@ pub struct BitmexOrderBook10Msg {
 /// Represents a top-of-book quote.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexQuoteMsg {
+pub struct QuoteMsg {
     /// The instrument symbol (e.g., "XBTUSD").
     pub symbol: String,
     /// Price of best bid.
@@ -224,22 +223,22 @@ pub struct BitmexQuoteMsg {
     pub timestamp: DateTime<Utc>,
 }
 
-/// Represents a single trade execution on BitMEX.
+/// Represents a single trade execution on `BitMEX`.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexTradeMsg {
+pub struct TradeMsg {
     /// Timestamp of the trade.
     pub timestamp: DateTime<Utc>,
     /// The instrument symbol.
     pub symbol: String,
     /// Side of the trade ("Buy" or "Sell").
-    pub side: BitmexSide,
+    pub side: Side,
     /// Size of the trade.
     pub size: u64,
     /// Price the trade executed at.
     pub price: f64,
     /// Direction of the tick ("`PlusTick`", "`MinusTick`", "`ZeroPlusTick`", "`ZeroMinusTick`").
-    pub tick_direction: BitmexTickDirection,
+    pub tick_direction: TickDirection,
     /// Unique trade match ID.
     #[serde(rename = "trdMatchID")]
     pub trd_match_id: Option<Uuid>,
@@ -256,7 +255,7 @@ pub struct BitmexTradeMsg {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexTradeBinMsg {
+pub struct TradeBinMsg {
     /// Start time of the bin
     pub timestamp: DateTime<Utc>,
     /// Trading instrument symbol
@@ -285,16 +284,16 @@ pub struct BitmexTradeBinMsg {
     pub foreign_notional: f64,
 }
 
-/// Represents a single order book entry in the BitMEX order book.
+/// Represents a single order book entry in the `BitMEX` order book.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexInstrumentMsg {
+pub struct InstrumentMsg {
     /// The instrument symbol (e.g., "XBTUSD").
     pub symbol: String,
     /// Last traded price for the instrument.
     pub last_price: Option<f64>,
     /// Last tick direction for the instrument.
-    pub last_tick_direction: Option<BitmexTickDirection>,
+    pub last_tick_direction: Option<TickDirection>,
     /// Mark price.
     pub mark_price: Option<f64>,
     /// Index price.
@@ -322,7 +321,7 @@ pub struct BitmexInstrumentMsg {
 /// Represents an order update from the WebSocket stream
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexOrderMsg {
+pub struct OrderMsg {
     #[serde(rename = "orderID")]
     pub order_id: Uuid,
     #[serde(rename = "clOrdID")]
@@ -331,20 +330,20 @@ pub struct BitmexOrderMsg {
     pub cl_ord_link_id: Option<String>,
     pub account: i64,
     pub symbol: String,
-    pub side: BitmexSide,
+    pub side: Side,
     pub order_qty: i64,
     pub price: Option<f64>,
     pub display_qty: Option<i64>,
     pub stop_px: Option<f64>,
     pub peg_offset_value: Option<f64>,
-    pub peg_price_type: Option<BitmexPegPriceType>,
+    pub peg_price_type: Option<PegPriceType>,
     pub currency: String,
     pub settl_currency: String,
-    pub ord_type: BitmexOrderType,
-    pub time_in_force: BitmexTimeInForce,
-    pub exec_inst: Option<BitmexExecInstruction>,
-    pub contingency_type: Option<BitmexContingencyType>,
-    pub ord_status: BitmexOrderStatus,
+    pub ord_type: OrderType,
+    pub time_in_force: TimeInForce,
+    pub exec_inst: Option<ExecInstruction>,
+    pub contingency_type: Option<ContingencyType>,
+    pub ord_status: OrderStatus,
     pub triggered: Option<String>,
     pub working_indicator: bool,
     pub ord_rej_reason: Option<String>,
@@ -359,7 +358,7 @@ pub struct BitmexOrderMsg {
 /// Raw Order and Balance Data.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexExecutionMsg {
+pub struct ExecutionMsg {
     #[serde(rename = "execID")]
     pub exec_id: Uuid,
     #[serde(rename = "orderID")]
@@ -370,25 +369,25 @@ pub struct BitmexExecutionMsg {
     pub cl_ord_link_id: Option<String>,
     pub account: Option<i64>,
     pub symbol: Option<String>,
-    pub side: Option<BitmexSide>,
+    pub side: Option<Side>,
     pub last_qty: Option<i64>,
     pub last_px: Option<f64>,
     pub underlying_last_px: Option<f64>,
     pub last_mkt: Option<String>,
-    pub last_liquidity_ind: Option<BitmexLiquidityIndicator>,
+    pub last_liquidity_ind: Option<LiquidityIndicator>,
     pub order_qty: Option<i64>,
     pub price: Option<f64>,
     pub display_qty: Option<i64>,
     pub stop_px: Option<f64>,
     pub peg_offset_value: Option<f64>,
-    pub peg_price_type: Option<BitmexPegPriceType>,
+    pub peg_price_type: Option<PegPriceType>,
     pub currency: Option<String>,
     pub settl_currency: Option<String>,
-    pub exec_type: Option<BitmexExecType>,
-    pub ord_type: Option<BitmexOrderType>,
-    pub time_in_force: Option<BitmexTimeInForce>,
-    pub exec_inst: Option<BitmexExecInstruction>,
-    pub contingency_type: Option<BitmexContingencyType>,
+    pub exec_type: Option<ExecType>,
+    pub ord_type: Option<OrderType>,
+    pub time_in_force: Option<TimeInForce>,
+    pub exec_inst: Option<ExecInstruction>,
+    pub contingency_type: Option<ContingencyType>,
     pub ex_destination: Option<String>,
     pub ord_status: Option<String>,
     pub triggered: Option<String>,
@@ -414,7 +413,7 @@ pub struct BitmexExecutionMsg {
 /// Position status.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexPositionMsg {
+pub struct PositionMsg {
     pub account: i64,
     pub symbol: String,
     pub currency: Option<String>,
@@ -505,7 +504,7 @@ pub struct BitmexPositionMsg {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexWalletMsg {
+pub struct WalletMsg {
     pub account: i64,
     pub currency: String,
     pub prev_deposited: Option<i64>,
@@ -536,7 +535,7 @@ pub struct BitmexWalletMsg {
 /// Represents margin account information
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexMarginMsg {
+pub struct MarginMsg {
     /// Account identifier
     pub account: i64,
     /// Currency of the margin account
@@ -598,7 +597,7 @@ pub struct BitmexMarginMsg {
 /// Represents a funding rate update.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexFundingMsg {
+pub struct FundingMsg {
     /// Timestamp of the funding update.
     pub timestamp: DateTime<Utc>,
     /// The instrument symbol the funding applies to.
@@ -612,7 +611,7 @@ pub struct BitmexFundingMsg {
 /// Represents an insurance fund update.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexInsuranceMsg {
+pub struct InsuranceMsg {
     /// The currency of the insurance fund.
     pub currency: String,
     /// Timestamp of the update.
@@ -624,13 +623,13 @@ pub struct BitmexInsuranceMsg {
 /// Represents a liquidation order.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BitmexLiquidationMsg {
+pub struct LiquidationMsg {
     /// Unique order ID of the liquidation.
     pub order_id: String,
     /// The instrument symbol being liquidated.
     pub symbol: String,
     /// Side of the liquidation ("Buy" or "Sell").
-    pub side: BitmexSide,
+    pub side: Side,
     /// Price of the liquidation order.
     pub price: f64,
     /// Remaining quantity to be executed.

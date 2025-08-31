@@ -41,11 +41,11 @@ use parquet::{arrow::ArrowWriter, basic::Compression, file::properties::WriterPr
 use thousands::Separable;
 use ustr::Ustr;
 
-use super::{enums::TardisExchange, http::models::TardisInstrumentInfo};
+use super::{enums::Exchange, http::models::InstrumentInfo};
 use crate::{
     config::TardisReplayConfig,
     http::TardisHttpClient,
-    machine::{TardisMachineClient, types::TardisInstrumentMiniInfo},
+    machine::{TardisMachineClient, types::InstrumentMiniInfo},
     parse::{normalize_instrument_id, parse_instrument_id},
 };
 
@@ -75,15 +75,15 @@ impl DateCursor {
 async fn gather_instruments_info(
     config: &TardisReplayConfig,
     http_client: &TardisHttpClient,
-) -> HashMap<TardisExchange, Vec<TardisInstrumentInfo>> {
+) -> HashMap<Exchange, Vec<InstrumentInfo>> {
     let futures = config.options.iter().map(|options| {
-        let exchange = options.exchange;
+        let exchange = options.exchange.clone();
         let client = &http_client;
 
         tracing::info!("Requesting instruments for {exchange}");
 
         async move {
-            match client.instruments_info(exchange, None, None).await {
+            match client.instruments_info(exchange.clone(), None, None).await {
                 Ok(instruments) => Some((exchange, instruments)),
                 Err(e) => {
                     tracing::error!("Error fetching instruments for {exchange}: {e}");
@@ -93,7 +93,7 @@ async fn gather_instruments_info(
         }
     });
 
-    let results: Vec<(TardisExchange, Vec<TardisInstrumentInfo>)> =
+    let results: Vec<(Exchange, Vec<InstrumentInfo>)> =
         join_all(futures).await.into_iter().flatten().collect();
 
     tracing::info!("Received all instruments");
@@ -147,7 +147,7 @@ pub async fn run_tardis_machine_replay_from_config(config_filepath: &Path) -> an
 
     for (exchange, instruments) in &info_map {
         for inst in instruments {
-            let instrument_type = inst.instrument_type;
+            let instrument_type = inst.instrument_type.clone();
             let price_precision = precision_from_str(&inst.price_increment.to_string());
             let size_precision = precision_from_str(&inst.amount_increment.to_string());
 
@@ -157,10 +157,10 @@ pub async fn run_tardis_machine_replay_from_config(config_filepath: &Path) -> an
                 parse_instrument_id(exchange, inst.id)
             };
 
-            let info = TardisInstrumentMiniInfo::new(
+            let info = InstrumentMiniInfo::new(
                 instrument_id,
                 Some(Ustr::from(&inst.id)),
-                *exchange,
+                exchange.clone(),
                 price_precision,
                 size_precision,
             );

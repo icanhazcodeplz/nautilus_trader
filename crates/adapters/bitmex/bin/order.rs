@@ -16,7 +16,7 @@
 use std::env;
 
 use nautilus_bitmex::{
-    common::enums::{BitmexExecInstruction, BitmexOrderType, BitmexSide},
+    enums::{ExecInstruction, OrderType, Side},
     http::{
         client::BitmexHttpClient,
         query::{DeleteOrderParamsBuilder, GetOrderParamsBuilder, PostOrderParamsBuilder},
@@ -39,11 +39,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let params = PostOrderParamsBuilder::default()
         .symbol("XBTUSD".to_string())
         .cl_ord_id(cl_ord_id)
-        .ord_type(BitmexOrderType::Limit)
-        .side(BitmexSide::Sell)
+        .ord_type(OrderType::Limit)
+        .side(Side::Sell)
         .order_qty(100_u32)
         .price(100_000.0)
-        .exec_inst(vec![BitmexExecInstruction::ParticipateDoNotInitiate])
+        .exec_inst(vec![ExecInstruction::ParticipateDoNotInitiate])
         .build()?;
     match client.place_order(params).await {
         Ok(resp) => tracing::debug!("{:?}", resp),

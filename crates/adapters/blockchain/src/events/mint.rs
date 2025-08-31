@@ -90,7 +90,6 @@ impl MintEvent {
 
     /// Converts a mint event into a `PoolLiquidityUpdate`.
     #[allow(clippy::too_many_arguments)]
-    #[must_use]
     pub fn to_pool_liquidity_update(
         &self,
         chain: SharedChain,

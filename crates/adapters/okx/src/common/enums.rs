@@ -21,7 +21,6 @@ use strum::{AsRefStr, Display, EnumIter, EnumString};
 
 /// Represents the type of book action.
 #[derive(
-    Copy,
     Clone,
     Debug,
     Display,
@@ -44,7 +43,6 @@ pub enum OKXBookAction {
 
 /// Represents the possible states of an order throughout its lifecycle.
 #[derive(
-    Copy,
     Clone,
     Debug,
     Display,
@@ -68,7 +66,6 @@ pub enum OKXCandleConfirm {
 
 /// Represents the side of an order or trade (Buy/Sell).
 #[derive(
-    Copy,
     Clone,
     Debug,
     Display,
@@ -110,7 +107,6 @@ impl From<OKXSide> for AggressorSide {
 
 /// Represents the available order types on OKX.
 #[derive(
-    Copy,
     Clone,
     Debug,
     Display,
@@ -139,7 +135,6 @@ pub enum OKXOrderType {
 
 /// Represents the possible states of an order throughout its lifecycle.
 #[derive(
-    Copy,
     Clone,
     Debug,
     Display,
@@ -176,7 +171,6 @@ impl From<OrderStatus> for OKXOrderStatus {
 
 /// Represents the type of execution that generated a trade.
 #[derive(
-    Copy,
     Clone,
     Debug,
     Default,
@@ -248,7 +242,6 @@ pub enum OKXInstrumentType {
 
 /// Represents an instrument status on OKX.
 #[derive(
-    Copy,
     Clone,
     Debug,
     Display,
@@ -300,7 +293,6 @@ pub enum OKXContractType {
 
 /// Represents an option type on OKX.
 #[derive(
-    Copy,
     Clone,
     Debug,
     Display,
@@ -367,7 +359,6 @@ pub enum OKXTradeMode {
 ///
 /// <https://www.okx.com/docs-v5/en/#overview-account-mode>
 #[derive(
-    Copy,
     Clone,
     Debug,
     Display,
@@ -459,7 +450,6 @@ pub enum OKXPositionMode {
 }
 
 #[derive(
-    Copy,
     Clone,
     Debug,
     Display,
@@ -482,7 +472,6 @@ pub enum OKXPositionSide {
 }
 
 #[derive(
-    Copy,
     Clone,
     Debug,
     Display,
@@ -505,7 +494,6 @@ pub enum OKXSelfTradePreventionMode {
 }
 
 #[derive(
-    Copy,
     Clone,
     Debug,
     Display,
@@ -527,7 +515,6 @@ pub enum OKXTakeProfitKind {
 }
 
 #[derive(
-    Copy,
     Clone,
     Debug,
     Display,
@@ -625,7 +612,6 @@ impl From<PositionSide> for OKXPositionSide {
 }
 
 #[derive(
-    Copy,
     Clone,
     Debug,
     Display,
@@ -649,7 +635,6 @@ pub enum OKXAlgoOrderType {
 }
 
 #[derive(
-    Copy,
     Clone,
     Debug,
     Display,
@@ -674,7 +659,6 @@ pub enum OKXAlgoOrderStatus {
 }
 
 #[derive(
-    Copy,
     Clone,
     Debug,
     Display,
@@ -763,7 +747,6 @@ pub enum OKXTransactionType {
 }
 
 #[derive(
-    Copy,
     Clone,
     Debug,
     Display,

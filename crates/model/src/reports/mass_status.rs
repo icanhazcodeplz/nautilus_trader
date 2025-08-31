@@ -144,9 +144,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        enums::{
-            LiquiditySide, OrderSide, OrderStatus, OrderType, PositionSideSpecified, TimeInForce,
-        },
+        enums::{LiquiditySide, OrderSide, OrderStatus, OrderType, PositionSide, TimeInForce},
         identifiers::{
             AccountId, ClientId, InstrumentId, PositionId, TradeId, Venue, VenueOrderId,
         },
@@ -206,7 +204,7 @@ mod tests {
         PositionStatusReport::new(
             AccountId::from("IB-DU123456"),
             InstrumentId::from("AAPL.NASDAQ"),
-            PositionSideSpecified::Long,
+            PositionSide::Long,
             Quantity::from("50"),
             Some(PositionId::from("P-001")),
             UnixNanos::from(2_000_000_000),
@@ -319,7 +317,7 @@ mod tests {
         let position_report2 = PositionStatusReport::new(
             AccountId::from("IB-DU123456"),
             InstrumentId::from("AAPL.NASDAQ"), // Same instrument ID
-            PositionSideSpecified::Short,
+            PositionSide::Short,
             Quantity::from("25"),
             None,
             UnixNanos::from(2_100_000_000),
@@ -329,7 +327,7 @@ mod tests {
         let position_report3 = PositionStatusReport::new(
             AccountId::from("IB-DU123456"),
             InstrumentId::from("MSFT.NASDAQ"), // Different instrument
-            PositionSideSpecified::Long,
+            PositionSide::Long,
             Quantity::from("100"),
             None,
             UnixNanos::from(2_200_000_000),

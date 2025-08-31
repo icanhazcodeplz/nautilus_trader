@@ -23,11 +23,11 @@ use super::{
     TARDIS_BASE_URL,
     error::{Error, TardisErrorResponse},
     instruments::is_available,
-    models::TardisInstrumentInfo,
+    models::InstrumentInfo,
     parse::parse_instrument_any,
     query::InstrumentFilter,
 };
-use crate::enums::TardisExchange;
+use crate::enums::Exchange;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -111,10 +111,10 @@ impl TardisHttpClient {
     /// See <https://docs.tardis.dev/api/instruments-metadata-api>.
     pub async fn instruments_info(
         &self,
-        exchange: TardisExchange,
+        exchange: Exchange,
         symbol: Option<&str>,
         filter: Option<&InstrumentFilter>,
-    ) -> Result<Vec<TardisInstrumentInfo>> {
+    ) -> Result<Vec<InstrumentInfo>> {
         let mut url = format!("{}/instruments/{exchange}", &self.base_url);
         if let Some(symbol) = symbol {
             url.push_str(&format!("/{symbol}"));
@@ -141,7 +141,7 @@ impl TardisHttpClient {
         let body = resp.text().await?;
         tracing::trace!("{body}");
 
-        if let Ok(instrument) = serde_json::from_str::<TardisInstrumentInfo>(&body) {
+        if let Ok(instrument) = serde_json::from_str::<InstrumentInfo>(&body) {
             return Ok(vec![instrument]);
         }
 
@@ -165,7 +165,7 @@ impl TardisHttpClient {
     #[allow(clippy::too_many_arguments)]
     pub async fn instruments(
         &self,
-        exchange: TardisExchange,
+        exchange: Exchange,
         symbol: Option<&str>,
         filter: Option<&InstrumentFilter>,
         start: Option<UnixNanos>,

@@ -31,14 +31,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_max_level(LevelFilter::TRACE)
         .init();
 
-    let http_client = OKXHttpClient::from_env().unwrap();
-    let instruments = http_client
-        .request_instruments(OKXInstrumentType::Swap)
-        .await?;
+    let client = OKXHttpClient::from_env().unwrap();
+    let instruments = client.request_instruments(OKXInstrumentType::Swap).await?;
 
-    let mut ws_client = OKXWebSocketClient::from_env().unwrap();
-    ws_client.initialize_instruments_cache(instruments.clone());
-    ws_client.connect().await?;
+    let mut client = OKXWebSocketClient::from_env().unwrap();
+    client.connect(instruments.clone()).await?;
 
     let instrument_id = InstrumentId::from("BTC-USD-SWAP.OKX");
 
@@ -59,12 +56,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // );
     // client_business.subscribe_bars(bar_type).await?;
 
-    ws_client
+    client
         .subscribe_instruments(OKXInstrumentType::Swap)
         .await?;
     // client.subscribe_tickers(instrument_id).await?;
     // client.subscribe_trades(instrument_id, true).await?;
-    ws_client.subscribe_book(instrument_id).await?;
+    client.subscribe_book(instrument_id).await?;
     // client.subscribe_quotes(instrument_id).await?;
 
     // tokio::time::sleep(Duration::from_secs(1)).await;
@@ -78,7 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sigint = signal::ctrl_c();
     pin!(sigint);
 
-    let stream = ws_client.stream();
+    let stream = client.stream();
     tokio::pin!(stream); // Pin the stream to allow polling in the loop
 
     loop {
@@ -88,7 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             _ = &mut sigint => {
                 tracing::info!("Received SIGINT, closing connection...");
-                ws_client.close().await?;
+                client.close().await?;
                 break;
             }
             else => break,

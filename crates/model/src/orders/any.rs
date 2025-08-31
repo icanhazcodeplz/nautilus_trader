@@ -287,7 +287,6 @@ impl PartialEq for StopOrderAny {
 ////////////////////////////////////////////////////////////////////////////////
 #[cfg(test)]
 mod tests {
-    use rstest::rstest;
     use rust_decimal::Decimal;
 
     use super::*;
@@ -299,7 +298,7 @@ mod tests {
         types::{Price, Quantity},
     };
 
-    #[rstest]
+    #[test]
     fn test_order_any_equality() {
         // Create two orders with different types but same client_order_id
         let client_order_id = ClientOrderId::from("ORDER-001");
@@ -321,7 +320,7 @@ mod tests {
         assert_eq!(market_order, limit_order);
     }
 
-    #[rstest]
+    #[test]
     fn test_order_any_conversion_from_events() {
         // Create an OrderInitialized event
         let init_event = OrderInitializedBuilder::default()
@@ -343,7 +342,7 @@ mod tests {
         assert_eq!(order.quantity(), init_event.quantity);
     }
 
-    #[rstest]
+    #[test]
     fn test_order_any_from_events_empty_error() {
         let events: Vec<OrderEventAny> = vec![];
         let result = OrderAny::from_events(events);
@@ -355,7 +354,7 @@ mod tests {
         );
     }
 
-    #[rstest]
+    #[test]
     fn test_order_any_from_events_wrong_first_event() {
         // Create an event that is not OrderInitialized
         let client_order_id = ClientOrderId::from("ORDER-001");
@@ -380,7 +379,7 @@ mod tests {
         );
     }
 
-    #[rstest]
+    #[test]
     fn test_passive_order_any_conversion() {
         // Create a limit order
         let limit_order = OrderTestBuilder::new(OrderType::Limit)
@@ -398,7 +397,7 @@ mod tests {
         assert_eq!(order_any.quantity(), Quantity::from(10));
     }
 
-    #[rstest]
+    #[test]
     fn test_stop_order_any_conversion() {
         // Create a stop market order
         let stop_order = OrderTestBuilder::new(OrderType::StopMarket)
@@ -417,7 +416,7 @@ mod tests {
         assert_eq!(order_any.trigger_price(), Some(Price::new(100.0, 2)));
     }
 
-    #[rstest]
+    #[test]
     fn test_limit_order_any_conversion() {
         // Create a limit order
         let limit_order = OrderTestBuilder::new(OrderType::Limit)
@@ -435,7 +434,7 @@ mod tests {
         assert_eq!(order_any.quantity(), Quantity::from(10));
     }
 
-    #[rstest]
+    #[test]
     fn test_limit_order_any_limit_price() {
         // Create a limit order
         let limit_order = OrderTestBuilder::new(OrderType::Limit)
@@ -452,7 +451,7 @@ mod tests {
         assert_eq!(limit_px, Price::new(100.0, 2));
     }
 
-    #[rstest]
+    #[test]
     fn test_stop_order_any_stop_price() {
         // Create a stop market order
         let stop_order = OrderTestBuilder::new(OrderType::StopMarket)
@@ -469,7 +468,7 @@ mod tests {
         assert_eq!(stop_px, Price::new(100.0, 2));
     }
 
-    #[rstest]
+    #[test]
     fn test_trailing_stop_market_order_conversion() {
         // Create a trailing stop market order
         let trailing_stop_order = OrderTestBuilder::new(OrderType::TrailingStopMarket)
@@ -497,7 +496,7 @@ mod tests {
         );
     }
 
-    #[rstest]
+    #[test]
     fn test_trailing_stop_limit_order_conversion() {
         // Create a trailing stop limit order
         let trailing_stop_limit = OrderTestBuilder::new(OrderType::TrailingStopLimit)
@@ -527,7 +526,7 @@ mod tests {
         assert_eq!(order_any.trailing_offset(), Some(Decimal::new(5, 1)));
     }
 
-    #[rstest]
+    #[test]
     fn test_passive_order_any_to_any() {
         // Create a limit order
         let limit_order = OrderTestBuilder::new(OrderType::Limit)

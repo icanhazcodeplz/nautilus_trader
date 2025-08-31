@@ -230,7 +230,7 @@ impl OKXHttpInnerClient {
         tracing::debug!("{method} {path}");
 
         let api_key = credential.api_key.clone().to_string();
-        let api_passphrase = credential.api_passphrase.clone();
+        let api_passphrase = credential.api_passphrase.clone().to_string();
         let timestamp = Utc::now().format("%Y-%m-%dT%H:%M:%S.%3fZ").to_string();
         let signature = credential.sign(&timestamp, method.as_str(), path, &body_str);
 
@@ -1676,7 +1676,7 @@ impl OKXHttpClient {
             let inst = self.instrument_or_fetch(order.inst_id).await?;
 
             let report = parse_order_status_report(
-                &order,
+                order,
                 account_id,
                 inst.id(),
                 inst.price_precision(),
@@ -1802,19 +1802,9 @@ impl OKXHttpClient {
     ) -> anyhow::Result<Vec<PositionStatusReport>> {
         let mut params = GetPositionsParamsBuilder::default();
 
-        let instrument_type = if let Some(instrument_type) = instrument_type {
-            instrument_type
-        } else {
-            let instrument_id = instrument_id.ok_or_else(|| {
-                anyhow::anyhow!("Instrument ID required if `instrument_type` not provided")
-            })?;
-            let instrument = self
-                .instrument_or_fetch(instrument_id.symbol.inner())
-                .await?;
-            okx_instrument_type(&instrument)?
-        };
-
-        params.inst_type(instrument_type);
+        if let Some(instrument_type) = instrument_type {
+            params.inst_type(instrument_type);
+        }
 
         instrument_id
             .as_ref()
@@ -1832,6 +1822,9 @@ impl OKXHttpClient {
         let mut reports = Vec::with_capacity(resp.len());
 
         for position in resp {
+            if position.pos_id.is_some() {
+                continue; // Skip hedge mode positions (not currently supported)
+            }
             let inst = self.instrument_or_fetch(position.inst_id).await?;
 
             let report = parse_position_status_report(

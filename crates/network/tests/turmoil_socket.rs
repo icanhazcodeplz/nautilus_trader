@@ -21,7 +21,6 @@
 use std::time::Duration;
 
 use nautilus_network::{backoff::ExponentialBackoff, net::TcpConnector, socket::SocketConfig};
-use rstest::rstest;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_tungstenite::tungstenite::stream::Mode;
 use turmoil::{Builder, net};
@@ -114,7 +113,7 @@ async fn echo_server() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-#[rstest]
+#[test]
 fn test_turmoil_socket_with_dependency_injection() {
     let mut sim = Builder::new().build();
 
@@ -155,7 +154,7 @@ fn test_turmoil_socket_with_dependency_injection() {
     sim.run().unwrap();
 }
 
-#[rstest]
+#[test]
 fn test_turmoil_socket_network_partition() {
     let mut sim = Builder::new().build();
 
@@ -221,7 +220,7 @@ fn test_turmoil_socket_network_partition() {
     sim.run().unwrap();
 }
 
-#[rstest]
+#[test]
 fn test_exponential_backoff_under_network_instability() {
     let mut sim = Builder::new().build();
 
@@ -285,7 +284,7 @@ fn test_exponential_backoff_under_network_instability() {
     sim.run().unwrap();
 }
 
-#[rstest]
+#[test]
 fn test_multiple_clients_concurrent() {
     let mut sim = Builder::new().build();
 

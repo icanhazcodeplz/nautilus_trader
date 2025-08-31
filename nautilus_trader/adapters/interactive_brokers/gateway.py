@@ -21,7 +21,6 @@ from typing import ClassVar
 
 from nautilus_trader.adapters.interactive_brokers.config import DockerizedIBGatewayConfig
 from nautilus_trader.common.component import Logger as NautilusLogger
-from nautilus_trader.common.secure import SecureString
 
 
 class ContainerStatus(IntEnum):
@@ -45,17 +44,15 @@ class DockerizedIBGateway:
     def __init__(self, config: DockerizedIBGatewayConfig):
         self.log = NautilusLogger(repr(self))
         self.username = config.username or os.getenv("TWS_USERNAME")
+        self.password = config.password or os.getenv("TWS_PASSWORD")
 
-        password = config.password or os.getenv("TWS_PASSWORD")
         if self.username is None:
             self.log.error("`username` not set nor available in env `TWS_USERNAME`")
             raise ValueError("`username` not set nor available in env `TWS_USERNAME`")
 
-        if password is None:
+        if self.password is None:
             self.log.error("`password` not set nor available in env `TWS_PASSWORD`")
             raise ValueError("`password` not set nor available in env `TWS_PASSWORD`")
-
-        self.password = SecureString(password, name="tws_password")
 
         self.trading_mode = config.trading_mode
         self.read_only_api = config.read_only_api
@@ -154,7 +151,7 @@ class DockerizedIBGateway:
             platform="amd64",
             environment={
                 "TWS_USERID": self.username,
-                "TWS_PASSWORD": self.password.get_value(),
+                "TWS_PASSWORD": self.password,
                 "TRADING_MODE": self.trading_mode,
                 "READ_ONLY_API": {True: "yes", False: "no"}[self.read_only_api],
             },

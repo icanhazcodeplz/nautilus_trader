@@ -26,7 +26,6 @@ use std::time::Duration;
 
 use nautilus_network::backoff::ExponentialBackoff;
 use proptest::prelude::*;
-use rstest::rstest;
 
 /// Generate valid backoff parameters.
 fn backoff_params_strategy() -> impl Strategy<Value = (Duration, Duration, f64, u64, bool)> {
@@ -53,7 +52,7 @@ fn backoff_params_strategy() -> impl Strategy<Value = (Duration, Duration, f64, 
 
 proptest! {
     /// Property: Backoff delays should grow exponentially up to the maximum.
-    #[rstest]
+    #[test]
     fn backoff_grows_exponentially_to_max(
         (initial, max, factor, jitter_ms, immediate_first) in backoff_params_strategy(),
         iterations in 1usize..=20
@@ -124,7 +123,7 @@ proptest! {
     }
 
     /// Property: Jitter should always be within the specified bounds.
-    #[rstest]
+    #[test]
     fn jitter_within_bounds(
         (initial, max, factor, jitter_ms, immediate_first) in backoff_params_strategy(),
         iterations in 1usize..=50
@@ -156,7 +155,7 @@ proptest! {
     }
 
     /// Property: Reset should restore initial state.
-    #[rstest]
+    #[test]
     fn reset_restores_initial_state(
         (initial, max, factor, jitter_ms, immediate_first) in backoff_params_strategy(),
         advance_iterations in 1usize..=10
@@ -207,7 +206,7 @@ proptest! {
     }
 
     /// Property: Immediate-first behavior should work correctly.
-    #[rstest]
+    #[test]
     fn immediate_first_behavior(
         (initial, max, factor, jitter_ms, _) in backoff_params_strategy(),
         subsequent_calls in 1usize..=5
@@ -238,7 +237,7 @@ proptest! {
     }
 
     /// Property: Backoff should eventually reach and stay at maximum delay.
-    #[rstest]
+    #[test]
     fn eventually_reaches_maximum(
         (initial, max, factor, jitter_ms, immediate_first) in backoff_params_strategy(),
         excess_iterations in 1usize..=10
@@ -278,7 +277,7 @@ proptest! {
     }
 
     /// Property: Backoff delays should be deterministic for same parameters (ignoring jitter).
-    #[rstest]
+    #[test]
     fn deterministic_base_progression(
         (initial, max, factor, _jitter_ms, immediate_first) in backoff_params_strategy(),
         iterations in 1usize..=10
@@ -307,7 +306,7 @@ proptest! {
     }
 
     /// Property: Factor bounds should be respected.
-    #[rstest]
+    #[test]
     fn factor_bounds_respected(
         initial_ms in 1u64..=1000u64,
         max_ms in 1000u64..=10000u64,

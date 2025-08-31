@@ -26,7 +26,6 @@ from nautilus_trader.model.enums import OmsType
 from nautilus_trader.model.identifiers import ClientId
 from nautilus_trader.model.identifiers import Venue
 from nautilus_trader.model.objects import Currency
-from nautilus_trader.test_kit.functions import eventually
 from nautilus_trader.test_kit.stubs.component import TestComponentStubs
 from nautilus_trader.test_kit.stubs.identifiers import TestIdStubs
 
@@ -128,7 +127,7 @@ class TestLiveExecutionClient:
         task2 = self.client.create_task(long_task(), log_msg="task2")
         task3 = self.client.create_task(long_task(), log_msg="task3")
 
-        await eventually(lambda: all(t in self.client._tasks for t in [task1, task2, task3]))
+        await asyncio.sleep(0.01)  # Let tasks start
 
         # Assert - Tasks are tracked
         assert task1 in self.client._tasks
@@ -149,7 +148,7 @@ class TestLiveExecutionClient:
         task2 = self.client.create_task(long_task(), log_msg="task2")
         task3 = self.client.create_task(long_task(), log_msg="task3")
 
-        await eventually(lambda: all(t in self.client._tasks for t in [task1, task2, task3]))
+        await asyncio.sleep(0.01)  # Let tasks start
 
         # Act - Cancel tasks
         await self.client.cancel_pending_tasks(timeout_secs=1.0)
@@ -169,7 +168,7 @@ class TestLiveExecutionClient:
         for i in range(5):
             self.client.create_task(long_task(), log_msg=f"task_{i}")
 
-        await eventually(lambda: len([t for t in self.client._tasks if not t.done()]) == 5)
+        await asyncio.sleep(0.01)  # Let tasks start
 
         # Assert - Tasks are active
         active_before = [t for t in self.client._tasks if not t.done()]
@@ -177,10 +176,7 @@ class TestLiveExecutionClient:
 
         # Act - Disconnect (should cancel tasks)
         self.client.disconnect()
-        await eventually(
-            lambda: len([t for t in self.client._tasks if not t.done()]) <= 1,
-            timeout=1.0,
-        )  # Only disconnect task might remain
+        await asyncio.sleep(0.5)  # Wait for disconnect and cleanup
 
         # Assert - Tasks should be cancelled after disconnect
         active_after = [t for t in self.client._tasks if not t.done()]
@@ -201,7 +197,7 @@ class TestLiveExecutionClient:
 
         # Wait for tasks to complete
         await asyncio.gather(*tasks)
-        await eventually(lambda: all(t.done() for t in tasks))
+        await asyncio.sleep(0.1)
 
         # Force garbage collection to clean up WeakSet
         import gc
@@ -222,7 +218,7 @@ class TestLiveExecutionClient:
 
         # Act - Connect creates a task
         self.client.connect()
-        await eventually(lambda: len([t for t in self.client._tasks if not t.done()]) >= 1)
+        await asyncio.sleep(0.01)  # Let the task start but not complete
 
         # Assert - Task is tracked and active
         active_tasks = [t for t in self.client._tasks if not t.done()]
@@ -243,7 +239,7 @@ class TestLiveExecutionClient:
         tasks.append(self.client.create_task(long_operation(), log_msg="op2"))
         tasks.append(self.client.create_task(long_operation(), log_msg="op3"))
 
-        await eventually(lambda: len([t for t in self.client._tasks if not t.done()]) == 3)
+        await asyncio.sleep(0.01)  # Let tasks start
 
         # Assert - All tasks are tracked
         active_tasks = [t for t in self.client._tasks if not t.done()]

@@ -40,7 +40,7 @@ from nautilus_trader.model.objects import Price
 from nautilus_trader.model.objects import Quantity
 
 
-class DYDXOrderResponse(msgspec.Struct, forbid_unknown_fields=False):
+class DYDXOrderResponse(msgspec.Struct, forbid_unknown_fields=True):
     """
     Define the schema for the order response.
     """
@@ -68,7 +68,6 @@ class DYDXOrderResponse(msgspec.Struct, forbid_unknown_fields=False):
     goodTilBlockTime: str | None = None
     createdAtHeight: str | None = None
     triggerPrice: str | None = None
-    orderRouterAddress: str | None = None
 
     def base_currency(self) -> str:
         """

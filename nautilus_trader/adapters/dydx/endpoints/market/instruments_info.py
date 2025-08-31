@@ -51,7 +51,7 @@ class ListPerpetualMarketsGetParams(msgspec.Struct, omit_defaults=True):
     ticker: str | None = None
 
 
-class DYDXPerpetualMarketResponseObject(msgspec.Struct, forbid_unknown_fields=False):
+class DYDXPerpetualMarketResponseObject(msgspec.Struct, forbid_unknown_fields=True):
     """
     Represent the dYdX perpetual market response object.
     """
@@ -159,7 +159,7 @@ class DYDXPerpetualMarketResponseObject(msgspec.Struct, forbid_unknown_fields=Fa
         )
 
 
-class DYDXListPerpetualMarketsResponse(msgspec.Struct, forbid_unknown_fields=False):
+class DYDXListPerpetualMarketsResponse(msgspec.Struct, forbid_unknown_fields=True):
     """
     Represent the dYdX list perpetual markets response object.
     """

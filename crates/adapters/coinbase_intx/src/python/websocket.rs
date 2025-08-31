@@ -13,36 +13,8 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
-//! Python bindings for the Coinbase Intx WebSocket client.
-//!
-//! # Design Pattern: Clone and Share State
-//!
-//! The WebSocket client must be cloned for async operations because PyO3's `future_into_py`
-//! requires `'static` futures (cannot borrow from `self`). To ensure clones share the same
-//! connection state, key fields use `Arc<RwLock<T>>`:
-//!
-//! - `inner: Arc<RwLock<Option<WebSocketClient>>>` - The WebSocket connection.
-//!
-//! Without shared state, clones would be independent, causing:
-//! - Lost WebSocket messages.
-//! - Missing instrument data.
-//! - Connection state desynchronization.
-//!
-//! ## Connection Flow
-//!
-//! 1. Clone the client for async operation.
-//! 2. Connect and populate shared state on the clone.
-//! 3. Spawn stream handler as background task.
-//! 4. Return immediately (non-blocking).
-//!
-//! ## Important Notes
-//!
-//! - Never use `block_on()` - it blocks the runtime.
-//! - Always clone before async blocks for lifetime requirements.
-//! - `RwLock` is preferred over Mutex (many reads, few writes).
-
 use futures_util::StreamExt;
-use nautilus_core::python::{IntoPyObjectNautilusExt, to_pyruntime_err, to_pyvalue_err};
+use nautilus_core::python::{IntoPyObjectNautilusExt, to_pyvalue_err};
 use nautilus_model::{
     data::BarType,
     identifiers::InstrumentId,
@@ -53,6 +25,7 @@ use nautilus_model::{
     },
 };
 use pyo3::{exceptions::PyRuntimeError, prelude::*};
+use pyo3_async_runtimes::tokio::get_runtime;
 
 use crate::websocket::{CoinbaseIntxWebSocketClient, messages::NautilusWsMessage};
 
@@ -94,22 +67,6 @@ impl CoinbaseIntxWebSocketClient {
         self.is_closed()
     }
 
-    #[pyo3(name = "get_subscriptions")]
-    fn py_get_subscriptions(&self, instrument_id: InstrumentId) -> Vec<String> {
-        let channels = self.get_subscriptions(instrument_id);
-
-        // Convert to Coinbase channel names
-        channels
-            .iter()
-            .map(|c| {
-                serde_json::to_value(c)
-                    .ok()
-                    .and_then(|v| v.as_str().map(String::from))
-                    .unwrap_or_else(|| c.to_string())
-            })
-            .collect()
-    }
-
     #[pyo3(name = "connect")]
     fn py_connect<'py>(
         &mut self,
@@ -123,76 +80,57 @@ impl CoinbaseIntxWebSocketClient {
             instruments_any.push(inst_any);
         }
 
-        self.initialize_instruments_cache(instruments_any);
+        get_runtime().block_on(async {
+            self.connect(instruments_any)
+                .await
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })?;
 
-        let mut client = self.clone();
+        let stream = self.stream();
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            client.connect().await.map_err(to_pyruntime_err)?;
+            tokio::pin!(stream);
 
-            let stream = client.stream();
-
-            tokio::spawn(async move {
-                tokio::pin!(stream);
-
-                while let Some(msg) = stream.next().await {
-                    match msg {
-                        NautilusWsMessage::Instrument(inst) => Python::with_gil(|py| {
-                            let py_obj = instrument_any_to_pyobject(py, inst)
-                                .expect("Failed to create instrument");
-                            call_python(py, &callback, py_obj);
-                        }),
-                        NautilusWsMessage::Data(data) => Python::with_gil(|py| {
+            while let Some(msg) = stream.next().await {
+                match msg {
+                    NautilusWsMessage::Instrument(inst) => Python::with_gil(|py| {
+                        let py_obj = instrument_any_to_pyobject(py, inst)
+                            .expect("Failed to create instrument");
+                        call_python(py, &callback, py_obj);
+                    }),
+                    NautilusWsMessage::Data(data) => Python::with_gil(|py| {
+                        let py_obj = data_to_pycapsule(py, data);
+                        call_python(py, &callback, py_obj);
+                    }),
+                    NautilusWsMessage::DataVec(data_vec) => Python::with_gil(|py| {
+                        for data in data_vec {
                             let py_obj = data_to_pycapsule(py, data);
                             call_python(py, &callback, py_obj);
-                        }),
-                        NautilusWsMessage::DataVec(data_vec) => Python::with_gil(|py| {
-                            for data in data_vec {
-                                let py_obj = data_to_pycapsule(py, data);
-                                call_python(py, &callback, py_obj);
-                            }
-                        }),
-                        NautilusWsMessage::Deltas(deltas) => Python::with_gil(|py| {
-                            call_python(py, &callback, deltas.into_py_any_unwrap(py));
-                        }),
-                        NautilusWsMessage::MarkPrice(mark_price) => Python::with_gil(|py| {
-                            call_python(py, &callback, mark_price.into_py_any_unwrap(py));
-                        }),
-                        NautilusWsMessage::IndexPrice(index_price) => Python::with_gil(|py| {
-                            call_python(py, &callback, index_price.into_py_any_unwrap(py));
-                        }),
-                        NautilusWsMessage::MarkAndIndex((mark_price, index_price)) => {
-                            Python::with_gil(|py| {
-                                call_python(py, &callback, mark_price.into_py_any_unwrap(py));
-                                call_python(py, &callback, index_price.into_py_any_unwrap(py));
-                            });
                         }
-                        NautilusWsMessage::OrderEvent(msg) => Python::with_gil(|py| {
-                            let py_obj =
-                                order_event_to_pyobject(py, msg).expect("Failed to create event");
-                            call_python(py, &callback, py_obj);
-                        }),
+                    }),
+                    NautilusWsMessage::Deltas(deltas) => Python::with_gil(|py| {
+                        call_python(py, &callback, deltas.into_py_any_unwrap(py));
+                    }),
+                    NautilusWsMessage::MarkPrice(mark_price) => Python::with_gil(|py| {
+                        call_python(py, &callback, mark_price.into_py_any_unwrap(py));
+                    }),
+                    NautilusWsMessage::IndexPrice(index_price) => Python::with_gil(|py| {
+                        call_python(py, &callback, index_price.into_py_any_unwrap(py));
+                    }),
+                    NautilusWsMessage::MarkAndIndex((mark_price, index_price)) => {
+                        Python::with_gil(|py| {
+                            call_python(py, &callback, mark_price.into_py_any_unwrap(py));
+                            call_python(py, &callback, index_price.into_py_any_unwrap(py));
+                        });
                     }
+                    NautilusWsMessage::OrderEvent(msg) => Python::with_gil(|py| {
+                        let py_obj =
+                            order_event_to_pyobject(py, msg).expect("Failed to create event");
+                        call_python(py, &callback, py_obj);
+                    }),
                 }
-            });
+            }
 
-            Ok(())
-        })
-    }
-
-    #[pyo3(name = "wait_until_active")]
-    fn py_wait_until_active<'py>(
-        &self,
-        py: Python<'py>,
-        timeout_secs: f64,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let client = self.clone();
-
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            client
-                .wait_until_active(timeout_secs)
-                .await
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
             Ok(())
         })
     }

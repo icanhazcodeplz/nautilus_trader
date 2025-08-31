@@ -61,14 +61,13 @@ pub fn instrument_id_to_symbol_string(
     instrument_id.symbol.to_string()
 }
 
-/// Decodes a Databento record into a Nautilus `InstrumentId`.
-///
 /// # Errors
 ///
-/// Returns an error if:
-/// - The publisher cannot be extracted from the record.
-/// - The publisher ID is not found in the venue map.
-/// - The underlying instrument ID mapping fails.
+/// Returns an error if mapping record to `InstrumentId` fails.
+///
+/// # Panics
+///
+/// Panics if the raw symbol from metadata cannot be converted into a `Symbol`.
 pub fn decode_nautilus_instrument_id(
     record: &dbn::RecordRef,
     metadata: &mut MetadataCache,
@@ -92,15 +91,13 @@ pub fn decode_nautilus_instrument_id(
     Ok(instrument_id)
 }
 
-/// Gets the Nautilus `InstrumentId` for a Databento record.
-///
 /// # Errors
 ///
-/// Returns an error if:
-/// - The record type is not supported.
-/// - Timestamp overflow occurs when calculating the date.
-/// - Symbol metadata lookup fails.
-/// - No raw symbol is found for the instrument ID.
+/// Returns an error if mapping record to `InstrumentId` fails or timestamp overflow occurs.
+///
+/// # Panics
+///
+/// Panics if the raw symbol from metadata cannot be converted into a `Symbol`.
 pub fn get_nautilus_instrument_id_for_record(
     record: &dbn::RecordRef,
     metadata: &mut MetadataCache,

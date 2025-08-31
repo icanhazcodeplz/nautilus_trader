@@ -19,26 +19,16 @@ use strum::{AsRefStr, Display, EnumIter, EnumString};
 
 /// Side of an order or trade.
 #[derive(
-    Copy,
-    Clone,
-    Debug,
-    Display,
-    PartialEq,
-    Eq,
-    AsRefStr,
-    EnumIter,
-    EnumString,
-    Serialize,
-    Deserialize,
+    Clone, Debug, Display, PartialEq, Eq, AsRefStr, EnumIter, EnumString, Serialize, Deserialize,
 )]
-pub enum BitmexSide {
+pub enum Side {
     /// Buy side of the trade/order.
     Buy,
     /// Sell side of the trade/order.
     Sell,
 }
 
-impl BitmexSide {
+impl Side {
     #[must_use]
     pub const fn as_order_side(&self) -> OrderSide {
         match self {
@@ -55,30 +45,20 @@ impl BitmexSide {
     }
 }
 
-impl From<BitmexSide> for crate::common::enums::BitmexSide {
-    fn from(side: BitmexSide) -> Self {
+impl From<Side> for crate::enums::Side {
+    fn from(side: Side) -> Self {
         match side {
-            BitmexSide::Buy => Self::Buy,
-            BitmexSide::Sell => Self::Sell,
+            Side::Buy => crate::enums::Side::Buy,
+            Side::Sell => crate::enums::Side::Sell,
         }
     }
 }
 
 /// Direction of price tick relative to previous trade.
 #[derive(
-    Copy,
-    Clone,
-    Debug,
-    Display,
-    PartialEq,
-    Eq,
-    AsRefStr,
-    EnumIter,
-    EnumString,
-    Serialize,
-    Deserialize,
+    Clone, Debug, Display, PartialEq, Eq, AsRefStr, EnumIter, EnumString, Serialize, Deserialize,
 )]
-pub enum BitmexTickDirection {
+pub enum TickDirection {
     /// Price higher than previous trade.
     PlusTick,
     /// Price lower than previous trade.
@@ -91,20 +71,10 @@ pub enum BitmexTickDirection {
 
 /// Trading instrument state.
 #[derive(
-    Copy,
-    Clone,
-    Debug,
-    Display,
-    PartialEq,
-    Eq,
-    AsRefStr,
-    EnumIter,
-    EnumString,
-    Serialize,
-    Deserialize,
+    Clone, Debug, Display, PartialEq, Eq, AsRefStr, EnumIter, EnumString, Serialize, Deserialize,
 )]
 #[serde(rename_all = "lowercase")]
-pub enum BitmexInstrumentState {
+pub enum InstrumentState {
     /// Instrument is available for trading.
     Open,
     /// Instrument is not currently trading.
@@ -117,20 +87,10 @@ pub enum BitmexInstrumentState {
 
 /// Action type for table data messages.
 #[derive(
-    Copy,
-    Clone,
-    Debug,
-    Display,
-    PartialEq,
-    Eq,
-    AsRefStr,
-    EnumIter,
-    EnumString,
-    Serialize,
-    Deserialize,
+    Clone, Debug, Display, PartialEq, Eq, AsRefStr, EnumIter, EnumString, Serialize, Deserialize,
 )]
 #[serde(rename_all = "lowercase")]
-pub enum BitmexAction {
+pub enum Action {
     /// Initial snapshot of table data.
     Partial,
     /// New data inserted.
@@ -141,7 +101,7 @@ pub enum BitmexAction {
     Delete,
 }
 
-impl BitmexAction {
+impl Action {
     #[must_use]
     pub const fn as_book_action(&self) -> BookAction {
         match self {
@@ -158,7 +118,7 @@ impl BitmexAction {
     Clone, Debug, Display, PartialEq, Eq, AsRefStr, EnumIter, EnumString, Serialize, Deserialize,
 )]
 #[serde(rename_all = "camelCase")]
-pub enum BitmexWsOperation {
+pub enum WsOperation {
     /// Subscribe to one or more topics.
     Subscribe,
     /// Unsubscribe from one or more topics.
@@ -170,7 +130,7 @@ pub enum BitmexWsOperation {
     Clone, Debug, Display, PartialEq, Eq, AsRefStr, EnumIter, EnumString, Serialize, Deserialize,
 )]
 #[serde(rename_all = "camelCase")]
-pub enum BitmexWsAuthAction {
+pub enum WsAuthAction {
     /// Submit API key for authentication.
     AuthKey,
     /// Cancel all orders after n seconds.
@@ -183,7 +143,7 @@ pub enum BitmexWsAuthAction {
 )]
 #[serde(rename_all = "camelCase")]
 #[strum(serialize_all = "camelCase")]
-pub enum BitmexWsTopic {
+pub enum WsTopic {
     /// Site announcements.
     Announcement,
     /// Trollbox chat.
@@ -230,4 +190,22 @@ pub enum BitmexWsTopic {
     TradeBin1h,
     /// 1-day trade bins.
     TradeBin1d,
+}
+
+/// Error types that can be returned by the WebSocket API.
+#[derive(
+    Clone, Debug, Display, PartialEq, Eq, AsRefStr, EnumIter, EnumString, Serialize, Deserialize,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum WsErrorType {
+    /// General error.
+    Error,
+    /// Error during subscription.
+    SubscriptionError,
+    /// Error during unsubscription.
+    UnsubscriptionError,
+    /// Authentication failure.
+    AuthenticationError,
+    /// Rate limit exceeded.
+    RateLimit,
 }

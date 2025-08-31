@@ -40,7 +40,7 @@ class DYDXCandlesGetParams(msgspec.Struct, omit_defaults=True):
     toISO: datetime.datetime | None = None
 
 
-class DYDXCandlesResponse(msgspec.Struct, forbid_unknown_fields=False):
+class DYDXCandlesResponse(msgspec.Struct, forbid_unknown_fields=True):
     """
     Represent the dYdX candles response object.
     """

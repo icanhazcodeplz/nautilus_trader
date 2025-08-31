@@ -45,8 +45,8 @@ use crate::{
         models::OKXInstrument,
         parse::{
             okx_channel_to_bar_spec, parse_client_order_id, parse_fee, parse_funding_rate_msg,
-            parse_instrument_any, parse_message_vec, parse_millisecond_timestamp, parse_price,
-            parse_quantity,
+            parse_instrument_any, parse_message_vec, parse_millisecond_timestamp, parse_order_side,
+            parse_price, parse_quantity,
         },
     },
     websocket::messages::{ExecutionReport, NautilusWsMessage, OKXFundingRateMsg},
@@ -461,7 +461,7 @@ pub fn parse_trade_msg(
 ) -> anyhow::Result<TradeTick> {
     let price = parse_price(&msg.px, price_precision)?;
     let size = parse_quantity(&msg.sz, size_precision)?;
-    let aggressor_side: AggressorSide = msg.side.into();
+    let aggressor_side = AggressorSide::from(msg.side.clone());
     let trade_id = TradeId::new(&msg.trade_id);
     let ts_event = parse_millisecond_timestamp(msg.ts);
 
@@ -574,11 +574,11 @@ pub fn parse_order_status_report(
 ) -> anyhow::Result<OrderStatusReport> {
     let client_order_id = parse_client_order_id(&msg.cl_ord_id);
     let venue_order_id = VenueOrderId::new(msg.ord_id);
-    let order_side: OrderSide = msg.side.into();
+    let order_side = parse_order_side(&Some(msg.side.clone()));
 
-    let okx_order_type = msg.ord_type;
-    let order_type: OrderType = msg.ord_type.into();
-    let order_status: OrderStatus = msg.state.into();
+    let okx_order_type = msg.ord_type.clone();
+    let order_type: OrderType = msg.ord_type.clone().into();
+    let order_status: OrderStatus = msg.state.clone().into();
 
     let time_in_force = match okx_order_type {
         OKXOrderType::Fok => TimeInForce::Fok,
@@ -649,7 +649,7 @@ pub fn parse_fill_report(
     let client_order_id = parse_client_order_id(&msg.cl_ord_id);
     let venue_order_id = VenueOrderId::new(msg.ord_id);
     let trade_id = TradeId::from(msg.trade_id.as_str());
-    let order_side: OrderSide = msg.side.into();
+    let order_side = parse_order_side(&Some(msg.side.clone()));
 
     let price_precision = instrument.price_precision();
     let size_precision = instrument.size_precision();
@@ -664,7 +664,7 @@ pub fn parse_fill_report(
         total_fee
     };
 
-    let liquidity_side: LiquiditySide = msg.exec_type.into();
+    let liquidity_side: LiquiditySide = LiquiditySide::from(msg.exec_type.clone());
     let ts_event = parse_millisecond_timestamp(msg.fill_time);
 
     let report = FillReport::new(
@@ -815,11 +815,7 @@ mod tests {
     use ustr::Ustr;
 
     use super::*;
-    use crate::{
-        common::{parse::parse_account_state, testing::load_test_json},
-        http::models::OKXAccount,
-        websocket::messages::{OKXWebSocketArg, OKXWebSocketEvent},
-    };
+    use crate::{common::testing::load_test_json, websocket::messages::OKXWebSocketEvent};
 
     #[rstest]
     fn test_parse_books_snapshot() {
@@ -1125,6 +1121,13 @@ mod tests {
 
     #[rstest]
     fn test_parse_book_message() {
+        use ustr::Ustr;
+
+        use crate::websocket::{
+            enums::OKXWsChannel,
+            messages::{OKXWebSocketArg, OKXWebSocketEvent},
+        };
+
         let json_data = load_test_json("ws_bbo_tbt.json");
         let msg: OKXWebSocketEvent = serde_json::from_str(&json_data).unwrap();
         let (okx_books, arg): (Vec<OKXBookMsg>, OKXWebSocketArg) = match msg {
@@ -1164,8 +1167,12 @@ mod tests {
 
     #[rstest]
     fn test_parse_ws_account_message() {
+        use nautilus_model::identifiers::AccountId;
+
+        // Load test data for WebSocket account message
         let json_data = load_test_json("ws_account.json");
-        let accounts: Vec<OKXAccount> = serde_json::from_str(&json_data).unwrap();
+        let accounts: Vec<crate::http::models::OKXAccount> =
+            serde_json::from_str(&json_data).unwrap();
 
         assert_eq!(accounts.len(), 1);
         let account = &accounts[0];
@@ -1188,7 +1195,7 @@ mod tests {
 
         let account_id = AccountId::new("OKX-001");
         let ts_init = nautilus_core::nanos::UnixNanos::default();
-        let account_state = parse_account_state(account, account_id, ts_init);
+        let account_state = crate::common::parse::parse_account_state(account, account_id, ts_init);
 
         assert!(account_state.is_ok());
         let state = account_state.unwrap();
@@ -1275,6 +1282,14 @@ mod tests {
 
     #[rstest]
     fn test_parse_order_status_report() {
+        use nautilus_core::nanos::UnixNanos;
+        use nautilus_model::{
+            enums::OrderStatus,
+            identifiers::Symbol,
+            instruments::CryptoPerpetual,
+            types::{Currency, Price, Quantity},
+        };
+
         let json_data = load_test_json("ws_orders.json");
         let ws_msg: serde_json::Value = serde_json::from_str(&json_data).unwrap();
         let data: Vec<OKXOrderMsg> = serde_json::from_value(ws_msg["data"].clone()).unwrap();
@@ -1339,6 +1354,13 @@ mod tests {
 
     #[rstest]
     fn test_parse_fill_report() {
+        use nautilus_core::nanos::UnixNanos;
+        use nautilus_model::{
+            identifiers::Symbol,
+            instruments::CryptoPerpetual,
+            types::{Currency, Price, Quantity},
+        };
+
         let json_data = load_test_json("ws_orders.json");
         let ws_msg: serde_json::Value = serde_json::from_str(&json_data).unwrap();
         let data: Vec<OKXOrderMsg> = serde_json::from_value(ws_msg["data"].clone()).unwrap();
@@ -1479,6 +1501,14 @@ mod tests {
 
     #[rstest]
     fn test_parse_fill_report_with_fee_cache() {
+        use nautilus_core::nanos::UnixNanos;
+        use nautilus_model::{
+            identifiers::Symbol,
+            instruments::CryptoPerpetual,
+            types::{Currency, Money, Price, Quantity},
+        };
+
+        // Create a mock instrument for testing
         let instrument_id = InstrumentId::from("BTC-USDT-SWAP.OKX");
         let instrument = CryptoPerpetual::new(
             instrument_id,

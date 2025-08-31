@@ -237,7 +237,6 @@ async def test_unsubscribe_historical_bars(ib_client):
         contract,
         use_rth,
         handle_revised_bars,
-        {},
     )
 
     # Act
