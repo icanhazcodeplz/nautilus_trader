@@ -7,6 +7,7 @@ from flask import Flask, render_template, jsonify
 from flask_restful import Resource, Api
 from flask_cors import CORS, cross_origin
 
+from examples.viz import CreateMarkers
 from examples.backtest_helpers import get_one_min_bars, get_tbbo
 
 app = Flask(__name__)
@@ -21,7 +22,7 @@ def resample_ticks(ticks):
 
 def convert_bar_to_json(bar):
     return {
-        "time": int(bar.ts_event / 1e9),
+        "time": bar.ts_event / 1e9,
         "open": float(bar.open),
         "high": float(bar.high),
         "low": float(bar.low),
@@ -56,13 +57,15 @@ def get_data():
     seen_times = set()
     ticks_ = [t for t in ticks_ if not (t['time'] in seen_times or seen_times.add(t['time']))]
 
+    bid_markers, ask_markers = CreateMarkers().load_markers()
+
     records = dict(
         ticks=ticks_,
         ten_sec=[],
         one_min=[convert_bar_to_json(bar) for bar in bars],
         macd=[],
-        bid_markers=[],
-        ask_markers=[],
+        bid_markers=bid_markers,
+        ask_markers=ask_markers,
     )
     return jsonify(records)
 

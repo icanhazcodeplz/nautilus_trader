@@ -49,6 +49,8 @@ class Momo(Strategy):
         # Create the indicators for the strategy
         self.fast_ema = ExponentialMovingAverage(config.fast_ema_period)
         self.slow_ema = ExponentialMovingAverage(config.slow_ema_period)
+        self.trigger_buy = False
+        self.trigger_sell = False
 
     def on_start(self) -> None:
         """
@@ -83,9 +85,6 @@ class Momo(Strategy):
 
 
     def on_stop(self) -> None:
-        """
-        Actions to be performed when the strategy is stopped.
-        """
         self.cancel_all_orders(self.config.instrument_id)
         if self.config.close_positions_on_stop:
             self.close_all_positions(self.config.instrument_id)
@@ -104,85 +103,37 @@ class Momo(Strategy):
 
 
     def on_instrument(self, instrument: Instrument) -> None:
-        """
-        Actions to be performed when the strategy is running and receives an instrument.
-
-        Parameters
-        ----------
-        instrument : Instrument
-            The instrument received.
-
-        """
-        # For debugging (must add a subscription)
+        pass
         # self.log.info(repr(instrument), LogColor.CYAN)
 
     def on_order_book_deltas(self, deltas: OrderBookDeltas) -> None:
-        """
-        Actions to be performed when the strategy is running and receives order book
-        deltas.
-
-        Parameters
-        ----------
-        deltas : OrderBookDeltas
-            The order book deltas received.
-
-        """
-        # For debugging (must add a subscription)
+        pass
         # self.log.info(repr(deltas), LogColor.CYAN)
 
     def on_order_book(self, order_book: OrderBook) -> None:
-        """
-        Actions to be performed when the strategy is running and receives an order book.
-
-        Parameters
-        ----------
-        order_book : OrderBook
-            The order book received.
-
-        """
-        # For debugging (must add a subscription)
+        pass
         # self.log.info(repr(order_book), LogColor.CYAN)
 
     def on_quote_tick(self, tick: QuoteTick) -> None:
-        """
-        Actions to be performed when the strategy is running and receives a quote tick.
-
-        Parameters
-        ----------
-        tick : QuoteTick
-            The tick received.
-
-        """
-        # For debugging (must add a subscription)
+        pass
         # self.log.info(repr(tick), LogColor.CYAN)
 
     def on_trade_tick(self, tick: TradeTick) -> None:
-        """
-        Actions to be performed when the strategy is running and receives a trade tick.
-
-        Parameters
-        ----------
-        tick : TradeTick
-            The tick received.
-
-        """
         # self.log.info(repr(tick), LogColor.CYAN)
 
         # NOTE: Need to be subscribed to order book deltas to get best bid/ask prices
         ob = self.cache.order_book(self.config.instrument_id)
         best_bid = ob.best_bid_price()
         best_ask = ob.best_ask_price()
+        if self.trigger_buy:
+            self.buy()
+            self.trigger_buy = False
+
+        if self.trigger_sell:
+            self.sell()
+            self.trigger_sell = False
 
     def on_bar(self, bar: Bar) -> None:
-        """
-        Actions to be performed when the strategy is running and receives a bar.
-
-        Parameters
-        ----------
-        bar : Bar
-            The bar received.
-
-        """
         self.log.info(repr(bar), LogColor.CYAN)
 
         # Check if indicators ready
@@ -200,11 +151,11 @@ class Momo(Strategy):
         # BUY LOGIC
         if self.fast_ema.value >= self.slow_ema.value:
             if self.portfolio.is_flat(self.config.instrument_id):
-                self.buy()
+                self.trigger_buy = True
         # SELL LOGIC
         elif self.fast_ema.value < self.slow_ema.value:
             if self.portfolio.is_net_long(self.config.instrument_id):
-                self.sell()
+                self.trigger_sell = True
                 # self.close_all_positions(self.config.instrument_id)
 
 
@@ -218,6 +169,7 @@ class Momo(Strategy):
             quantity=self.instrument.make_qty(self.config.trade_size),
             price=Price(10.0, 2),
             time_in_force=TimeInForce.GTC,
+            tags=["e"]
         )
 
         self.submit_order(order)
@@ -232,6 +184,7 @@ class Momo(Strategy):
             quantity=self.instrument.make_qty(self.config.trade_size),
             price=Price(1.0, 2),
             time_in_force=TimeInForce.GTC,
+            tags=['s']
         )
 
         self.submit_order(order)
