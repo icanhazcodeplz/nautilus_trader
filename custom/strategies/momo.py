@@ -1,8 +1,6 @@
-from decimal import Decimal
-
 from nautilus_trader.indicators.volume import deque
 
-from custom.utils.backtest_utils import BACKTESTING_CATALOG
+from custom.utils.load_catalog_data import BACKTESTING_CATALOG
 from custom.strategies.base import BaseStrategy
 from nautilus_trader.config import PositiveInt
 from nautilus_trader.config import StrategyConfig
@@ -19,10 +17,10 @@ from nautilus_trader.model.instruments import Instrument
 
 class MomoConfig(StrategyConfig, frozen=True):
     instrument_id: InstrumentId
-    trade_size: Decimal
+    trade_size: int
     max_position_multiplier:int
-    stop_loss:Decimal
-    take_profit:Decimal
+    stop_loss:float
+    take_profit:float
 
     bar_type: BarType
     fast_ema_period: PositiveInt = 10
@@ -83,7 +81,7 @@ class Momo(BaseStrategy):
         if order.is_buy:
             take_price = order.last_px + self.config.take_profit
             self.sell(quantity=order.last_qty, limit_price=take_price, tag="t")
-            self.stop_price = Decimal(self.position_avg_px) - self.config.stop_loss
+            self.stop_price = self.position_avg_px - self.config.stop_loss
 
     def on_start(self) -> None:
         """

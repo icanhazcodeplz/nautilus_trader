@@ -12,11 +12,11 @@ from nautilus_trader.model.instruments import Instrument
 
 class RandomConfig(StrategyConfig, frozen=True):
     instrument_id: InstrumentId
-    trade_size: Decimal
+    trade_size: int
     max_position_multiplier:int
-    stop_loss:Decimal
-    take_profit:Decimal
-    take_ratio:Decimal
+    stop_loss:float
+    take_profit:float
+    take_ratio:float = 1.0
 
 
 class Random(BaseStrategy):
@@ -43,7 +43,7 @@ class Random(BaseStrategy):
                     self.buy(self.config.trade_size, price, cancel_after_secs=10, tag="b")
             else:
                 position_average = self.position_avg_px
-                base_price = Decimal(max(float(tick.price), position_average))
+                base_price = max(float(tick.price), position_average)
                 take_price = base_price + self.config.take_profit
                 self.stop_price = base_price - self.config.stop_loss
                 if self.position_qty < 10:

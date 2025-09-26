@@ -2,33 +2,23 @@
 import os
 import sys
 
+
 sys.path.append(os.getcwd())
 
 import optuna
 import logging
+from custom.runner import run_single_backtest
 
-from backtest.mock_clients import WSFileIB
-from backtest import backtest_test_data_path
-from backtest.scalp_file import run_multiple_files, run_files_multiprocess
-from trading.process_manager import ProcessManager
-from trading.data_io import all_files_in_dir
-
-mysql_optuna = "mysql://root@localhost/optuna"
+database_str = "sqlite:///optuna.db"
+# mysql_optuna = "mysql://root@localhost/optuna"
 optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
 
-filenames = all_files_in_dir(backtest_test_data_path("ib_ws"), extension=".txt")
-symbol = "AAPL"
-filenames = [f for f in filenames if symbol in f]
-# filenames = [f for f in filenames if "20250527" in f]
-test_file_objs = []
-for filename in filenames:
-    filepath = backtest_test_data_path("ib_ws", filename)
-    ws_test_file = WSFileIB(filepath, open_hours_only=True)
-    if True:
-        test_file_objs += [ws_test_file]
+DATASET_NAMES = ["papl"]
+_param_names = []  # Will store parameter names used in optimization
 
-ENTRIES = True
 
+def run_multiple_files(test_files_objs, scalp_params, open_hours_only=True):
+    pass
 
 def _try_round2(arg):
     try:
@@ -48,79 +38,36 @@ def _return_previous_trail_with_same_params(trial):
 
 
 def optimize(trial):
-    initial_stop = 0.10
-    enter_if_above = "box"
-    previous_closed_count = 6
+    strategy_name = "random"
 
-    volume_check_count = 10
-
-    increase_amt = 0.2
-    increase_over_x_candles = 2
-    volume_threshold_multiplier = 1.5
-
-    if ENTRIES:
-        # enter_if_above = trial.suggest_categorical("enter_if_above", choices=["box", "h"])
-        # previous_closed_count = trial.suggest_int("previous_closed_count", 5, 10)
-        # volume_check_count = trial.suggest_int("volume_check_count", 4, 10)
-        #
-        increase_amt = trial.suggest_float("increase_amt", low=0.20, high=0.30, step=0.02)
-        increase_over_x_candles = trial.suggest_int("increase_over_x_candles", 2, 5)
-        volume_check_count = trial.suggest_int("volume_check_count", 4, 10)
-        volume_threshold_multiplier = trial.suggest_float("volume_threshold_multiplier", low=1.1, high=2, step=0.1)
-
-        initial_stop = trial.suggest_float("initial_stop", low=0.10, high=0.20, step=0.01)
-
-        take_increment = initial_stop
-        stop_gap = initial_stop
-        initial_qty_ratio = 1.0
-        number_takes = 1
-    else:
-        take_increment = trial.suggest_float("take_increment", low=0.23, high=0.29, step=0.01)
-        stop_gap = trial.suggest_float("stop_gap", low=0.21, high=0.28, step=0.01)
-        initial_qty_ratio = trial.suggest_float("initial_qty_ratio", low=0.10, high=0.30, step=0.05)
-        number_takes = trial.suggest_int("number_takes", 2, 6)
-
-    previous_trail_value = _return_previous_trail_with_same_params(trial)
-    if previous_trail_value is not None:
-        return previous_trail_value
-
-    scalp_params = dict(
-        entry_class="Wave",
-        entry_kwargs=dict(
-            increase_amt=increase_amt,
-            increase_over_x_candles=increase_over_x_candles,
-            volume_threshold_multiplier=volume_threshold_multiplier,
-            # previous_closed_count=previous_closed_count,
-            # enter_if_above=enter_if_above,
-            volume_check_count=volume_check_count,
-        ),
-        take_stop_kwargs=dict(
-            take_increment=take_increment,
-            stop_gap=stop_gap,
-            initial_qty_ratio=initial_qty_ratio,
-            number_takes=number_takes,
-        ),
-        initial_stop=initial_stop,
+    params = dict(
+        trade_size=100,
+        max_position_multiplier=trial.suggest_int("max_position_multiplier", low=1, high=3, step=1),
+        stop_loss=trial.suggest_float("stop_loss", low=0.30, high=0.60, step=0.10),
+        take_profit=trial.suggest_float("take_profit", low=0.30, high=0.60, step=0.10),
     )
-    metrics = run_multiple_files(test_files_objs=test_file_objs, scalp_params=scalp_params, open_hours_only=True)
 
-    # metrics = run_files_multiprocess(test_files_objs=test_file_objs, scalp_params=scalp_params, open_hours_only=True)
-    if ENTRIES:
-        metric_to_use = metrics["win_rate"]
-    else:
-        metric_to_use = metrics["pnl"] / metrics["trades"]
-    return round(metric_to_use, 3)
+    global _param_names
+    _param_names = list(trial.params.keys())
+    if strategy_name != "random":
+        previous_trail_value = _return_previous_trail_with_same_params(trial)
+        if previous_trail_value is not None:
+            return previous_trail_value
+
+    value = run_single_backtest(DATASET_NAMES[0], strategy_name, params, return_engine=False, log_level="ERROR")
+    return value
+
 
 
 def load_or_create_optuna_study(study_name):
     try:
-        return optuna.load_study(study_name=study_name, storage=mysql_optuna)
+        return optuna.load_study(study_name=study_name, storage=database_str)
     except KeyError:
         return optuna.create_study(
             direction="maximize",
             pruner=optuna.pruners.NopPruner(),
             study_name=study_name,
-            storage=mysql_optuna,
+            storage=database_str,
             sampler=optuna.samplers.RandomSampler(),
         )
 
@@ -131,19 +78,17 @@ def target(study_name, n_trials):
 
 
 if __name__ == "__main__":
-    study_name = f"{symbol}-exits"
-    if ENTRIES:
-        study_name = f"{symbol}-entries"
+    study_name = "test"
 
-    delete_existing = False
+    delete_existing = True
     run_trials = True
-    total_trials = 10
+    total_trials = 20
 
     if delete_existing:
         try:
-            optuna.delete_study(study_name=study_name, storage=mysql_optuna)
+            optuna.delete_study(study_name=study_name, storage=database_str)
             optuna.create_study(
-                direction="maximize", pruner=optuna.pruners.NopPruner(), study_name=study_name, storage=mysql_optuna
+                direction="maximize", pruner=optuna.pruners.NopPruner(), study_name=study_name, storage=database_str
             )
         except KeyError:
             pass
@@ -157,24 +102,8 @@ if __name__ == "__main__":
         #     pm.add_and_start(name=str(i), target=target, args=(study_name, n_trials))
         # pm.block(sleep_secs=1)
 
-    if ENTRIES:
-        cols = [
-            # "params_enter_if_above",
-            # "params_previous_closed_count",
-            "params_increase_amt",
-            "params_increase_over_x_candles",
-            "params_volume_check_count",
-            "volume_threshold_multiplier",
-            "params_initial_stop",
-        ]
-    else:
-        cols = [
-            "params_take_increment",
-            "params_stop_gap",
-            "params_initial_qty_ratio",
-            "params_number_takes",
-        ]
-    study = optuna.load_study(study_name=study_name, storage=mysql_optuna)
+    cols = [f"params_{p}" for p in _param_names]
+    study = optuna.load_study(study_name=study_name, storage=database_str)
 
     df = study.trials_dataframe()
     df = df[df["state"] == "COMPLETE"]

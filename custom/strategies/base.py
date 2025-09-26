@@ -32,7 +32,7 @@ class BaseStrategy(Strategy):
 
     @property
     def position_qty(self):
-        return self.portfolio.net_position(self.config.instrument_id)
+        return int(self.portfolio.net_position(self.config.instrument_id))
 
     @property
     def position_avg_px(self):

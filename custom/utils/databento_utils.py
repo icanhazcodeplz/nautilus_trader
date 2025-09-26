@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from custom.utils.backtest_utils import BACKTESTING_CATALOG
+from custom.utils.load_catalog_data import BACKTESTING_CATALOG
 from custom.utils import data_subdir
 from custom.nt_extensions.tbbo_data import TBBOData
 from nautilus_trader import ENV
