@@ -24,6 +24,7 @@ from nautilus_trader.analysis.statistics.risk_return_ratio import RiskReturnRati
 from nautilus_trader.analysis.statistics.sharpe_ratio import SharpeRatio
 from nautilus_trader.analysis.statistics.sortino_ratio import SortinoRatio
 from nautilus_trader.analysis.statistics.trade_avg import AvgTrade
+from nautilus_trader.analysis.statistics.trade_avg_scaled import AvgTradeScaled
 from nautilus_trader.analysis.statistics.trade_counts import Winners, Losers, Scratches
 from nautilus_trader.analysis.statistics.win_loss_ratio import WinLossRatio
 from nautilus_trader.analysis.statistics.winner_min import MinWinner
@@ -76,6 +77,9 @@ for stat_class in [ReturnsVolatility, SharpeRatio, SortinoRatio, LongRatio, Prof
 for stat_class in [Winners, Losers, WinLossRatio, AvgTrade]:  # Scratches
     engine.portfolio.analyzer.register_statistic(stat_class())
 
+avg_trade_scaled = AvgTradeScaled(per_x_bought=100)
+engine.portfolio.analyzer.register_statistic(avg_trade_scaled)
+
 TRADE_SIZE = 100
 STOP_TAKE = 0.50
 config = RandomConfig(
@@ -105,6 +109,8 @@ strategy = Momo(config=config)
 engine.add_strategy(strategy=strategy)
 
 engine.run()
+
+final_value = avg_trade_scaled.calculate_from_positions(engine.portfolio.analyzer._positions)
 
 order_fills_report = engine.trader.generate_order_fills_report()
 orders_report = engine.trader.generate_orders_report()
