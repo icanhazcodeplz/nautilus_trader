@@ -1,34 +1,20 @@
 from decimal import Decimal
-from typing import Tuple
 
-import pandas as pd
 from nautilus_trader.indicators.volume import deque
 
-from custom.backtest_helpers import BACKTESTING_CATALOG
+from custom.utils.backtest_utils import BACKTESTING_CATALOG
 from custom.strategies.base import BaseStrategy
-from nautilus_trader.common.enums import LogColor
 from nautilus_trader.config import PositiveInt
 from nautilus_trader.config import StrategyConfig
 from nautilus_trader.core.correctness import PyCondition
-from nautilus_trader.core.data import Data
-from nautilus_trader.core.message import Event
 from nautilus_trader.indicators import ExponentialMovingAverage
-from nautilus_trader.model.book import OrderBook
 from nautilus_trader.model.data import Bar
 from nautilus_trader.model.data import BarType
-from nautilus_trader.model.data import OrderBookDeltas
-from nautilus_trader.model.data import QuoteTick
 from nautilus_trader.model.data import TradeTick
 
-from nautilus_trader.model import Price
-from nautilus_trader.model.enums import OrderSide
-from nautilus_trader.model.enums import TimeInForce
 from nautilus_trader.model.identifiers import InstrumentId
 
-from nautilus_trader.model.events import OrderFilled
 from nautilus_trader.model.instruments import Instrument
-from nautilus_trader.model.orders import LimitOrder
-from nautilus_trader.trading.strategy import Strategy
 
 
 class MomoConfig(StrategyConfig, frozen=True):

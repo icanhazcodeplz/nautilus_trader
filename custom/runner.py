@@ -4,9 +4,9 @@ from decimal import Decimal
 
 import pandas as pd
 
-from custom.backtest_helpers import VENUE, SYMBOL, get_L3_order_book_delta, get_trades, get_L1_quote_tick
-from custom.fill_model import LimitFillModel
-from custom.orders_to_trades import orders_to_trades
+from custom.utils.backtest_utils import VENUE, SYMBOL, get_trades, get_L1_quote_tick
+from custom.nt_extensions.fill_model import LimitFillModel
+from custom.utils.orders_to_trades import orders_to_trades
 from custom.strategies.momo import MomoConfig, Momo
 from custom.app_utils.viz import create_and_save_markers
 from custom.strategies.random import RandomConfig, Random
@@ -25,7 +25,7 @@ from nautilus_trader.analysis.statistics.sharpe_ratio import SharpeRatio
 from nautilus_trader.analysis.statistics.sortino_ratio import SortinoRatio
 from nautilus_trader.analysis.statistics.trade_avg import AvgTrade
 from nautilus_trader.analysis.statistics.trade_avg_scaled import AvgTradeScaled
-from nautilus_trader.analysis.statistics.trade_counts import Winners, Losers, Scratches
+from nautilus_trader.analysis.statistics.trade_counts import Winners, Losers
 from nautilus_trader.analysis.statistics.win_loss_ratio import WinLossRatio
 from nautilus_trader.analysis.statistics.winner_min import MinWinner
 from nautilus_trader.backtest.models import LatencyModel
