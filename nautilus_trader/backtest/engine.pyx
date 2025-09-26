@@ -5017,7 +5017,7 @@ cdef class OrderMatchingEngine:
 
         # Try to get simulated OrderBook from FillModel
         cdef OrderBook simulated_book = self._fill_model.get_orderbook_for_fill_simulation(
-            self.instrument, order, best_bid, best_ask
+            self.instrument, order, best_bid, best_ask, None, None
         )
 
         if simulated_book is not None:
@@ -5158,14 +5158,14 @@ cdef class OrderMatchingEngine:
             return  # Order canceled
 
         cdef list fills = self.determine_limit_fills_with_simulation(order)
-
-        self.apply_fills(
-            order=order,
-            fills=fills,
-            liquidity_side=order.liquidity_side,
-            venue_position_id=venue_position_id,
-            position=position,
-        )
+        if fills:
+            self.apply_fills(
+                order=order,
+                fills=fills,
+                liquidity_side=order.liquidity_side,
+                venue_position_id=venue_position_id,
+                position=position,
+            )
 
     cdef list determine_limit_fills_with_simulation(self, Order order):
         """
@@ -5174,6 +5174,10 @@ cdef class OrderMatchingEngine:
         This method first checks if the FillModel provides a simulated OrderBook
         for fill simulation. If so, it uses that for fill determination. Otherwise,
         it falls back to the standard limit fill logic.
+        
+        # TODO: TradeTick and QuoteTick are from the previous interval, best_bid and best_ask are from the current tick.
+        #       To fix, will need to figure out how to get the current tick and quote. Perhaps change the ordering of
+        #       when the cache for `trade_tick` and `quote_tick` are updated?
         """
         if self._fill_model is None:
             return self.determine_limit_price_and_volume(order)
@@ -5185,9 +5189,12 @@ cdef class OrderMatchingEngine:
         if best_bid is None or best_ask is None:
             return []  # No market available
 
+        cdef TradeTick last_trade = self.cache.trade_tick(instrument_id=self.instrument.id)
+        cdef QuoteTick quote = self.cache.quote_tick(instrument_id=self.instrument.id)
+
         # Try to get simulated OrderBook from FillModel
         cdef OrderBook simulated_book = self._fill_model.get_orderbook_for_fill_simulation(
-            self.instrument, order, best_bid, best_ask
+            self.instrument, order, best_bid, best_ask, quote, last_trade
         )
 
         if simulated_book is not None:
@@ -5198,9 +5205,7 @@ cdef class OrderMatchingEngine:
                 size_prec=self.instrument.size_precision,
                 is_aggressive=False,
             )
-        else:
-            # Fall back to standard logic
-            return self.determine_limit_price_and_volume(order)
+        return []
 
     cpdef list determine_limit_price_and_volume(self, Order order):
         """

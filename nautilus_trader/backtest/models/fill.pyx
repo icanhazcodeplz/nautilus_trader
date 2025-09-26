@@ -123,6 +123,8 @@ cdef class FillModel:
         Order order,
         Price best_bid,
         Price best_ask,
+        QuoteTick quote,
+        TradeTick last_trade
     ):
         """
         Return a simulated OrderBook for fill simulation.
@@ -180,6 +182,8 @@ class BestPriceFillModel(FillModel):
         order: Order,
         best_bid: Price,
         best_ask: Price,
+        quote: QuoteTick,
+        last_trade: TradeTick,
     ) -> OrderBook | None:
         """
         Return OrderBook with unlimited liquidity at best prices.
@@ -226,6 +230,8 @@ class OneTickSlippageFillModel(FillModel):
         order: Order,
         best_bid: Price,
         best_ask: Price,
+        quote: QuoteTick,
+        last_trade: TradeTick,
     ) -> OrderBook | None:
         """
         Return OrderBook with no volume at best prices, unlimited volume one tick away.
@@ -288,6 +294,8 @@ class TwoTierFillModel(FillModel):
         order: Order,
         best_bid: Price,
         best_ask: Price,
+        quote: QuoteTick,
+        last_trade: TradeTick,
     ) -> OrderBook | None:
         """
         Return OrderBook with two-tier liquidity structure.
@@ -352,6 +360,8 @@ class ProbabilisticFillModel(FillModel):
         order: Order,
         best_bid: Price,
         best_ask: Price,
+        quote: QuoteTick,
+        last_trade: TradeTick,
     ) -> OrderBook | None:
         """
         Return OrderBook based on probabilistic logic.
@@ -414,6 +424,8 @@ class SizeAwareFillModel(FillModel):
         order: Order,
         best_bid: Price,
         best_ask: Price,
+        quote: QuoteTick,
+        last_trade: TradeTick,
     ) -> OrderBook | None:
         """
         Return OrderBook with size-dependent liquidity.
@@ -499,6 +511,8 @@ class LimitOrderPartialFillModel(FillModel):
         order: Order,
         best_bid: Price,
         best_ask: Price,
+        quote: QuoteTick,
+        last_trade: TradeTick,
     ) -> OrderBook | None:
         """
         Return OrderBook with limited fills at limit prices.
@@ -564,6 +578,8 @@ class ThreeTierFillModel(FillModel):
         order: Order,
         best_bid: Price,
         best_ask: Price,
+        quote: QuoteTick,
+        last_trade: TradeTick,
     ) -> OrderBook | None:
         """
         Return OrderBook with three-tier liquidity structure.
@@ -667,6 +683,8 @@ class MarketHoursFillModel(FillModel):
         order: Order,
         best_bid: Price,
         best_ask: Price,
+        quote: QuoteTick,
+        last_trade: TradeTick,
     ) -> OrderBook | None:
         """
         Return OrderBook with time-dependent liquidity.
@@ -745,6 +763,8 @@ class VolumeSensitiveFillModel(FillModel):
         order: Order,
         best_bid: Price,
         best_ask: Price,
+        quote: QuoteTick,
+        last_trade: TradeTick,
     ) -> OrderBook | None:
         """
         Return OrderBook with volume-based liquidity.
