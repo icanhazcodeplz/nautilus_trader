@@ -1,10 +1,19 @@
 from custom.utils import data_subdir
 import json
 
+BID_MARKERS_FILE = data_subdir("viz", 'bid_markers.txt')
+ASK_MARKERS_FILE = data_subdir("viz", 'ask_markers.txt')
+METRICS_FILE = data_subdir("viz", 'metrics.txt')
+
+def dict_to_file(dict_, filename):
+    with open(filename, 'w') as f:
+        json.dump(dict_, f)
+
+def load_txt_file_to_dict(filename):
+    with open(filename, 'r') as f:
+        return json.load(f)
 
 class CreateMarkers:
-    bid_markers_file = data_subdir("viz", 'bid_markers.txt')
-    ask_markers_file = data_subdir("viz", 'ask_markers.txt')
 
     @staticmethod
     def _make_marker_dict(dt, position, color, shape, text):
@@ -55,22 +64,24 @@ class CreateMarkers:
         return bid_markers, ask_markers
 
     def _save_to_txt(self, bid_markers, ask_markers):
-        with open(self.bid_markers_file, 'w') as f:
-            json.dump(bid_markers, f)
-
-        with open(self.ask_markers_file, 'w') as f:
-            json.dump(ask_markers, f)
+        dict_to_file(bid_markers, BID_MARKERS_FILE)
+        dict_to_file(ask_markers, ASK_MARKERS_FILE)
 
     def load_markers(self):
-        with open(self.bid_markers_file, 'r') as f:
-            bid_markers = json.load(f)
-        with open(self.ask_markers_file, 'r') as f:
-            ask_markers = json.load(f)
-
+        bid_markers = load_txt_file_to_dict(BID_MARKERS_FILE)
+        ask_markers = load_txt_file_to_dict(ASK_MARKERS_FILE)
         return bid_markers, ask_markers
+
 
 
 def create_and_save_markers(trades, sell_legs):
     cm = CreateMarkers()
     bid_markers, ask_markers = cm.create_markers(trades, sell_legs)
     cm._save_to_txt(bid_markers, ask_markers)
+
+def write_to_metrics_txt_file(metrics):
+    dict_to_file(metrics, METRICS_FILE)
+
+
+def load_metrics_from_txt_file():
+    return load_txt_file_to_dict(METRICS_FILE)

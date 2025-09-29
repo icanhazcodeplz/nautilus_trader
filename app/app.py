@@ -7,19 +7,13 @@ from flask import Flask, render_template, jsonify
 from flask_restful import Api
 from flask_cors import CORS
 
-from custom.app_utils.process_data import convert_tbbo
+from custom.app_utils.process_data import combine_tbbo_and_metrics_data
 from custom.app_utils.viz import CreateMarkers
-from custom.utils.load_catalog_data import get_one_min_bars, get_tbbo
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, expose_headers=["Content-Range"])
 
 api = Api(app)
-
-
-def resample_ticks(ticks):
-    return ticks
-
 
 def convert_bar_to_json(bar):
     return {
@@ -31,23 +25,6 @@ def convert_bar_to_json(bar):
         "v": int(bar.volume),
     }
 
-def convert_tbbo_to_json(tbbo):
-
-    return {
-        "time": tbbo.ts_event / 1e9,
-        "price": float(tbbo.price),
-        # "size": int(tbbo.size),
-        "bid": float(tbbo.bid if str(tbbo.ask) != 'nan' else float(tbbo.price) - 1.0),
-        # "bid_size": int(tbbo.bid_size),
-        "ask": float(tbbo.ask if str(tbbo.ask) != 'nan' else tbbo.price + 1.0),
-        # "ask_size": int(tbbo.ask_size),
-    }
-
-
-def get_and_convert_tbbo():
-    data = get_tbbo()
-    return convert_tbbo(data)
-
 
 
 @app.route("/")
@@ -57,24 +34,28 @@ def index():
 
 @app.route("/api/data")
 def get_data():
-    bars = get_one_min_bars()
-    ticks = get_tbbo()
-    ticks1 = [convert_tbbo_to_json(t) for t in ticks]
-    ticks_ = get_and_convert_tbbo()
-    orig_len = len(ticks_)
-    seen_times = set()
-    ticks_ = [t for t in ticks_ if not (t['time'] in seen_times or seen_times.add(t['time']))]
-    print(f"Dropped {orig_len - len(ticks_)} duplicates")
+    # bars = get_one_min_bars()
+    # bars = [convert_bar_to_json(bar) for bar in bars]
+    bars = []
 
+    # ticks = get_and_convert_tbbo()
+    ticks = combine_tbbo_and_metrics_data()
     bid_markers, ask_markers = CreateMarkers().load_markers()
+    # bid_markers, ask_markers = [], []
 
     records = dict(
-        ticks=ticks_,
+        ticks=ticks,
         ten_sec=[],
-        one_min=[convert_bar_to_json(bar) for bar in bars],
+        one_min=bars,
         macd=[],
         bid_markers=bid_markers,
         ask_markers=ask_markers,
+        TickChartLines=[
+            dict(key='ask', color='#EF5350CC', width=1, type=1),
+            dict(key='bid', color='#26A69ACC', width=1, type=1),
+            dict(key='fast_ema', color='white', width=1, type=0),
+            dict(key='slow_ema', color='green', width=1, type=0)
+        ]
     )
     return jsonify(records)
 

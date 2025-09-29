@@ -1,7 +1,7 @@
 from abc import abstractmethod
 from datetime import timedelta
-from decimal import Decimal
 
+from custom.app_utils.viz import write_to_metrics_txt_file
 from nautilus_trader.config import StrategyConfig
 from nautilus_trader.core.data import Data
 from nautilus_trader.core.message import Event
@@ -19,9 +19,9 @@ from nautilus_trader.trading.strategy import Strategy
 
 class BaseConfig(StrategyConfig, frozen=True):
     instrument_id: InstrumentId
-    trade_size: Decimal
+    trade_size: int
     max_position_multiplier:int
-    stop_loss:Decimal
+    stop_loss:float
 
 
 class BaseStrategy(Strategy):
@@ -29,6 +29,8 @@ class BaseStrategy(Strategy):
         super().__init__(config)
         self.instrument: Instrument = None  # Initialized in on_start
         self.stop_price = None
+        self.metrics_to_save = None
+        self._metrics_values = []
 
     @property
     def position_qty(self):
@@ -83,6 +85,10 @@ class BaseStrategy(Strategy):
     def on_trade_tick(self, tick: TradeTick) -> None:
         self.stop_out_if_needed(tick)
         self._on_trade_tick(tick)
+        if self.metrics_to_save is not None:
+            metrics_vals = {name: round(item.value, 3) for name, item in self.metrics_to_save.items()}
+            metrics_vals["time"] = tick.ts_event / 1e9
+            self._metrics_values.append(metrics_vals)
 
     def buy(self, quantity, limit_price, tag, cancel_after_secs) -> None:
         allowed_qty = min(quantity, self._max_buy_qty_allowed())
@@ -148,6 +154,8 @@ class BaseStrategy(Strategy):
         # self.unsubscribe_quote_ticks(self.config.instrument_id)
         # self.unsubscribe_order_book_deltas(self.config.instrument_id)
         # self.unsubscribe_order_book_at_interval(self.config.instrument_id)
+        if len(self._metrics_values) > 0:
+            write_to_metrics_txt_file(self._metrics_values)
 
     @abstractmethod
     def _on_trade_tick(self, tick: TradeTick) -> None:

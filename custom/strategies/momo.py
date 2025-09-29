@@ -1,4 +1,3 @@
-from nautilus_trader.indicators.volume import deque
 
 from custom.utils.load_catalog_data import BACKTESTING_CATALOG
 from custom.strategies.base import BaseStrategy
@@ -6,13 +5,12 @@ from nautilus_trader.config import PositiveInt
 from nautilus_trader.config import StrategyConfig
 from nautilus_trader.core.correctness import PyCondition
 from nautilus_trader.indicators import ExponentialMovingAverage
+from nautilus_trader.indicators.volume import deque, KlingerVolumeOscillator
 from nautilus_trader.model.data import Bar
 from nautilus_trader.model.data import BarType
 from nautilus_trader.model.data import TradeTick
 
 from nautilus_trader.model.identifiers import InstrumentId
-
-from nautilus_trader.model.instruments import Instrument
 
 
 class MomoConfig(StrategyConfig, frozen=True):
@@ -20,8 +18,8 @@ class MomoConfig(StrategyConfig, frozen=True):
     trade_size: int
     max_position_multiplier:int
     stop_loss:float
-    take_profit:float
 
+    take_profit:float
     bar_type: BarType
     fast_ema_period: PositiveInt = 10
     slow_ema_period: PositiveInt = 20
@@ -41,20 +39,26 @@ class Momo(BaseStrategy):
         )
         super().__init__(config)
 
-        self.instrument: Instrument = None  # Initialized in on_start
 
         # Create the indicators for the strategy
         self.fast_ema = ExponentialMovingAverage(config.fast_ema_period)
         self.slow_ema = ExponentialMovingAverage(config.slow_ema_period)
+        self.klinger = KlingerVolumeOscillator(fast_period=10, slow_period=20, signal_period=5)
+
+        self.metrics_to_save = {
+            "fast_ema": self.fast_ema,
+            "slow_ema": self.slow_ema,
+            "klinger": self.klinger,
+        }
         self.trigger_buy = False
         self.trigger_sell = False
 
         self.size_dq = deque(maxlen=10)
         self.price_dq = deque(maxlen=10)
         self.recent_big_drop = False
-        self.stop_price = None
         self.take_price = None
         self.trades_since_order = 0
+        self.metrics = []
 
     def _on_trade_tick(self, tick: TradeTick) -> None:
         # NOTE: Need to be subscribed to order book deltas to get best bid/ask prices
@@ -94,8 +98,11 @@ class Momo(BaseStrategy):
             return
 
         # Register the indicators for updating
-        self.register_indicator_for_bars(self.config.bar_type, self.fast_ema)
-        self.register_indicator_for_bars(self.config.bar_type, self.slow_ema)
+        # self.register_indicator_for_bars(self.config.bar_type, self.fast_ema)
+        # self.register_indicator_for_bars(self.config.bar_type, self.slow_ema)
+        self.register_indicator_for_trade_ticks(self.config.instrument_id, self.fast_ema)
+        self.register_indicator_for_trade_ticks(self.config.instrument_id, self.slow_ema)
+        # self.register_indicator_for_trade_ticks(self.config.instrument_id, self.klinger)
 
         # Get historical data
         # if self.config.request_historical_bars:
@@ -112,14 +119,11 @@ class Momo(BaseStrategy):
 
 
     def on_stop(self) -> None:
-        self.cancel_all_orders(self.config.instrument_id)
-        self.close_all_positions(self.config.instrument_id)
-
+        super().on_stop()
         # Unsubscribe from data
-        self.unsubscribe_bars(self.config.bar_type)
+        # self.unsubscribe_bars(self.config.bar_type)
         # self.unsubscribe_quote_ticks(self.config.instrument_id)
-        self.unsubscribe_trade_ticks(self.config.instrument_id)
-        self.unsubscribe_order_book_deltas(self.config.instrument_id)
+        # self.unsubscribe_order_book_deltas(self.config.instrument_id)
         # self.unsubscribe_order_book_at_interval(self.config.instrument_id)
 
         # TODO: Only save if not already existing

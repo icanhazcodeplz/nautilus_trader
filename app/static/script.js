@@ -1,5 +1,9 @@
 import {
-    createChart, CandlestickSeries, HistogramSeries, LineSeries, createSeriesMarkers
+    CandlestickSeries,
+    createChart,
+    createSeriesMarkers,
+    HistogramSeries,
+    LineSeries
 } from "https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.mjs";
 
 function formatTime(time) {
@@ -29,7 +33,6 @@ function getChart() {
             },
             timeScale: {
                 borderColor: '#494d4a',
-                timeVisible: true,
             },
             layout: {
                 background: { color: "#050505" },
@@ -84,20 +87,14 @@ tickChart.applyOptions( {
         timeFormatter: formatTime,
     },
     timeScale: {
-        timeVisible: true,
         tickMarkFormatter: formatTime,
         minBarSpacing: 0.0001,
     },
 })
-const bidLineSeries = tickChart.addSeries(LineSeries, { color: 'rgba(38, 166, 154, 0.8)', lineWidth: 1, lineType:1});
-const askLineSeries = tickChart.addSeries(LineSeries, { color: 'rgba(239, 83, 80, 0.8)', lineWidth: 1, lineType:1});
-const priceLineSeries = tickChart.addSeries(LineSeries, { lineWidth: 3.5, lineType:0, pointMarkersVisible: true, pointMarkersRadius:3});
-
 
 const tenSecChart = getChart()
 tenSecChart.applyOptions( {
     timeScale: {
-        timeVisible: true,
         minBarSpacing: 0.08,
     },
 })
@@ -182,27 +179,25 @@ fetch('/api/data')
         }));
         macdSeries.setData(macdData);
 
-        const bidData = data.ticks.map(item => ({
-            time: item.time,
-            value: item.bid,
-        }));
-
-        const askData = data.ticks.map(item => ({
-            time: item.time,
-            value: item.ask,
-        }));
-
+        const priceLineSeries = tickChart.addSeries(LineSeries, { lineWidth: 3.5, lineType:0, pointMarkersVisible: true, pointMarkersRadius:3});
         const priceData = data.ticks.map(item => ({
             time: item.time,
             value: item.price,
             color: priceColor(item.size),
         }));
-        bidLineSeries.setData(bidData)
-        askLineSeries.setData(askData)
         priceLineSeries.setData(priceData)
 
-        createSeriesMarkers(bidLineSeries, data.bid_markers)
-        createSeriesMarkers(askLineSeries, data.ask_markers)
+        if (data.TickChartLines) {
+            data.TickChartLines.forEach(params => {
+                console.log('TickChartLines params:', params);
+                const lineSeries = tickChart.addSeries(LineSeries, { color: params.color, lineWidth: params.width, lineType:params.type, pointMarkersVisible: false});
+                lineSeries.setData(data.ticks.map(item => ({time: item.time, value: item[params.key]})))
+            })
+        }
+
+        createSeriesMarkers(priceLineSeries, data.bid_markers)
+        createSeriesMarkers(priceLineSeries, data.ask_markers)
+
 
         tickChart.timeScale().fitContent();
     });
