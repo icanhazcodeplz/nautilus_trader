@@ -88,11 +88,6 @@ def run_single_backtest(dataset_name, strategy_name, params, return_engine=False
     elif strategy_name == "momo":
         config = MomoConfig(
             instrument_id=test_instrument.id,
-
-
-            bar_type=BarType.from_str(f"{test_instrument.id}-1-MINUTE-LAST-INTERNAL"),
-            fast_ema_period=10,
-            slow_ema_period=20,
             **params
         )
         strategy = Momo(config=config)
@@ -114,9 +109,13 @@ if __name__ == "__main__":
 
     params = dict(
         trade_size = 100,
-        max_position_multiplier = 3,
-        stop_loss = 0.50,
-        take_profit = 0.50
+        max_position_multiplier = 1,
+        stop_loss = 0.30,
+        take_profit = 0.30,
+        take_ratio = 0.5,
+        vwap_window = 50,
+        vwap_buy_threshold = 0.25,
+        trailing_stop = True,
     )
 
     engine = run_single_backtest(dataset_name, strategy_name, params, return_engine=True, log_level=log_level)

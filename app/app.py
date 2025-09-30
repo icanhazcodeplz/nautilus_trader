@@ -51,10 +51,9 @@ def get_data():
         bid_markers=bid_markers,
         ask_markers=ask_markers,
         TickChartLines=[
-            dict(key='ask', color='#EF5350CC', width=1, type=1),
-            dict(key='bid', color='#26A69ACC', width=1, type=1),
-            dict(key='fast_ema', color='white', width=1, type=0),
-            dict(key='slow_ema', color='green', width=1, type=0)
+            # dict(key='ask', color='#EF5350CC', width=1, type=1),
+            # dict(key='bid', color='#26A69ACC', width=1, type=1),
+            dict(key='vwap', color='white', width=1, type=0),
         ]
     )
     return jsonify(records)

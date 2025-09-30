@@ -1,6 +1,7 @@
 from abc import abstractmethod
 from datetime import timedelta
 
+from custom import ENV
 from custom.app_utils.viz import write_to_metrics_txt_file
 from nautilus_trader.config import StrategyConfig
 from nautilus_trader.core.data import Data
@@ -61,15 +62,21 @@ class BaseStrategy(Strategy):
             new_limit_price = self.instrument.make_price(tick.price - 0.0)
 
             open_orders = self.submitted_or_open_orders(side=OrderSide.SELL)
-            remaining_qty_to_sell = self.position_qty
-            for order in open_orders:
-                order_qty = order.quantity
-                remaining_qty_to_sell -= order_qty
-                if order.price != new_limit_price:
-                    self.modify_order(order, quantity=order_qty, price=new_limit_price)
-                    # self.log.error(f"Modified order to {order_qty} @ {new_price}")
-            if remaining_qty_to_sell > 0:
-                self.sell(quantity=remaining_qty_to_sell, limit_price=new_limit_price, tag="s")
+
+            if ENV.LIVE:
+                remaining_qty_to_sell = self.position_qty
+                for order in open_orders:
+                    order_qty = order.quantity
+                    remaining_qty_to_sell -= order_qty
+                    if order.price != new_limit_price:
+                        self.modify_order(order, quantity=order_qty, price=new_limit_price)
+                        # self.log.error(f"Modified order to {order_qty} @ {new_price}")
+                if remaining_qty_to_sell > 0:
+                    self.sell(quantity=remaining_qty_to_sell, limit_price=new_limit_price, tag="s")
+            else:
+                self.cancel_all_orders(self.config.instrument_id)
+                self.sell(quantity=self.position_qty, limit_price=new_limit_price, tag="s")
+
 
     def _max_buy_qty_allowed(self):
         max_position_allowed = self.config.max_position_multiplier * self.config.trade_size

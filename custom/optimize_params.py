@@ -38,13 +38,18 @@ def _return_previous_trail_with_same_params(trial):
 
 
 def optimize(trial):
-    strategy_name = "random"
+    strategy_name = "momo"
 
     params = dict(
         trade_size=100,
-        max_position_multiplier=trial.suggest_int("max_position_multiplier", low=1, high=3, step=1),
-        stop_loss=trial.suggest_float("stop_loss", low=0.30, high=0.60, step=0.10),
-        take_profit=trial.suggest_float("take_profit", low=0.30, high=0.60, step=0.10),
+        # max_position_multiplier=trial.suggest_int("max_position_multiplier", low=1, high=3, step=1),
+        max_position_multiplier=2,
+        stop_loss=trial.suggest_float("stop_loss", low=0.25, high=0.45, step=0.05),
+        take_profit=trial.suggest_float("take_profit", low=0.25, high=0.35, step=0.02),
+        take_ratio=trial.suggest_float("take_ratio", low=0.8, high=1.0, step=0.10),
+        vwap_window=trial.suggest_int("vwap_window", low=40, high=50, step=5),
+        vwap_buy_threshold=trial.suggest_float("vwap_buy_threshold", low=0.10, high=0.30, step=0.05),
+        trailing_stop=trial.suggest_categorical("trailing_stop", [True, False]),
     )
 
     global _param_names
@@ -82,7 +87,7 @@ if __name__ == "__main__":
 
     delete_existing = True
     run_trials = True
-    total_trials = 20
+    total_trials = 100
 
     if delete_existing:
         try:

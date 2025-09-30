@@ -3,7 +3,7 @@ from pathlib import Path
 from custom.utils.load_catalog_data import BACKTESTING_CATALOG
 from custom.utils import data_subdir
 from custom.nt_extensions.tbbo_data import TBBOData
-from nautilus_trader import ENV
+from custom import ENV
 from nautilus_trader.adapters.databento import DatabentoDataLoader
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
 
@@ -101,6 +101,17 @@ DatabentoClient = _DatabentoClient()
 
 
 if __name__ == "__main__":
+    """
+    Candidates
+    9/30 - SPRC
+    9/29 - MSS, POAI
+    9/25 - SPRC, EVAX
+    9/24 - SHFS, TNFA
+    9/23 - SHFS (after hours), FLD
+    9/19 - ZOOZ, AGMH
+
+    """
+
     start_dt = pd.Timestamp("2025-07-23")
     end_dt = pd.Timestamp("2025-07-24")
     symbol = "PAPL"

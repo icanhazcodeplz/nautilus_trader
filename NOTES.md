@@ -44,6 +44,9 @@ python build.py
 - `python build.py` from root dir
 
 # TODO
+- FIXME: Fills do not consider other fills in same interval. 
+  - Forcibly combine orders if price the same?
+  - Adjust core logic?
 - Add integration tests
 - Optuna optimization
 - Move javascript to react project
