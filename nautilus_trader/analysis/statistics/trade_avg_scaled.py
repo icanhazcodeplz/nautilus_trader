@@ -12,7 +12,6 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 # -------------------------------------------------------------------------------------------------
-from statistics import mean
 from typing import Any
 
 from nautilus_trader.analysis.statistic import PortfolioStatistic
@@ -20,22 +19,33 @@ from nautilus_trader.model.position import Position
 from nautilus_trader.model.events import OrderFilled
 
 
-class AvgTradeScaled(PortfolioStatistic):
+class PnlPer100(PortfolioStatistic):
 
     def __init__(self, per_x_bought: int = 100):
         self.per_x_bought = per_x_bought
 
     def calculate_from_positions(self, positions: list[Position]) -> Any | None:
-        # Preconditions
         if not positions:
             return None
 
-        # Calculate statistic
-        pnl_per_x_bought = []
+        total_shares_bought = 0
+        total_pnl = 0
         for pos in positions:
-            pnl = pos.realized_pnl
+            total_pnl += pos.realized_pnl
             shares_bought = sum(e.last_qty for e in pos.events if isinstance(e, OrderFilled) and e.is_buy)
-            pnl_per_share = pnl / shares_bought * self.per_x_bought
-            pnl_per_x_bought.append(pnl_per_share)
+            total_shares_bought += shares_bought
 
-        return round(float(mean(pnl_per_x_bought)), 2)
+        return round(float(total_pnl / total_shares_bought) * 100, 3)
+
+class TotalBought(PortfolioStatistic):
+
+    def calculate_from_positions(self, positions: list[Position]) -> Any | None:
+        if not positions:
+            return None
+
+        total_shares_bought = 0
+        for pos in positions:
+            shares_bought = sum(e.last_qty for e in pos.events if isinstance(e, OrderFilled) and e.is_buy)
+            total_shares_bought += shares_bought
+
+        return int(total_shares_bought)

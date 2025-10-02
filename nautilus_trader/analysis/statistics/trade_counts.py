@@ -5,6 +5,13 @@ import pandas as pd
 from nautilus_trader.analysis.statistic import PortfolioStatistic
 
 
+class NumTrades(PortfolioStatistic):
+
+    def calculate_from_realized_pnls(self, realized_pnls: pd.Series) -> Any | None:
+        if realized_pnls is None or realized_pnls.empty:
+            return 0
+        return len(realized_pnls)
+
 class Winners(PortfolioStatistic):
 
     def calculate_from_realized_pnls(self, realized_pnls: pd.Series) -> Any | None:

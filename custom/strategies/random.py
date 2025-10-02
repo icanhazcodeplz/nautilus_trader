@@ -31,7 +31,7 @@ class Random(BaseStrategy):
 
     def _update_make_trade_at(self):
         return int(random() * 100) + 10
-        return 50
+        # return 50
 
     def _on_trade_tick(self, tick: TradeTick) -> None:
         price = tick.price

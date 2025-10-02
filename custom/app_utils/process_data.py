@@ -1,7 +1,7 @@
 from typing import Callable, List
 
 from custom.app_utils.viz import load_metrics_from_txt_file
-from custom.utils.load_catalog_data import get_tbbo
+from custom.utils.load_catalog_data import get_tbbo_for_viz
 
 
 def round_time_to_ms_and_increment_dup_times(list_of_data: list, data_to_dict_fn: Callable | None = None) -> List[dict]:
@@ -62,7 +62,7 @@ def _tbbo_to_dict(tbbo):
 
 
 def get_and_convert_tbbo():
-    data = get_tbbo()
+    data = get_tbbo_for_viz()
     return round_time_to_ms_and_increment_dup_times(data, _tbbo_to_dict)
 
 def get_metrics_data():

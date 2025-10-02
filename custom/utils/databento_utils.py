@@ -103,18 +103,27 @@ DatabentoClient = _DatabentoClient()
 if __name__ == "__main__":
     """
     Candidates
+    10/1 - PALI
+    10/1 - LAC
+    9/30 - LAC (after hours)
     9/30 - SPRC
-    9/29 - MSS, POAI
-    9/25 - SPRC, EVAX
-    9/24 - SHFS, TNFA
-    9/23 - SHFS (after hours), FLD
-    9/19 - ZOOZ, AGMH
+    9/29 - POAI
+    9/25 - SPRC
+    9/25 - EVAX
+    9/24 - TNFA
+    9/24 - SHFS
+    9/23 - SHFS (after hours)
+    9/23 - FLD
+    9/19 - ZOOZ
+    9/19 - AGMH
 
+    pulled already
+    9/29 MSS
     """
 
-    start_dt = pd.Timestamp("2025-07-23")
-    end_dt = pd.Timestamp("2025-07-24")
-    symbol = "PAPL"
+    start_dt = pd.Timestamp("2025-09-29", tz="America/New_York")
+    end_dt = start_dt + pd.Timedelta(days=1)
+    symbol = "MSS"
 
     # https://databento.com/docs/schemas-and-data-formats?historical=python&live=python&reference=python
     # schema = "trades"
@@ -127,10 +136,12 @@ if __name__ == "__main__":
 
     cost = DatabentoClient.check_data_cost(symbol, schema, start_dt, end_dt, dataset)
     # DatabentoClient.get_range_and_save(symbol, schema, start_dt, end_dt, dataset)
-    # df = DatabentoClient.load_data(symbol, schema, start_dt, end_dt)
+    df = DatabentoClient.load_data(symbol, schema, start_dt, end_dt)
     # DatabentoClient.save_tbbo_catalog(df)
-
-    DatabentoClient.load_and_save_to_catalog(symbol, schema, start_dt, end_dt)
+    # dfs = df[['ts_event', 'action', 'side', 'depth', 'price', 'size', 'ts_in_delta', 'bid_px_00', 'ask_px_00', 'bid_sz_00', 'ask_sz_00', 'bid_ct_00', 'ask_ct_00']]
+    df = df[df["action"] == "T"]
+    DatabentoClient.save_tbbo_catalog(df)
+    # DatabentoClient.load_and_save_to_catalog(symbol, schema, start_dt, end_dt)
     print()
 
 

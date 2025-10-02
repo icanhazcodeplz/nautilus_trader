@@ -1,3 +1,5 @@
+from random import random
+
 from nautilus_trader.backtest.models import FillModel
 from nautilus_trader.core.rust.model import BookType
 from nautilus_trader.core.rust.model import OrderSide
@@ -38,8 +40,11 @@ class LimitFillModel(FillModel):
 
         book = OrderBook(instrument_id=instrument.id, book_type=BookType.L2_MBP)
 
+        # Add randomness for fill probability
+        fill_at_last_trade = True if self.prob_fill_on_limit == 1.0 else self.prob_fill_on_limit > random()
+            
         # HARDCODE: only fill if last trade is 30% of order size
-        if last_trade.size > (order.quantity * 0.30):
+        if fill_at_last_trade and last_trade.size > (order.quantity * 0.30):
             # HARDCODE: fill at 50% of last trade size
             at_last_trade = int(last_trade.size * 0.50)
             book_side = OrderSide.SELL if order.side == OrderSide.BUY else OrderSide.BUY
