@@ -4530,6 +4530,52 @@ dependencies = [
 ]
 
 [[package]]
+name = "nautilus-alpaca"
+version = "0.51.0"
+dependencies = [
+ "ahash 0.8.12",
+ "anyhow",
+ "async-stream",
+ "async-trait",
+ "aws-lc-rs",
+ "axum",
+ "base64",
+ "chrono",
+ "criterion",
+ "dashmap",
+ "derive_builder",
+ "futures-util",
+ "indexmap 2.11.4",
+ "log",
+ "nautilus-common",
+ "nautilus-core",
+ "nautilus-data",
+ "nautilus-execution",
+ "nautilus-model",
+ "nautilus-network",
+ "nautilus-testkit",
+ "pyo3",
+ "pyo3-async-runtimes",
+ "reqwest",
+ "rstest",
+ "rust_decimal",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "strum 0.27.2",
+ "thiserror 2.0.16",
+ "tokio",
+ "tokio-tungstenite 0.27.0",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "tracing-test",
+ "url",
+ "ustr",
+ "zeroize",
+]
+
+[[package]]
 name = "nautilus-analysis"
 version = "0.51.0"
 dependencies = [
@@ -5200,6 +5246,7 @@ dependencies = [
 name = "nautilus-pyo3"
 version = "0.51.0"
 dependencies = [
+ "nautilus-alpaca",
  "nautilus-bitmex",
  "nautilus-blockchain",
  "nautilus-bybit",

@@ -1,0 +1,2010 @@
+// -------------------------------------------------------------------------------------------------
+//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  https://nautechsystems.io
+//
+//  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
+//  You may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at https://www.gnu.org/licenses/lgpl-3.0.en.html
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+// -------------------------------------------------------------------------------------------------
+
+//! Functions translating raw ALPACA WebSocket frames into Nautilus data types.
+
+use ahash::AHashMap;
+use nautilus_core::nanos::UnixNanos;
+use nautilus_model::{
+    data::{
+        Bar, BarSpecification, BarType, BookOrder, Data, FundingRateUpdate, IndexPriceUpdate,
+        MarkPriceUpdate, OrderBookDelta, OrderBookDeltas, OrderBookDeltas_API, OrderBookDepth10,
+        QuoteTick, TradeTick, depth::DEPTH10_LEN,
+    },
+    enums::{
+        AggregationSource, AggressorSide, BookAction, LiquiditySide, OrderSide, OrderStatus,
+        OrderType, RecordFlag, TimeInForce, TriggerType,
+    },
+    identifiers::{AccountId, InstrumentId, TradeId, VenueOrderId},
+    instruments::{Instrument, InstrumentAny},
+    reports::{FillReport, OrderStatusReport},
+    types::{Currency, Money, Price, Quantity},
+};
+use ustr::Ustr;
+
+use super::{
+    enums::ALPACAWsChannel,
+    messages::{
+        ALPACAAlgoOrderMsg, ALPACABookMsg, ALPACACandleMsg, ALPACAIndexPriceMsg, ALPACAMarkPriceMsg, ALPACAOrderMsg,
+        ALPACATickerMsg, ALPACATradeMsg, OrderBookEntry,
+    },
+};
+use crate::{
+    common::{
+        consts::{ALPACA_POST_ONLY_CANCEL_REASON, ALPACA_POST_ONLY_CANCEL_SOURCE},
+        enums::{ALPACABookAction, ALPACACandleConfirm, ALPACAOrderStatus, ALPACAOrderType, ALPACATriggerType},
+        models::ALPACAInstrument,
+        parse::{
+            alpaca_channel_to_bar_spec, parse_client_order_id, parse_fee, parse_funding_rate_msg,
+            parse_instrument_any, parse_message_vec, parse_millisecond_timestamp, parse_price,
+            parse_quantity,
+        },
+    },
+    websocket::messages::{ExecutionReport, NautilusWsMessage, ALPACAFundingRateMsg},
+};
+
+/// Parses vector of ALPACA book messages into Nautilus order book deltas.
+pub fn parse_book_msg_vec(
+    data: Vec<ALPACABookMsg>,
+    instrument_id: &InstrumentId,
+    price_precision: u8,
+    size_precision: u8,
+    action: ALPACABookAction,
+    ts_init: UnixNanos,
+) -> anyhow::Result<Vec<Data>> {
+    let mut deltas = Vec::with_capacity(data.len());
+
+    for msg in data {
+        let deltas_api = OrderBookDeltas_API::new(parse_book_msg(
+            &msg,
+            *instrument_id,
+            price_precision,
+            size_precision,
+            &action,
+            ts_init,
+        )?);
+        deltas.push(Data::Deltas(deltas_api));
+    }
+
+    Ok(deltas)
+}
+
+/// Parses vector of ALPACA ticker messages into Nautilus quote ticks.
+pub fn parse_ticker_msg_vec(
+    data: serde_json::Value,
+    instrument_id: &InstrumentId,
+    price_precision: u8,
+    size_precision: u8,
+    ts_init: UnixNanos,
+) -> anyhow::Result<Vec<Data>> {
+    parse_message_vec(
+        data,
+        |msg| {
+            parse_ticker_msg(
+                msg,
+                *instrument_id,
+                price_precision,
+                size_precision,
+                ts_init,
+            )
+        },
+        Data::Quote,
+    )
+}
+
+/// Parses vector of ALPACA book messages into Nautilus quote ticks.
+pub fn parse_quote_msg_vec(
+    data: serde_json::Value,
+    instrument_id: &InstrumentId,
+    price_precision: u8,
+    size_precision: u8,
+    ts_init: UnixNanos,
+) -> anyhow::Result<Vec<Data>> {
+    parse_message_vec(
+        data,
+        |msg| {
+            parse_quote_msg(
+                msg,
+                *instrument_id,
+                price_precision,
+                size_precision,
+                ts_init,
+            )
+        },
+        Data::Quote,
+    )
+}
+
+/// Parses vector of ALPACA trade messages into Nautilus trade ticks.
+pub fn parse_trade_msg_vec(
+    data: serde_json::Value,
+    instrument_id: &InstrumentId,
+    price_precision: u8,
+    size_precision: u8,
+    ts_init: UnixNanos,
+) -> anyhow::Result<Vec<Data>> {
+    parse_message_vec(
+        data,
+        |msg| {
+            parse_trade_msg(
+                msg,
+                *instrument_id,
+                price_precision,
+                size_precision,
+                ts_init,
+            )
+        },
+        Data::Trade,
+    )
+}
+
+/// Parses vector of ALPACA mark price messages into Nautilus mark price updates.
+pub fn parse_mark_price_msg_vec(
+    data: serde_json::Value,
+    instrument_id: &InstrumentId,
+    price_precision: u8,
+    ts_init: UnixNanos,
+) -> anyhow::Result<Vec<Data>> {
+    parse_message_vec(
+        data,
+        |msg| parse_mark_price_msg(msg, *instrument_id, price_precision, ts_init),
+        Data::MarkPriceUpdate,
+    )
+}
+
+/// Parses vector of ALPACA index price messages into Nautilus index price updates.
+pub fn parse_index_price_msg_vec(
+    data: serde_json::Value,
+    instrument_id: &InstrumentId,
+    price_precision: u8,
+    ts_init: UnixNanos,
+) -> anyhow::Result<Vec<Data>> {
+    parse_message_vec(
+        data,
+        |msg| parse_index_price_msg(msg, *instrument_id, price_precision, ts_init),
+        Data::IndexPriceUpdate,
+    )
+}
+
+/// Parses vector of ALPACA funding rate messages into Nautilus funding rate updates.
+/// Includes caching to filter out duplicate funding rates.
+pub fn parse_funding_rate_msg_vec(
+    data: serde_json::Value,
+    instrument_id: &InstrumentId,
+    ts_init: UnixNanos,
+    funding_cache: &mut AHashMap<Ustr, (Ustr, u64)>,
+) -> anyhow::Result<Vec<FundingRateUpdate>> {
+    let msgs: Vec<ALPACAFundingRateMsg> = serde_json::from_value(data)?;
+
+    let mut result = Vec::with_capacity(msgs.len());
+    for msg in &msgs {
+        let cache_key = (msg.funding_rate, msg.funding_time);
+
+        if let Some(cached) = funding_cache.get(&msg.inst_id)
+            && *cached == cache_key
+        {
+            continue; // Skip duplicate
+        }
+
+        // New or changed funding rate, update cache and parse
+        funding_cache.insert(msg.inst_id, cache_key);
+        let funding_rate = parse_funding_rate_msg(msg, *instrument_id, ts_init)?;
+        result.push(funding_rate);
+    }
+
+    Ok(result)
+}
+
+/// Parses vector of ALPACA candle messages into Nautilus bars.
+pub fn parse_candle_msg_vec(
+    data: serde_json::Value,
+    instrument_id: &InstrumentId,
+    price_precision: u8,
+    size_precision: u8,
+    spec: BarSpecification,
+    ts_init: UnixNanos,
+) -> anyhow::Result<Vec<Data>> {
+    let msgs: Vec<ALPACACandleMsg> = serde_json::from_value(data)?;
+    let bar_type = BarType::new(*instrument_id, spec, AggregationSource::External);
+    let mut bars = Vec::with_capacity(msgs.len());
+
+    for msg in msgs {
+        // Only process completed candles to avoid duplicate/partial bars
+        if msg.confirm == ALPACACandleConfirm::Closed {
+            let bar = parse_candle_msg(&msg, bar_type, price_precision, size_precision, ts_init)?;
+            bars.push(Data::Bar(bar));
+        }
+    }
+
+    Ok(bars)
+}
+
+/// Parses vector of ALPACA book messages into Nautilus depth10 updates.
+pub fn parse_book10_msg_vec(
+    data: Vec<ALPACABookMsg>,
+    instrument_id: &InstrumentId,
+    price_precision: u8,
+    size_precision: u8,
+    ts_init: UnixNanos,
+) -> anyhow::Result<Vec<Data>> {
+    let mut depth10_updates = Vec::with_capacity(data.len());
+
+    for msg in data {
+        let depth10 = parse_book10_msg(
+            &msg,
+            *instrument_id,
+            price_precision,
+            size_precision,
+            ts_init,
+        )?;
+        depth10_updates.push(Data::Depth10(Box::new(depth10)));
+    }
+
+    Ok(depth10_updates)
+}
+
+/// Parses an ALPACA book message into Nautilus order book deltas.
+pub fn parse_book_msg(
+    msg: &ALPACABookMsg,
+    instrument_id: InstrumentId,
+    price_precision: u8,
+    size_precision: u8,
+    action: &ALPACABookAction,
+    ts_init: UnixNanos,
+) -> anyhow::Result<OrderBookDeltas> {
+    let flags = if action == &ALPACABookAction::Snapshot {
+        RecordFlag::F_SNAPSHOT as u8
+    } else {
+        0
+    };
+    let ts_event = parse_millisecond_timestamp(msg.ts);
+
+    let mut deltas = Vec::with_capacity(msg.asks.len() + msg.bids.len());
+
+    for bid in &msg.bids {
+        let book_action = match action {
+            ALPACABookAction::Snapshot => BookAction::Add,
+            _ => match bid.size.as_str() {
+                "0" => BookAction::Delete,
+                _ => BookAction::Update,
+            },
+        };
+        let price = parse_price(&bid.price, price_precision)?;
+        let size = parse_quantity(&bid.size, size_precision)?;
+        let order_id = 0; // TBD
+        let order = BookOrder::new(OrderSide::Buy, price, size, order_id);
+        let delta = OrderBookDelta::new(
+            instrument_id,
+            book_action,
+            order,
+            flags,
+            msg.seq_id,
+            ts_event,
+            ts_init,
+        );
+        deltas.push(delta)
+    }
+
+    for ask in &msg.asks {
+        let book_action = match action {
+            ALPACABookAction::Snapshot => BookAction::Add,
+            _ => match ask.size.as_str() {
+                "0" => BookAction::Delete,
+                _ => BookAction::Update,
+            },
+        };
+        let price = parse_price(&ask.price, price_precision)?;
+        let size = parse_quantity(&ask.size, size_precision)?;
+        let order_id = 0; // TBD
+        let order = BookOrder::new(OrderSide::Sell, price, size, order_id);
+        let delta = OrderBookDelta::new(
+            instrument_id,
+            book_action,
+            order,
+            flags,
+            msg.seq_id,
+            ts_event,
+            ts_init,
+        );
+        deltas.push(delta)
+    }
+
+    OrderBookDeltas::new_checked(instrument_id, deltas)
+}
+
+/// Parses an ALPACA book message into a Nautilus quote tick.
+pub fn parse_quote_msg(
+    msg: &ALPACABookMsg,
+    instrument_id: InstrumentId,
+    price_precision: u8,
+    size_precision: u8,
+    ts_init: UnixNanos,
+) -> anyhow::Result<QuoteTick> {
+    let best_bid: &OrderBookEntry = &msg.bids[0];
+    let best_ask: &OrderBookEntry = &msg.asks[0];
+
+    let bid_price = parse_price(&best_bid.price, price_precision)?;
+    let ask_price = parse_price(&best_ask.price, price_precision)?;
+    let bid_size = parse_quantity(&best_bid.size, size_precision)?;
+    let ask_size = parse_quantity(&best_ask.size, size_precision)?;
+    let ts_event = parse_millisecond_timestamp(msg.ts);
+
+    QuoteTick::new_checked(
+        instrument_id,
+        bid_price,
+        ask_price,
+        bid_size,
+        ask_size,
+        ts_event,
+        ts_init,
+    )
+}
+
+/// Parses an ALPACA book message into a Nautilus [`OrderBookDepth10`].
+///
+/// Converts order book data into a fixed-depth snapshot with top 10 levels for both sides.
+pub fn parse_book10_msg(
+    msg: &ALPACABookMsg,
+    instrument_id: InstrumentId,
+    price_precision: u8,
+    size_precision: u8,
+    ts_init: UnixNanos,
+) -> anyhow::Result<OrderBookDepth10> {
+    // Initialize arrays - need to fill all 10 levels even if we have fewer
+    let mut bids: [BookOrder; DEPTH10_LEN] = [BookOrder::default(); DEPTH10_LEN];
+    let mut asks: [BookOrder; DEPTH10_LEN] = [BookOrder::default(); DEPTH10_LEN];
+    let mut bid_counts: [u32; DEPTH10_LEN] = [0; DEPTH10_LEN];
+    let mut ask_counts: [u32; DEPTH10_LEN] = [0; DEPTH10_LEN];
+
+    // Parse available bid levels (up to 10)
+    let bid_len = msg.bids.len().min(DEPTH10_LEN);
+    for (i, level) in msg.bids.iter().take(DEPTH10_LEN).enumerate() {
+        let price = parse_price(&level.price, price_precision)?;
+        let size = parse_quantity(&level.size, size_precision)?;
+        let orders_count = level.orders_count.parse::<u32>().unwrap_or(1);
+
+        let bid_order = BookOrder::new(OrderSide::Buy, price, size, 0);
+        bids[i] = bid_order;
+        bid_counts[i] = orders_count;
+    }
+
+    // Fill remaining bid slots with empty Buy orders (not NULL orders)
+    for i in bid_len..DEPTH10_LEN {
+        bids[i] = BookOrder::new(
+            OrderSide::Buy,
+            Price::zero(price_precision),
+            Quantity::zero(size_precision),
+            0,
+        );
+        bid_counts[i] = 0;
+    }
+
+    // Parse available ask levels (up to 10)
+    let ask_len = msg.asks.len().min(DEPTH10_LEN);
+    for (i, level) in msg.asks.iter().take(DEPTH10_LEN).enumerate() {
+        let price = parse_price(&level.price, price_precision)?;
+        let size = parse_quantity(&level.size, size_precision)?;
+        let orders_count = level.orders_count.parse::<u32>().unwrap_or(1);
+
+        let ask_order = BookOrder::new(OrderSide::Sell, price, size, 0);
+        asks[i] = ask_order;
+        ask_counts[i] = orders_count;
+    }
+
+    // Fill remaining ask slots with empty Sell orders (not NULL orders)
+    for i in ask_len..DEPTH10_LEN {
+        asks[i] = BookOrder::new(
+            OrderSide::Sell,
+            Price::zero(price_precision),
+            Quantity::zero(size_precision),
+            0,
+        );
+        ask_counts[i] = 0;
+    }
+
+    let ts_event = parse_millisecond_timestamp(msg.ts);
+
+    Ok(OrderBookDepth10::new(
+        instrument_id,
+        bids,
+        asks,
+        bid_counts,
+        ask_counts,
+        RecordFlag::F_SNAPSHOT as u8,
+        msg.seq_id, // Use sequence ID for ALPACA L2 books
+        ts_event,
+        ts_init,
+    ))
+}
+
+/// Parses an ALPACA ticker message into a Nautilus quote tick.
+pub fn parse_ticker_msg(
+    msg: &ALPACATickerMsg,
+    instrument_id: InstrumentId,
+    price_precision: u8,
+    size_precision: u8,
+    ts_init: UnixNanos,
+) -> anyhow::Result<QuoteTick> {
+    let bid_price = parse_price(&msg.bid_px, price_precision)?;
+    let ask_price = parse_price(&msg.ask_px, price_precision)?;
+    let bid_size = parse_quantity(&msg.bid_sz, size_precision)?;
+    let ask_size = parse_quantity(&msg.ask_sz, size_precision)?;
+    let ts_event = parse_millisecond_timestamp(msg.ts);
+
+    QuoteTick::new_checked(
+        instrument_id,
+        bid_price,
+        ask_price,
+        bid_size,
+        ask_size,
+        ts_event,
+        ts_init,
+    )
+}
+
+/// Parses an ALPACA trade message into a Nautilus trade tick.
+pub fn parse_trade_msg(
+    msg: &ALPACATradeMsg,
+    instrument_id: InstrumentId,
+    price_precision: u8,
+    size_precision: u8,
+    ts_init: UnixNanos,
+) -> anyhow::Result<TradeTick> {
+    let price = parse_price(&msg.px, price_precision)?;
+    let size = parse_quantity(&msg.sz, size_precision)?;
+    let aggressor_side: AggressorSide = msg.side.into();
+    let trade_id = TradeId::new(&msg.trade_id);
+    let ts_event = parse_millisecond_timestamp(msg.ts);
+
+    TradeTick::new_checked(
+        instrument_id,
+        price,
+        size,
+        aggressor_side,
+        trade_id,
+        ts_event,
+        ts_init,
+    )
+}
+
+/// Parses an ALPACA mark price message into a Nautilus mark price update.
+pub fn parse_mark_price_msg(
+    msg: &ALPACAMarkPriceMsg,
+    instrument_id: InstrumentId,
+    price_precision: u8,
+    ts_init: UnixNanos,
+) -> anyhow::Result<MarkPriceUpdate> {
+    let price = parse_price(&msg.mark_px, price_precision)?;
+    let ts_event = parse_millisecond_timestamp(msg.ts);
+
+    Ok(MarkPriceUpdate::new(
+        instrument_id,
+        price,
+        ts_event,
+        ts_init,
+    ))
+}
+
+/// Parses an ALPACA index price message into a Nautilus index price update.
+pub fn parse_index_price_msg(
+    msg: &ALPACAIndexPriceMsg,
+    instrument_id: InstrumentId,
+    price_precision: u8,
+    ts_init: UnixNanos,
+) -> anyhow::Result<IndexPriceUpdate> {
+    let price = parse_price(&msg.idx_px, price_precision)?;
+    let ts_event = parse_millisecond_timestamp(msg.ts);
+
+    Ok(IndexPriceUpdate::new(
+        instrument_id,
+        price,
+        ts_event,
+        ts_init,
+    ))
+}
+
+/// Parses an ALPACA candle message into a Nautilus bar.
+pub fn parse_candle_msg(
+    msg: &ALPACACandleMsg,
+    bar_type: BarType,
+    price_precision: u8,
+    size_precision: u8,
+    ts_init: UnixNanos,
+) -> anyhow::Result<Bar> {
+    let open = parse_price(&msg.o, price_precision)?;
+    let high = parse_price(&msg.h, price_precision)?;
+    let low = parse_price(&msg.l, price_precision)?;
+    let close = parse_price(&msg.c, price_precision)?;
+    let volume = parse_quantity(&msg.vol, size_precision)?;
+    let ts_event = parse_millisecond_timestamp(msg.ts);
+
+    Bar::new_checked(bar_type, open, high, low, close, volume, ts_event, ts_init)
+}
+
+/// Parses vector of ALPACA order messages into Nautilus execution reports.
+pub fn parse_order_msg_vec(
+    data: Vec<ALPACAOrderMsg>,
+    account_id: AccountId,
+    instruments: &AHashMap<Ustr, InstrumentAny>,
+    fee_cache: &AHashMap<Ustr, Money>,
+    ts_init: UnixNanos,
+) -> anyhow::Result<Vec<ExecutionReport>> {
+    let mut order_reports = Vec::with_capacity(data.len());
+
+    for msg in data {
+        let inst = instruments
+            .get(&msg.inst_id)
+            .ok_or_else(|| anyhow::anyhow!("No instrument found for inst_id: {}", msg.inst_id))?;
+
+        let previous_fee = fee_cache.get(&msg.ord_id).copied();
+
+        let result = match &msg.state {
+            ALPACAOrderStatus::Filled | ALPACAOrderStatus::PartiallyFilled => {
+                parse_fill_report(&msg, inst, account_id, previous_fee, ts_init)
+                    .map(ExecutionReport::Fill)
+            }
+            _ => parse_order_status_report(&msg, inst, account_id, ts_init)
+                .map(ExecutionReport::Order),
+        };
+
+        match result {
+            Ok(report) => order_reports.push(report),
+            Err(e) => tracing::error!("Failed to parse execution report from message: {e}"),
+        }
+    }
+
+    Ok(order_reports)
+}
+
+/// Parses an ALPACA algo order message into a Nautilus execution report.
+pub fn parse_algo_order_msg(
+    msg: ALPACAAlgoOrderMsg,
+    account_id: AccountId,
+    instruments: &AHashMap<Ustr, InstrumentAny>,
+    ts_init: UnixNanos,
+) -> anyhow::Result<ExecutionReport> {
+    let inst = instruments
+        .get(&msg.inst_id)
+        .ok_or_else(|| anyhow::anyhow!("No instrument found for inst_id: {}", msg.inst_id))?;
+
+    // Algo orders primarily return status reports (not fills since they haven't been triggered yet)
+    parse_algo_order_status_report(&msg, inst, account_id, ts_init).map(ExecutionReport::Order)
+}
+
+/// Parses an ALPACA algo order message into a Nautilus order status report.
+pub fn parse_algo_order_status_report(
+    msg: &ALPACAAlgoOrderMsg,
+    instrument: &InstrumentAny,
+    account_id: AccountId,
+    ts_init: UnixNanos,
+) -> anyhow::Result<OrderStatusReport> {
+    // For algo orders, use algo_cl_ord_id if cl_ord_id is empty
+    let client_order_id = if msg.cl_ord_id.is_empty() {
+        parse_client_order_id(&msg.algo_cl_ord_id)
+    } else {
+        parse_client_order_id(&msg.cl_ord_id)
+    };
+
+    // For algo orders that haven't triggered, ord_id will be empty, use algo_id instead
+    let venue_order_id = if msg.ord_id.is_empty() {
+        VenueOrderId::new(msg.algo_id.as_str())
+    } else {
+        VenueOrderId::new(msg.ord_id.as_str())
+    };
+
+    let order_side: OrderSide = msg.side.into();
+
+    // Determine order type based on ord_px for conditional/stop orders
+    let order_type = if msg.ord_px == "-1" {
+        OrderType::StopMarket
+    } else {
+        OrderType::StopLimit
+    };
+
+    let status: OrderStatus = msg.state.into();
+
+    let quantity = parse_quantity(msg.sz.as_str(), instrument.size_precision())?;
+
+    // For algo orders, actual_sz represents filled quantity (if any)
+    let filled_qty = if msg.actual_sz.is_empty() || msg.actual_sz == "0" {
+        Quantity::zero(instrument.size_precision())
+    } else {
+        parse_quantity(msg.actual_sz.as_str(), instrument.size_precision())?
+    };
+
+    let trigger_px = parse_price(msg.trigger_px.as_str(), instrument.price_precision())?;
+
+    // Parse limit price if it exists (not -1)
+    let price = if msg.ord_px != "-1" {
+        Some(parse_price(
+            msg.ord_px.as_str(),
+            instrument.price_precision(),
+        )?)
+    } else {
+        None
+    };
+
+    let trigger_type = match msg.trigger_px_type {
+        ALPACATriggerType::Last => TriggerType::LastPrice,
+        ALPACATriggerType::Mark => TriggerType::MarkPrice,
+        ALPACATriggerType::Index => TriggerType::IndexPrice,
+        ALPACATriggerType::None => TriggerType::Default,
+    };
+
+    let mut report = OrderStatusReport::new(
+        account_id,
+        instrument.id(),
+        client_order_id,
+        venue_order_id,
+        order_side,
+        order_type,
+        TimeInForce::Gtc, // Algo orders are typically GTC
+        status,
+        quantity,
+        filled_qty,
+        msg.c_time.into(), // ts_accepted
+        msg.u_time.into(), // ts_last
+        ts_init,
+        None, // report_id - auto-generated
+    );
+
+    report.trigger_price = Some(trigger_px);
+    report.trigger_type = Some(trigger_type);
+
+    if let Some(limit_price) = price {
+        report.price = Some(limit_price);
+    }
+
+    Ok(report)
+}
+
+/// Parses an ALPACA order message into a Nautilus order status report.
+pub fn parse_order_status_report(
+    msg: &ALPACAOrderMsg,
+    instrument: &InstrumentAny,
+    account_id: AccountId,
+    ts_init: UnixNanos,
+) -> anyhow::Result<OrderStatusReport> {
+    let client_order_id = parse_client_order_id(&msg.cl_ord_id);
+    let venue_order_id = VenueOrderId::new(msg.ord_id);
+    let order_side: OrderSide = msg.side.into();
+
+    let alpaca_order_type = msg.ord_type;
+    // For Trigger orders that come through regular orders channel (after being triggered),
+    // we determine the type based on whether they have a price
+    let order_type = if alpaca_order_type == ALPACAOrderType::Trigger {
+        if msg.px.is_empty() || msg.px == "0" {
+            OrderType::StopMarket
+        } else {
+            OrderType::StopLimit
+        }
+    } else {
+        msg.ord_type.into()
+    };
+    let order_status: OrderStatus = msg.state.into();
+
+    let time_in_force = match alpaca_order_type {
+        ALPACAOrderType::Fok => TimeInForce::Fok,
+        ALPACAOrderType::Ioc | ALPACAOrderType::OptimalLimitIoc => TimeInForce::Ioc,
+        _ => TimeInForce::Gtc,
+    };
+
+    let size_precision = instrument.size_precision();
+    let quantity = parse_quantity(&msg.sz, size_precision)?;
+    let filled_qty = parse_quantity(&msg.acc_fill_sz.clone().unwrap_or_default(), size_precision)?;
+
+    let ts_accepted = parse_millisecond_timestamp(msg.c_time);
+    let ts_last = parse_millisecond_timestamp(msg.u_time);
+
+    let mut report = OrderStatusReport::new(
+        account_id,
+        instrument.id(),
+        client_order_id,
+        venue_order_id,
+        order_side,
+        order_type,
+        time_in_force,
+        order_status,
+        quantity,
+        filled_qty,
+        ts_accepted,
+        ts_init,
+        ts_last,
+        None, // Generate UUID4 automatically
+    );
+
+    let price_precision = instrument.price_precision();
+
+    if alpaca_order_type == ALPACAOrderType::Trigger {
+        // For triggered orders coming through regular orders channel,
+        // set the price if it's a stop-limit order
+        if !msg.px.is_empty()
+            && msg.px != "0"
+            && let Ok(price) = parse_price(&msg.px, price_precision)
+        {
+            report = report.with_price(price);
+        }
+    } else {
+        // For regular orders, use px field
+        if !msg.px.is_empty()
+            && let Ok(price) = parse_price(&msg.px, price_precision)
+        {
+            report = report.with_price(price);
+        }
+    }
+
+    if !msg.avg_px.is_empty()
+        && let Ok(avg_px) = msg.avg_px.parse::<f64>()
+    {
+        report = report.with_avg_px(avg_px);
+    }
+
+    if matches!(
+        msg.ord_type,
+        ALPACAOrderType::PostOnly | ALPACAOrderType::MmpAndPostOnly
+    ) || matches!(
+        msg.cancel_source.as_deref(),
+        Some(source) if source == ALPACA_POST_ONLY_CANCEL_SOURCE
+    ) || matches!(
+        msg.cancel_source_reason.as_deref(),
+        Some(reason) if reason.contains("POST_ONLY")
+    ) {
+        report = report.with_post_only(true);
+    }
+
+    if msg.reduce_only == "true" {
+        report = report.with_reduce_only(true);
+    }
+
+    if let Some(reason) = msg
+        .cancel_source_reason
+        .as_ref()
+        .filter(|reason| !reason.is_empty())
+    {
+        report = report.with_cancel_reason(reason.clone());
+    } else if let Some(source) = msg
+        .cancel_source
+        .as_ref()
+        .filter(|source| !source.is_empty())
+    {
+        let reason = if source == ALPACA_POST_ONLY_CANCEL_SOURCE {
+            ALPACA_POST_ONLY_CANCEL_REASON.to_string()
+        } else {
+            format!("cancel_source={source}")
+        };
+        report = report.with_cancel_reason(reason);
+    }
+
+    Ok(report)
+}
+
+/// Parses an ALPACA order message into a Nautilus fill report.
+pub fn parse_fill_report(
+    msg: &ALPACAOrderMsg,
+    instrument: &InstrumentAny,
+    account_id: AccountId,
+    previous_fee: Option<Money>,
+    ts_init: UnixNanos,
+) -> anyhow::Result<FillReport> {
+    let client_order_id = parse_client_order_id(&msg.cl_ord_id);
+    let venue_order_id = VenueOrderId::new(msg.ord_id);
+    let trade_id = TradeId::from(msg.trade_id.as_str());
+    let order_side: OrderSide = msg.side.into();
+
+    let price_precision = instrument.price_precision();
+    let size_precision = instrument.size_precision();
+    let last_px = parse_price(&msg.fill_px, price_precision)?;
+    let last_qty = parse_quantity(&msg.fill_sz, size_precision)?;
+
+    let fee_currency = Currency::from(&msg.fee_ccy);
+    let total_fee = parse_fee(msg.fee.as_deref(), fee_currency)?;
+    let commission = if let Some(previous_fee) = previous_fee {
+        total_fee - previous_fee
+    } else {
+        total_fee
+    };
+
+    let liquidity_side: LiquiditySide = msg.exec_type.into();
+    let ts_event = parse_millisecond_timestamp(msg.fill_time);
+
+    let report = FillReport::new(
+        account_id,
+        instrument.id(),
+        venue_order_id,
+        trade_id,
+        order_side,
+        last_qty,
+        last_px,
+        commission,
+        liquidity_side,
+        client_order_id,
+        None,
+        ts_event,
+        ts_init,
+        None, // Generate UUID4 automatically
+    );
+
+    Ok(report)
+}
+
+/// Parses ALPACA WebSocket message payloads into Nautilus data structures.
+///
+/// # Panics
+///
+/// Panics only in the case where `alpaca_channel_to_bar_spec(channel)` returns
+/// `None` after a prior `is_some` check – an unreachable scenario indicating a
+/// logic error.
+pub fn parse_ws_message_data(
+    channel: &ALPACAWsChannel,
+    data: serde_json::Value,
+    instrument_id: &InstrumentId,
+    price_precision: u8,
+    size_precision: u8,
+    ts_init: UnixNanos,
+    funding_cache: &mut AHashMap<Ustr, (Ustr, u64)>,
+) -> anyhow::Result<Option<NautilusWsMessage>> {
+    match channel {
+        ALPACAWsChannel::Instruments => {
+            if let Ok(msg) = serde_json::from_value::<ALPACAInstrument>(data) {
+                match parse_instrument_any(&msg, ts_init)? {
+                    Some(inst_any) => Ok(Some(NautilusWsMessage::Instrument(Box::new(inst_any)))),
+                    None => {
+                        tracing::warn!("Empty instrument payload: {:?}", msg);
+                        Ok(None)
+                    }
+                }
+            } else {
+                anyhow::bail!("Failed to deserialize instrument payload")
+            }
+        }
+        ALPACAWsChannel::BboTbt => {
+            let data_vec = parse_quote_msg_vec(
+                data,
+                instrument_id,
+                price_precision,
+                size_precision,
+                ts_init,
+            )?;
+            Ok(Some(NautilusWsMessage::Data(data_vec)))
+        }
+        ALPACAWsChannel::Tickers => {
+            let data_vec = parse_ticker_msg_vec(
+                data,
+                instrument_id,
+                price_precision,
+                size_precision,
+                ts_init,
+            )?;
+            Ok(Some(NautilusWsMessage::Data(data_vec)))
+        }
+        ALPACAWsChannel::Trades => {
+            let data_vec = parse_trade_msg_vec(
+                data,
+                instrument_id,
+                price_precision,
+                size_precision,
+                ts_init,
+            )?;
+            Ok(Some(NautilusWsMessage::Data(data_vec)))
+        }
+        ALPACAWsChannel::MarkPrice => {
+            let data_vec = parse_mark_price_msg_vec(data, instrument_id, price_precision, ts_init)?;
+            Ok(Some(NautilusWsMessage::Data(data_vec)))
+        }
+        ALPACAWsChannel::IndexTickers => {
+            let data_vec =
+                parse_index_price_msg_vec(data, instrument_id, price_precision, ts_init)?;
+            Ok(Some(NautilusWsMessage::Data(data_vec)))
+        }
+        ALPACAWsChannel::FundingRate => {
+            let data_vec = parse_funding_rate_msg_vec(data, instrument_id, ts_init, funding_cache)?;
+            Ok(Some(NautilusWsMessage::FundingRates(data_vec)))
+        }
+        channel if alpaca_channel_to_bar_spec(channel).is_some() => {
+            let bar_spec = alpaca_channel_to_bar_spec(channel).expect("bar_spec checked above");
+            let data_vec = parse_candle_msg_vec(
+                data,
+                instrument_id,
+                price_precision,
+                size_precision,
+                bar_spec,
+                ts_init,
+            )?;
+            Ok(Some(NautilusWsMessage::Data(data_vec)))
+        }
+        ALPACAWsChannel::Books
+        | ALPACAWsChannel::BooksTbt
+        | ALPACAWsChannel::Books5
+        | ALPACAWsChannel::Books50Tbt => {
+            if let Ok(book_msgs) = serde_json::from_value::<Vec<ALPACABookMsg>>(data) {
+                let data_vec = parse_book10_msg_vec(
+                    book_msgs,
+                    instrument_id,
+                    price_precision,
+                    size_precision,
+                    ts_init,
+                )?;
+                Ok(Some(NautilusWsMessage::Data(data_vec)))
+            } else {
+                anyhow::bail!("Failed to deserialize Books channel data as Vec<ALPACABookMsg>")
+            }
+        }
+        _ => {
+            tracing::warn!("Unsupported channel for message parsing: {channel:?}");
+            Ok(None)
+        }
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Tests
+////////////////////////////////////////////////////////////////////////////////
+#[cfg(test)]
+mod tests {
+    use ahash::AHashMap;
+    use nautilus_core::nanos::UnixNanos;
+    use nautilus_model::{
+        data::bar::BAR_SPEC_1_DAY_LAST,
+        enums::AggressorSide,
+        identifiers::{ClientOrderId, InstrumentId, Symbol},
+        instruments::CryptoPerpetual,
+        types::{Currency, Price, Quantity},
+    };
+    use rstest::rstest;
+    use rust_decimal::Decimal;
+    use ustr::Ustr;
+
+    use super::*;
+    use crate::{
+        ALPACAPositionSide,
+        common::{enums::ALPACATradeMode, parse::parse_account_state, testing::load_test_json},
+        http::models::ALPACAAccount,
+        websocket::messages::{ALPACAWebSocketArg, ALPACAWebSocketEvent},
+    };
+
+    #[rstest]
+    fn test_parse_books_snapshot() {
+        let json_data = load_test_json("ws_books_snapshot.json");
+        let msg: ALPACAWebSocketEvent = serde_json::from_str(&json_data).unwrap();
+        let (alpaca_books, action): (Vec<ALPACABookMsg>, ALPACABookAction) = match msg {
+            ALPACAWebSocketEvent::BookData { data, action, .. } => (data, action),
+            _ => panic!("Expected a `BookData` variant"),
+        };
+
+        let instrument_id = InstrumentId::from("BTC-USDT.ALPACA");
+        let deltas = parse_book_msg(
+            &alpaca_books[0],
+            instrument_id,
+            2,
+            1,
+            &action,
+            UnixNanos::default(),
+        )
+        .unwrap();
+
+        assert_eq!(deltas.instrument_id, instrument_id);
+        assert_eq!(deltas.deltas.len(), 16);
+        assert_eq!(deltas.flags, 32);
+        assert_eq!(deltas.sequence, 123456);
+        assert_eq!(deltas.ts_event, UnixNanos::from(1597026383085000000));
+        assert_eq!(deltas.ts_init, UnixNanos::default());
+
+        // Verify some individual deltas are parsed correctly
+        assert!(!deltas.deltas.is_empty());
+        // Snapshot should have both bid and ask deltas
+        let bid_deltas: Vec<_> = deltas
+            .deltas
+            .iter()
+            .filter(|d| d.order.side == OrderSide::Buy)
+            .collect();
+        let ask_deltas: Vec<_> = deltas
+            .deltas
+            .iter()
+            .filter(|d| d.order.side == OrderSide::Sell)
+            .collect();
+        assert!(!bid_deltas.is_empty());
+        assert!(!ask_deltas.is_empty());
+    }
+
+    #[rstest]
+    fn test_parse_books_update() {
+        let json_data = load_test_json("ws_books_update.json");
+        let msg: ALPACAWebSocketEvent = serde_json::from_str(&json_data).unwrap();
+        let instrument_id = InstrumentId::from("BTC-USDT.ALPACA");
+        let (alpaca_books, action): (Vec<ALPACABookMsg>, ALPACABookAction) = match msg {
+            ALPACAWebSocketEvent::BookData { data, action, .. } => (data, action),
+            _ => panic!("Expected a `BookData` variant"),
+        };
+
+        let deltas = parse_book_msg(
+            &alpaca_books[0],
+            instrument_id,
+            2,
+            1,
+            &action,
+            UnixNanos::default(),
+        )
+        .unwrap();
+
+        assert_eq!(deltas.instrument_id, instrument_id);
+        assert_eq!(deltas.deltas.len(), 16);
+        assert_eq!(deltas.flags, 0);
+        assert_eq!(deltas.sequence, 123457);
+        assert_eq!(deltas.ts_event, UnixNanos::from(1597026383085000000));
+        assert_eq!(deltas.ts_init, UnixNanos::default());
+
+        // Verify some individual deltas are parsed correctly
+        assert!(!deltas.deltas.is_empty());
+        // Update should also have both bid and ask deltas
+        let bid_deltas: Vec<_> = deltas
+            .deltas
+            .iter()
+            .filter(|d| d.order.side == OrderSide::Buy)
+            .collect();
+        let ask_deltas: Vec<_> = deltas
+            .deltas
+            .iter()
+            .filter(|d| d.order.side == OrderSide::Sell)
+            .collect();
+        assert!(!bid_deltas.is_empty());
+        assert!(!ask_deltas.is_empty());
+    }
+
+    #[rstest]
+    fn test_parse_tickers() {
+        let json_data = load_test_json("ws_tickers.json");
+        let msg: ALPACAWebSocketEvent = serde_json::from_str(&json_data).unwrap();
+        let alpaca_tickers: Vec<ALPACATickerMsg> = match msg {
+            ALPACAWebSocketEvent::Data { data, .. } => serde_json::from_value(data).unwrap(),
+            _ => panic!("Expected a `Data` variant"),
+        };
+
+        let instrument_id = InstrumentId::from("BTC-USDT.ALPACA");
+        let trade =
+            parse_ticker_msg(&alpaca_tickers[0], instrument_id, 2, 1, UnixNanos::default()).unwrap();
+
+        assert_eq!(trade.instrument_id, InstrumentId::from("BTC-USDT.ALPACA"));
+        assert_eq!(trade.bid_price, Price::from("8888.88"));
+        assert_eq!(trade.ask_price, Price::from("9999.99"));
+        assert_eq!(trade.bid_size, Quantity::from(5));
+        assert_eq!(trade.ask_size, Quantity::from(11));
+        assert_eq!(trade.ts_event, UnixNanos::from(1597026383085000000));
+        assert_eq!(trade.ts_init, UnixNanos::default());
+    }
+
+    #[rstest]
+    fn test_parse_quotes() {
+        let json_data = load_test_json("ws_bbo_tbt.json");
+        let msg: ALPACAWebSocketEvent = serde_json::from_str(&json_data).unwrap();
+        let alpaca_quotes: Vec<ALPACABookMsg> = match msg {
+            ALPACAWebSocketEvent::Data { data, .. } => serde_json::from_value(data).unwrap(),
+            _ => panic!("Expected a `Data` variant"),
+        };
+        let instrument_id = InstrumentId::from("BTC-USDT.ALPACA");
+
+        let quote =
+            parse_quote_msg(&alpaca_quotes[0], instrument_id, 2, 1, UnixNanos::default()).unwrap();
+
+        assert_eq!(quote.instrument_id, InstrumentId::from("BTC-USDT.ALPACA"));
+        assert_eq!(quote.bid_price, Price::from("8476.97"));
+        assert_eq!(quote.ask_price, Price::from("8476.98"));
+        assert_eq!(quote.bid_size, Quantity::from(256));
+        assert_eq!(quote.ask_size, Quantity::from(415));
+        assert_eq!(quote.ts_event, UnixNanos::from(1597026383085000000));
+        assert_eq!(quote.ts_init, UnixNanos::default());
+    }
+
+    #[rstest]
+    fn test_parse_trades() {
+        let json_data = load_test_json("ws_trades.json");
+        let msg: ALPACAWebSocketEvent = serde_json::from_str(&json_data).unwrap();
+        let alpaca_trades: Vec<ALPACATradeMsg> = match msg {
+            ALPACAWebSocketEvent::Data { data, .. } => serde_json::from_value(data).unwrap(),
+            _ => panic!("Expected a `Data` variant"),
+        };
+
+        let instrument_id = InstrumentId::from("BTC-USDT.ALPACA");
+        let trade =
+            parse_trade_msg(&alpaca_trades[0], instrument_id, 1, 8, UnixNanos::default()).unwrap();
+
+        assert_eq!(trade.instrument_id, InstrumentId::from("BTC-USDT.ALPACA"));
+        assert_eq!(trade.price, Price::from("42219.9"));
+        assert_eq!(trade.size, Quantity::from("0.12060306"));
+        assert_eq!(trade.aggressor_side, AggressorSide::Buyer);
+        assert_eq!(trade.trade_id, TradeId::from("130639474"));
+        assert_eq!(trade.ts_event, UnixNanos::from(1630048897897000000));
+        assert_eq!(trade.ts_init, UnixNanos::default());
+    }
+
+    #[rstest]
+    fn test_parse_candle() {
+        let json_data = load_test_json("ws_candle.json");
+        let msg: ALPACAWebSocketEvent = serde_json::from_str(&json_data).unwrap();
+        let alpaca_candles: Vec<ALPACACandleMsg> = match msg {
+            ALPACAWebSocketEvent::Data { data, .. } => serde_json::from_value(data).unwrap(),
+            _ => panic!("Expected a `Data` variant"),
+        };
+
+        let instrument_id = InstrumentId::from("BTC-USDT.ALPACA");
+        let bar_type = BarType::new(
+            instrument_id,
+            BAR_SPEC_1_DAY_LAST,
+            AggregationSource::External,
+        );
+        let bar = parse_candle_msg(&alpaca_candles[0], bar_type, 2, 0, UnixNanos::default()).unwrap();
+
+        assert_eq!(bar.bar_type, bar_type);
+        assert_eq!(bar.open, Price::from("8533.02"));
+        assert_eq!(bar.high, Price::from("8553.74"));
+        assert_eq!(bar.low, Price::from("8527.17"));
+        assert_eq!(bar.close, Price::from("8548.26"));
+        assert_eq!(bar.volume, Quantity::from(45247));
+        assert_eq!(bar.ts_event, UnixNanos::from(1597026383085000000));
+        assert_eq!(bar.ts_init, UnixNanos::default());
+    }
+
+    #[rstest]
+    fn test_parse_funding_rate() {
+        let json_data = load_test_json("ws_funding_rate.json");
+        let msg: ALPACAWebSocketEvent = serde_json::from_str(&json_data).unwrap();
+
+        let alpaca_funding_rates: Vec<crate::websocket::messages::ALPACAFundingRateMsg> = match msg {
+            ALPACAWebSocketEvent::Data { data, .. } => serde_json::from_value(data).unwrap(),
+            _ => panic!("Expected a `Data` variant"),
+        };
+
+        let instrument_id = InstrumentId::from("BTC-USDT-SWAP.ALPACA");
+        let funding_rate =
+            parse_funding_rate_msg(&alpaca_funding_rates[0], instrument_id, UnixNanos::default())
+                .unwrap();
+
+        assert_eq!(funding_rate.instrument_id, instrument_id);
+        assert_eq!(funding_rate.rate, Decimal::new(1, 4));
+        assert_eq!(
+            funding_rate.next_funding_ns,
+            Some(UnixNanos::from(1744590349506000000))
+        );
+        assert_eq!(funding_rate.ts_event, UnixNanos::from(1744590349506000000));
+        assert_eq!(funding_rate.ts_init, UnixNanos::default());
+    }
+
+    #[rstest]
+    fn test_parse_book_vec() {
+        let json_data = load_test_json("ws_books_snapshot.json");
+        let event: ALPACAWebSocketEvent = serde_json::from_str(&json_data).unwrap();
+        let (msgs, action): (Vec<ALPACABookMsg>, ALPACABookAction) = match event {
+            ALPACAWebSocketEvent::BookData { data, action, .. } => (data, action),
+            _ => panic!("Expected BookData"),
+        };
+
+        let instrument_id = InstrumentId::from("BTC-USDT.ALPACA");
+        let deltas_vec =
+            parse_book_msg_vec(msgs, &instrument_id, 8, 1, action, UnixNanos::default()).unwrap();
+
+        assert_eq!(deltas_vec.len(), 1);
+
+        if let Data::Deltas(d) = &deltas_vec[0] {
+            assert_eq!(d.sequence, 123456);
+        } else {
+            panic!("Expected Deltas");
+        }
+    }
+
+    #[rstest]
+    fn test_parse_ticker_vec() {
+        let json_data = load_test_json("ws_tickers.json");
+        let event: ALPACAWebSocketEvent = serde_json::from_str(&json_data).unwrap();
+        let data_val: serde_json::Value = match event {
+            ALPACAWebSocketEvent::Data { data, .. } => data,
+            _ => panic!("Expected Data"),
+        };
+
+        let instrument_id = InstrumentId::from("BTC-USDT.ALPACA");
+        let quotes_vec =
+            parse_ticker_msg_vec(data_val, &instrument_id, 8, 1, UnixNanos::default()).unwrap();
+
+        assert_eq!(quotes_vec.len(), 1);
+
+        if let Data::Quote(q) = &quotes_vec[0] {
+            assert_eq!(q.bid_price, Price::from("8888.88000000"));
+            assert_eq!(q.ask_price, Price::from("9999.99"));
+        } else {
+            panic!("Expected Quote");
+        }
+    }
+
+    #[rstest]
+    fn test_parse_trade_vec() {
+        let json_data = load_test_json("ws_trades.json");
+        let event: ALPACAWebSocketEvent = serde_json::from_str(&json_data).unwrap();
+        let data_val: serde_json::Value = match event {
+            ALPACAWebSocketEvent::Data { data, .. } => data,
+            _ => panic!("Expected Data"),
+        };
+
+        let instrument_id = InstrumentId::from("BTC-USDT.ALPACA");
+        let trades_vec =
+            parse_trade_msg_vec(data_val, &instrument_id, 8, 1, UnixNanos::default()).unwrap();
+
+        assert_eq!(trades_vec.len(), 1);
+
+        if let Data::Trade(t) = &trades_vec[0] {
+            assert_eq!(t.trade_id, TradeId::new("130639474"));
+        } else {
+            panic!("Expected Trade");
+        }
+    }
+
+    #[rstest]
+    fn test_parse_candle_vec() {
+        let json_data = load_test_json("ws_candle.json");
+        let event: ALPACAWebSocketEvent = serde_json::from_str(&json_data).unwrap();
+        let data_val: serde_json::Value = match event {
+            ALPACAWebSocketEvent::Data { data, .. } => data,
+            _ => panic!("Expected Data"),
+        };
+
+        let instrument_id = InstrumentId::from("BTC-USDT.ALPACA");
+        let bars_vec = parse_candle_msg_vec(
+            data_val,
+            &instrument_id,
+            2,
+            1,
+            BAR_SPEC_1_DAY_LAST,
+            UnixNanos::default(),
+        )
+        .unwrap();
+
+        assert_eq!(bars_vec.len(), 1);
+
+        if let Data::Bar(b) = &bars_vec[0] {
+            assert_eq!(b.open, Price::from("8533.02"));
+        } else {
+            panic!("Expected Bar");
+        }
+    }
+
+    #[rstest]
+    fn test_parse_book_message() {
+        let json_data = load_test_json("ws_bbo_tbt.json");
+        let msg: ALPACAWebSocketEvent = serde_json::from_str(&json_data).unwrap();
+        let (alpaca_books, arg): (Vec<ALPACABookMsg>, ALPACAWebSocketArg) = match msg {
+            ALPACAWebSocketEvent::Data { data, arg, .. } => {
+                (serde_json::from_value(data).unwrap(), arg)
+            }
+            _ => panic!("Expected a `Data` variant"),
+        };
+
+        assert_eq!(arg.channel, ALPACAWsChannel::BboTbt);
+        assert_eq!(arg.inst_id.as_ref().unwrap(), &Ustr::from("BTC-USDT"));
+        assert_eq!(arg.inst_type, None);
+        assert_eq!(alpaca_books.len(), 1);
+
+        let book_msg = &alpaca_books[0];
+
+        // Check asks
+        assert_eq!(book_msg.asks.len(), 1);
+        let ask = &book_msg.asks[0];
+        assert_eq!(ask.price, "8476.98");
+        assert_eq!(ask.size, "415");
+        assert_eq!(ask.liquidated_orders_count, "0");
+        assert_eq!(ask.orders_count, "13");
+
+        // Check bids
+        assert_eq!(book_msg.bids.len(), 1);
+        let bid = &book_msg.bids[0];
+        assert_eq!(bid.price, "8476.97");
+        assert_eq!(bid.size, "256");
+        assert_eq!(bid.liquidated_orders_count, "0");
+        assert_eq!(bid.orders_count, "12");
+        assert_eq!(book_msg.ts, 1597026383085);
+        assert_eq!(book_msg.seq_id, 123456);
+        assert_eq!(book_msg.checksum, None);
+        assert_eq!(book_msg.prev_seq_id, None);
+    }
+
+    #[rstest]
+    fn test_parse_ws_account_message() {
+        let json_data = load_test_json("ws_account.json");
+        let accounts: Vec<ALPACAAccount> = serde_json::from_str(&json_data).unwrap();
+
+        assert_eq!(accounts.len(), 1);
+        let account = &accounts[0];
+
+        assert_eq!(account.total_eq, "100.56089404807182");
+        assert_eq!(account.details.len(), 3);
+
+        let usdt_detail = &account.details[0];
+        assert_eq!(usdt_detail.ccy, "USDT");
+        assert_eq!(usdt_detail.avail_bal, "100.52768569797846");
+        assert_eq!(usdt_detail.cash_bal, "100.52768569797846");
+
+        let btc_detail = &account.details[1];
+        assert_eq!(btc_detail.ccy, "BTC");
+        assert_eq!(btc_detail.avail_bal, "0.0000000051");
+
+        let eth_detail = &account.details[2];
+        assert_eq!(eth_detail.ccy, "ETH");
+        assert_eq!(eth_detail.avail_bal, "0.000000185");
+
+        let account_id = AccountId::new("ALPACA-001");
+        let ts_init = nautilus_core::nanos::UnixNanos::default();
+        let account_state = parse_account_state(account, account_id, ts_init);
+
+        assert!(account_state.is_ok());
+        let state = account_state.unwrap();
+        assert_eq!(state.account_id, account_id);
+        assert_eq!(state.balances.len(), 3);
+    }
+
+    #[rstest]
+    fn test_parse_order_msg() {
+        let json_data = load_test_json("ws_orders.json");
+        let ws_msg: serde_json::Value = serde_json::from_str(&json_data).unwrap();
+
+        let data: Vec<ALPACAOrderMsg> = serde_json::from_value(ws_msg["data"].clone()).unwrap();
+
+        let account_id = AccountId::new("ALPACA-001");
+        let mut instruments = AHashMap::new();
+
+        // Create a mock instrument for testing
+        let instrument_id = InstrumentId::from("BTC-USDT-SWAP.ALPACA");
+        let instrument = CryptoPerpetual::new(
+            instrument_id,
+            Symbol::from("BTC-USDT-SWAP"),
+            Currency::BTC(),
+            Currency::USDT(),
+            Currency::USDT(),
+            false, // is_inverse
+            2,     // price_precision
+            8,     // size_precision
+            Price::from("0.01"),
+            Quantity::from("0.00000001"),
+            None, // multiplier
+            None, // lot_size
+            None, // max_quantity
+            None, // min_quantity
+            None, // max_notional
+            None, // min_notional
+            None, // max_price
+            None, // min_price
+            None, // margin_init
+            None, // margin_maint
+            None, // maker_fee
+            None, // taker_fee
+            UnixNanos::default(),
+            UnixNanos::default(),
+        );
+
+        instruments.insert(
+            Ustr::from("BTC-USDT-SWAP"),
+            InstrumentAny::CryptoPerpetual(instrument),
+        );
+
+        let ts_init = UnixNanos::default();
+        let fee_cache = AHashMap::new();
+
+        let result = parse_order_msg_vec(data, account_id, &instruments, &fee_cache, ts_init);
+
+        assert!(result.is_ok());
+        let order_reports = result.unwrap();
+        assert_eq!(order_reports.len(), 1);
+
+        // Verify the parsed order report
+        let report = &order_reports[0];
+
+        if let ExecutionReport::Fill(fill_report) = report {
+            assert_eq!(fill_report.account_id, account_id);
+            assert_eq!(fill_report.instrument_id, instrument_id);
+            assert_eq!(
+                fill_report.client_order_id,
+                Some(ClientOrderId::new("001BTCUSDT20250106001"))
+            );
+            assert_eq!(
+                fill_report.venue_order_id,
+                VenueOrderId::new("2497956918703120384")
+            );
+            assert_eq!(fill_report.trade_id, TradeId::from("1518905529"));
+            assert_eq!(fill_report.order_side, OrderSide::Buy);
+            assert_eq!(fill_report.last_px, Price::from("103698.90"));
+            assert_eq!(fill_report.last_qty, Quantity::from("0.03000000"));
+            assert_eq!(fill_report.liquidity_side, LiquiditySide::Maker);
+        } else {
+            panic!("Expected Fill report for filled order");
+        }
+    }
+
+    #[rstest]
+    fn test_parse_order_status_report() {
+        let json_data = load_test_json("ws_orders.json");
+        let ws_msg: serde_json::Value = serde_json::from_str(&json_data).unwrap();
+        let data: Vec<ALPACAOrderMsg> = serde_json::from_value(ws_msg["data"].clone()).unwrap();
+        let order_msg = &data[0];
+
+        let account_id = AccountId::new("ALPACA-001");
+        let instrument_id = InstrumentId::from("BTC-USDT-SWAP.ALPACA");
+        let instrument = CryptoPerpetual::new(
+            instrument_id,
+            Symbol::from("BTC-USDT-SWAP"),
+            Currency::BTC(),
+            Currency::USDT(),
+            Currency::USDT(),
+            false, // is_inverse
+            2,     // price_precision
+            8,     // size_precision
+            Price::from("0.01"),
+            Quantity::from("0.00000001"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            UnixNanos::default(),
+            UnixNanos::default(),
+        );
+
+        let ts_init = UnixNanos::default();
+
+        let result = parse_order_status_report(
+            order_msg,
+            &InstrumentAny::CryptoPerpetual(instrument),
+            account_id,
+            ts_init,
+        );
+
+        assert!(result.is_ok());
+        let order_status_report = result.unwrap();
+
+        assert_eq!(order_status_report.account_id, account_id);
+        assert_eq!(order_status_report.instrument_id, instrument_id);
+        assert_eq!(
+            order_status_report.client_order_id,
+            Some(ClientOrderId::new("001BTCUSDT20250106001"))
+        );
+        assert_eq!(
+            order_status_report.venue_order_id,
+            VenueOrderId::new("2497956918703120384")
+        );
+        assert_eq!(order_status_report.order_side, OrderSide::Buy);
+        assert_eq!(order_status_report.order_status, OrderStatus::Filled);
+        assert_eq!(order_status_report.quantity, Quantity::from("0.03000000"));
+        assert_eq!(order_status_report.filled_qty, Quantity::from("0.03000000"));
+    }
+
+    #[rstest]
+    fn test_parse_fill_report() {
+        let json_data = load_test_json("ws_orders.json");
+        let ws_msg: serde_json::Value = serde_json::from_str(&json_data).unwrap();
+        let data: Vec<ALPACAOrderMsg> = serde_json::from_value(ws_msg["data"].clone()).unwrap();
+        let order_msg = &data[0];
+
+        let account_id = AccountId::new("ALPACA-001");
+        let instrument_id = InstrumentId::from("BTC-USDT-SWAP.ALPACA");
+        let instrument = CryptoPerpetual::new(
+            instrument_id,
+            Symbol::from("BTC-USDT-SWAP"),
+            Currency::BTC(),
+            Currency::USDT(),
+            Currency::USDT(),
+            false, // is_inverse
+            2,     // price_precision
+            8,     // size_precision
+            Price::from("0.01"),
+            Quantity::from("0.00000001"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            UnixNanos::default(),
+            UnixNanos::default(),
+        );
+
+        let ts_init = UnixNanos::default();
+
+        let result = parse_fill_report(
+            order_msg,
+            &InstrumentAny::CryptoPerpetual(instrument),
+            account_id,
+            None,
+            ts_init,
+        );
+
+        assert!(result.is_ok());
+        let fill_report = result.unwrap();
+
+        assert_eq!(fill_report.account_id, account_id);
+        assert_eq!(fill_report.instrument_id, instrument_id);
+        assert_eq!(
+            fill_report.client_order_id,
+            Some(ClientOrderId::new("001BTCUSDT20250106001"))
+        );
+        assert_eq!(
+            fill_report.venue_order_id,
+            VenueOrderId::new("2497956918703120384")
+        );
+        assert_eq!(fill_report.trade_id, TradeId::from("1518905529"));
+        assert_eq!(fill_report.order_side, OrderSide::Buy);
+        assert_eq!(fill_report.last_px, Price::from("103698.90"));
+        assert_eq!(fill_report.last_qty, Quantity::from("0.03000000"));
+        assert_eq!(fill_report.liquidity_side, LiquiditySide::Maker);
+    }
+
+    #[rstest]
+    fn test_parse_book10_msg() {
+        let json_data = load_test_json("ws_books_snapshot.json");
+        let event: ALPACAWebSocketEvent = serde_json::from_str(&json_data).unwrap();
+        let msgs: Vec<ALPACABookMsg> = match event {
+            ALPACAWebSocketEvent::BookData { data, .. } => data,
+            _ => panic!("Expected BookData"),
+        };
+
+        let instrument_id = InstrumentId::from("BTC-USDT.ALPACA");
+        let depth10 =
+            parse_book10_msg(&msgs[0], instrument_id, 2, 0, UnixNanos::default()).unwrap();
+
+        assert_eq!(depth10.instrument_id, instrument_id);
+        assert_eq!(depth10.sequence, 123456);
+        assert_eq!(depth10.ts_event, UnixNanos::from(1597026383085000000));
+        assert_eq!(depth10.flags, RecordFlag::F_SNAPSHOT as u8);
+
+        // Check bid levels (available in test data: 8 levels)
+        assert_eq!(depth10.bids[0].price, Price::from("8476.97"));
+        assert_eq!(depth10.bids[0].size, Quantity::from("256"));
+        assert_eq!(depth10.bids[0].side, OrderSide::Buy);
+        assert_eq!(depth10.bid_counts[0], 12);
+
+        assert_eq!(depth10.bids[1].price, Price::from("8475.55"));
+        assert_eq!(depth10.bids[1].size, Quantity::from("101"));
+        assert_eq!(depth10.bid_counts[1], 1);
+
+        // Check that levels beyond available data are padded with empty orders
+        assert_eq!(depth10.bids[8].price, Price::from("0"));
+        assert_eq!(depth10.bids[8].size, Quantity::from("0"));
+        assert_eq!(depth10.bid_counts[8], 0);
+
+        // Check ask levels (available in test data: 8 levels)
+        assert_eq!(depth10.asks[0].price, Price::from("8476.98"));
+        assert_eq!(depth10.asks[0].size, Quantity::from("415"));
+        assert_eq!(depth10.asks[0].side, OrderSide::Sell);
+        assert_eq!(depth10.ask_counts[0], 13);
+
+        assert_eq!(depth10.asks[1].price, Price::from("8477.00"));
+        assert_eq!(depth10.asks[1].size, Quantity::from("7"));
+        assert_eq!(depth10.ask_counts[1], 2);
+
+        // Check that levels beyond available data are padded with empty orders
+        assert_eq!(depth10.asks[8].price, Price::from("0"));
+        assert_eq!(depth10.asks[8].size, Quantity::from("0"));
+        assert_eq!(depth10.ask_counts[8], 0);
+    }
+
+    #[rstest]
+    fn test_parse_book10_msg_vec() {
+        let json_data = load_test_json("ws_books_snapshot.json");
+        let event: ALPACAWebSocketEvent = serde_json::from_str(&json_data).unwrap();
+        let msgs: Vec<ALPACABookMsg> = match event {
+            ALPACAWebSocketEvent::BookData { data, .. } => data,
+            _ => panic!("Expected BookData"),
+        };
+
+        let instrument_id = InstrumentId::from("BTC-USDT.ALPACA");
+        let depth10_vec =
+            parse_book10_msg_vec(msgs, &instrument_id, 2, 0, UnixNanos::default()).unwrap();
+
+        assert_eq!(depth10_vec.len(), 1);
+
+        if let Data::Depth10(d) = &depth10_vec[0] {
+            assert_eq!(d.instrument_id, instrument_id);
+            assert_eq!(d.sequence, 123456);
+            assert_eq!(d.bids[0].price, Price::from("8476.97"));
+            assert_eq!(d.asks[0].price, Price::from("8476.98"));
+        } else {
+            panic!("Expected Depth10");
+        }
+    }
+
+    #[rstest]
+    fn test_parse_fill_report_with_fee_cache() {
+        let instrument_id = InstrumentId::from("BTC-USDT-SWAP.ALPACA");
+        let instrument = CryptoPerpetual::new(
+            instrument_id,
+            Symbol::from("BTC-USDT-SWAP"),
+            Currency::BTC(),
+            Currency::USDT(),
+            Currency::USDT(),
+            false, // is_inverse
+            2,     // price_precision
+            8,     // size_precision
+            Price::from("0.01"),
+            Quantity::from("0.00000001"),
+            None, // multiplier
+            None, // lot_size
+            None, // max_quantity
+            None, // min_quantity
+            None, // max_notional
+            None, // min_notional
+            None, // max_price
+            None, // min_price
+            None, // margin_init
+            None, // margin_maint
+            None, // maker_fee
+            None, // taker_fee
+            UnixNanos::default(),
+            UnixNanos::default(),
+        );
+
+        let account_id = AccountId::new("ALPACA-001");
+        let ts_init = UnixNanos::default();
+
+        // First fill: 0.01 BTC out of 0.03 BTC total (1/3)
+        let order_msg_1 = ALPACAOrderMsg {
+            acc_fill_sz: Some("0.01".to_string()),
+            avg_px: "50000.0".to_string(),
+            c_time: 1746947317401,
+            cancel_source: None,
+            cancel_source_reason: None,
+            category: Ustr::from("normal"),
+            ccy: Ustr::from("USDT"),
+            cl_ord_id: "test_order_1".to_string(),
+            fee: Some("-1.0".to_string()), // Total fee so far
+            fee_ccy: Ustr::from("USDT"),
+            fill_px: "50000.0".to_string(),
+            fill_sz: "0.01".to_string(),
+            fill_time: 1746947317402,
+            inst_id: Ustr::from("BTC-USDT-SWAP"),
+            inst_type: crate::common::enums::ALPACAInstrumentType::Swap,
+            lever: "2.0".to_string(),
+            ord_id: Ustr::from("1234567890"),
+            ord_type: ALPACAOrderType::Market,
+            pnl: "0".to_string(),
+            pos_side: ALPACAPositionSide::Long,
+            px: "".to_string(),
+            reduce_only: "false".to_string(),
+            side: crate::common::enums::ALPACASide::Buy,
+            state: crate::common::enums::ALPACAOrderStatus::PartiallyFilled,
+            exec_type: crate::common::enums::ALPACAExecType::Maker,
+            sz: "0.03".to_string(), // Total order size
+            td_mode: ALPACATradeMode::Isolated,
+            trade_id: "trade_1".to_string(),
+            u_time: 1746947317402,
+        };
+
+        let fill_report_1 = parse_fill_report(
+            &order_msg_1,
+            &InstrumentAny::CryptoPerpetual(instrument),
+            account_id,
+            None,
+            ts_init,
+        )
+        .unwrap();
+
+        // First fill should get the full fee since there's no previous fee
+        assert_eq!(fill_report_1.commission, Money::new(1.0, Currency::USDT()));
+
+        // Second fill: 0.02 BTC more, now 0.03 BTC total (completely filled)
+        let order_msg_2 = ALPACAOrderMsg {
+            acc_fill_sz: Some("0.03".to_string()),
+            avg_px: "50000.0".to_string(),
+            c_time: 1746947317401,
+            cancel_source: None,
+            cancel_source_reason: None,
+            category: Ustr::from("normal"),
+            ccy: Ustr::from("USDT"),
+            cl_ord_id: "test_order_1".to_string(),
+            fee: Some("-3.0".to_string()), // Same total fee
+            fee_ccy: Ustr::from("USDT"),
+            fill_px: "50000.0".to_string(),
+            fill_sz: "0.02".to_string(),
+            fill_time: 1746947317403,
+            inst_id: Ustr::from("BTC-USDT-SWAP"),
+            inst_type: crate::common::enums::ALPACAInstrumentType::Swap,
+            lever: "2.0".to_string(),
+            ord_id: Ustr::from("1234567890"),
+            ord_type: ALPACAOrderType::Market,
+            pnl: "0".to_string(),
+            pos_side: ALPACAPositionSide::Long,
+            px: "".to_string(),
+            reduce_only: "false".to_string(),
+            side: crate::common::enums::ALPACASide::Buy,
+            state: crate::common::enums::ALPACAOrderStatus::Filled,
+            exec_type: crate::common::enums::ALPACAExecType::Maker,
+            sz: "0.03".to_string(), // Same total order size
+            td_mode: ALPACATradeMode::Isolated,
+            trade_id: "trade_2".to_string(),
+            u_time: 1746947317403,
+        };
+
+        let fill_report_2 = parse_fill_report(
+            &order_msg_2,
+            &InstrumentAny::CryptoPerpetual(instrument),
+            account_id,
+            Some(fill_report_1.commission),
+            ts_init,
+        )
+        .unwrap();
+
+        // Second fill should get total_fee - previous_fee = 3.0 - 1.0 = 2.0
+        assert_eq!(fill_report_2.commission, Money::new(2.0, Currency::USDT()));
+
+        // Test passed - fee was correctly split proportionally
+    }
+
+    #[rstest]
+    fn test_parse_book10_msg_partial_levels() {
+        // Test with fewer than 10 levels - should pad with empty orders
+        let book_msg = ALPACABookMsg {
+            asks: vec![
+                OrderBookEntry {
+                    price: "8476.98".to_string(),
+                    size: "415".to_string(),
+                    liquidated_orders_count: "0".to_string(),
+                    orders_count: "13".to_string(),
+                },
+                OrderBookEntry {
+                    price: "8477.00".to_string(),
+                    size: "7".to_string(),
+                    liquidated_orders_count: "0".to_string(),
+                    orders_count: "2".to_string(),
+                },
+            ],
+            bids: vec![OrderBookEntry {
+                price: "8476.97".to_string(),
+                size: "256".to_string(),
+                liquidated_orders_count: "0".to_string(),
+                orders_count: "12".to_string(),
+            }],
+            ts: 1597026383085,
+            checksum: None,
+            prev_seq_id: None,
+            seq_id: 123456,
+        };
+
+        let instrument_id = InstrumentId::from("BTC-USDT.ALPACA");
+        let depth10 =
+            parse_book10_msg(&book_msg, instrument_id, 2, 0, UnixNanos::default()).unwrap();
+
+        // Check that first levels have data
+        assert_eq!(depth10.bids[0].price, Price::from("8476.97"));
+        assert_eq!(depth10.bids[0].size, Quantity::from("256"));
+        assert_eq!(depth10.bid_counts[0], 12);
+
+        // Check that remaining levels are padded with default (empty) orders
+        assert_eq!(depth10.bids[1].price, Price::from("0"));
+        assert_eq!(depth10.bids[1].size, Quantity::from("0"));
+        assert_eq!(depth10.bid_counts[1], 0);
+
+        // Check asks
+        assert_eq!(depth10.asks[0].price, Price::from("8476.98"));
+        assert_eq!(depth10.asks[1].price, Price::from("8477.00"));
+        assert_eq!(depth10.asks[2].price, Price::from("0")); // padded with empty
+    }
+
+    #[rstest]
+    fn test_parse_algo_order_msg_stop_market() {
+        let json_data = load_test_json("ws_orders_algo.json");
+        let ws_msg: serde_json::Value = serde_json::from_str(&json_data).unwrap();
+        let data: Vec<ALPACAAlgoOrderMsg> = serde_json::from_value(ws_msg["data"].clone()).unwrap();
+
+        // Test first algo order (stop market sell)
+        let msg = &data[0];
+        assert_eq!(msg.algo_id, "706620792746729472");
+        assert_eq!(msg.algo_cl_ord_id, "STOP001BTCUSDT20250120");
+        assert_eq!(msg.state, ALPACAOrderStatus::Live);
+        assert_eq!(msg.ord_px, "-1"); // Market order indicator
+
+        let account_id = AccountId::new("ALPACA-001");
+        let mut instruments = AHashMap::new();
+
+        // Create mock instrument
+        let instrument_id = InstrumentId::from("BTC-USDT-SWAP.ALPACA");
+        let instrument = CryptoPerpetual::new(
+            instrument_id,
+            Symbol::from("BTC-USDT-SWAP"),
+            Currency::BTC(),
+            Currency::USDT(),
+            Currency::USDT(),
+            false, // is_inverse
+            2,     // price_precision
+            8,     // size_precision
+            Price::from("0.01"),
+            Quantity::from("0.00000001"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            0.into(), // ts_event
+            0.into(), // ts_init
+        );
+        instruments.insert(
+            Ustr::from("BTC-USDT-SWAP"),
+            InstrumentAny::CryptoPerpetual(instrument),
+        );
+
+        let result =
+            parse_algo_order_msg(msg.clone(), account_id, &instruments, UnixNanos::default());
+
+        assert!(result.is_ok());
+        let report = result.unwrap();
+
+        if let ExecutionReport::Order(status_report) = report {
+            assert_eq!(status_report.order_type, OrderType::StopMarket);
+            assert_eq!(status_report.order_side, OrderSide::Sell);
+            assert_eq!(status_report.quantity, Quantity::from("0.01000000"));
+            assert_eq!(status_report.trigger_price, Some(Price::from("95000.00")));
+            assert_eq!(status_report.trigger_type, Some(TriggerType::LastPrice));
+            assert_eq!(status_report.price, None); // No limit price for market orders
+        } else {
+            panic!("Expected Order report");
+        }
+    }
+
+    #[rstest]
+    fn test_parse_algo_order_msg_stop_limit() {
+        let json_data = load_test_json("ws_orders_algo.json");
+        let ws_msg: serde_json::Value = serde_json::from_str(&json_data).unwrap();
+        let data: Vec<ALPACAAlgoOrderMsg> = serde_json::from_value(ws_msg["data"].clone()).unwrap();
+
+        // Test second algo order (stop limit buy)
+        let msg = &data[1];
+        assert_eq!(msg.algo_id, "706620792746729473");
+        assert_eq!(msg.state, ALPACAOrderStatus::Live);
+        assert_eq!(msg.ord_px, "106000"); // Limit price
+
+        let account_id = AccountId::new("ALPACA-001");
+        let mut instruments = AHashMap::new();
+
+        // Create mock instrument
+        let instrument_id = InstrumentId::from("BTC-USDT-SWAP.ALPACA");
+        let instrument = CryptoPerpetual::new(
+            instrument_id,
+            Symbol::from("BTC-USDT-SWAP"),
+            Currency::BTC(),
+            Currency::USDT(),
+            Currency::USDT(),
+            false, // is_inverse
+            2,     // price_precision
+            8,     // size_precision
+            Price::from("0.01"),
+            Quantity::from("0.00000001"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            0.into(), // ts_event
+            0.into(), // ts_init
+        );
+        instruments.insert(
+            Ustr::from("BTC-USDT-SWAP"),
+            InstrumentAny::CryptoPerpetual(instrument),
+        );
+
+        let result =
+            parse_algo_order_msg(msg.clone(), account_id, &instruments, UnixNanos::default());
+
+        assert!(result.is_ok());
+        let report = result.unwrap();
+
+        if let ExecutionReport::Order(status_report) = report {
+            assert_eq!(status_report.order_type, OrderType::StopLimit);
+            assert_eq!(status_report.order_side, OrderSide::Buy);
+            assert_eq!(status_report.quantity, Quantity::from("0.02000000"));
+            assert_eq!(status_report.trigger_price, Some(Price::from("105000.00")));
+            assert_eq!(status_report.trigger_type, Some(TriggerType::MarkPrice));
+            assert_eq!(status_report.price, Some(Price::from("106000.00"))); // Has limit price
+        } else {
+            panic!("Expected Order report");
+        }
+    }
+
+    #[rstest]
+    fn test_parse_trigger_order_from_regular_channel() {
+        let json_data = load_test_json("ws_orders_trigger.json");
+        let ws_msg: serde_json::Value = serde_json::from_str(&json_data).unwrap();
+        let data: Vec<ALPACAOrderMsg> = serde_json::from_value(ws_msg["data"].clone()).unwrap();
+
+        // Test triggered order that came through regular orders channel
+        let msg = &data[0];
+        assert_eq!(msg.ord_type, ALPACAOrderType::Trigger);
+        assert_eq!(msg.state, ALPACAOrderStatus::Filled);
+
+        let account_id = AccountId::new("ALPACA-001");
+        let mut instruments = AHashMap::new();
+
+        // Create mock instrument
+        let instrument_id = InstrumentId::from("BTC-USDT-SWAP.ALPACA");
+        let instrument = CryptoPerpetual::new(
+            instrument_id,
+            Symbol::from("BTC-USDT-SWAP"),
+            Currency::BTC(),
+            Currency::USDT(),
+            Currency::USDT(),
+            false, // is_inverse
+            2,     // price_precision
+            8,     // size_precision
+            Price::from("0.01"),
+            Quantity::from("0.00000001"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            0.into(), // ts_event
+            0.into(), // ts_init
+        );
+        instruments.insert(
+            Ustr::from("BTC-USDT-SWAP"),
+            InstrumentAny::CryptoPerpetual(instrument),
+        );
+        let fee_cache = AHashMap::new();
+
+        let result = parse_order_msg_vec(
+            vec![msg.clone()],
+            account_id,
+            &instruments,
+            &fee_cache,
+            UnixNanos::default(),
+        );
+
+        assert!(result.is_ok());
+        let reports = result.unwrap();
+        assert_eq!(reports.len(), 1);
+
+        if let ExecutionReport::Fill(fill_report) = &reports[0] {
+            assert_eq!(fill_report.order_side, OrderSide::Sell);
+            assert_eq!(fill_report.last_qty, Quantity::from("0.01000000"));
+            assert_eq!(fill_report.last_px, Price::from("101950.00"));
+        } else {
+            panic!("Expected Fill report for filled trigger order");
+        }
+    }
+}
