@@ -8,7 +8,8 @@ import {
 
 function formatTime(time) {
     if (typeof time === 'number') {
-        const date = new Date((time + 3600 * 7) * 1000);
+        // The 3600 * 0 can be used to adjust time zones. 0 because currently in EST
+        const date = new Date((time + 3600 * 0) * 1000);
         const pad = (num, size = 2) =>
             num.toString().padStart(size, '0');
         return (

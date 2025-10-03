@@ -119,7 +119,6 @@ if __name__ == "__main__":
     # log_level = "DEBUG"
     # log_level = "ERROR"
 
-    dataset_name = BACKTEST_SYMBOL
     strategy_name = "momo"
 
     params = dict(
@@ -133,17 +132,21 @@ if __name__ == "__main__":
         trailing_stop = True,
         random_seed = 41,
     )
+    datasets = ["papl", "mss"]
+    datasets = ["agmh"]
 
     all_stats = []
-    for random_seed in [1,2,3,4,5]:
-        params["random_seed"] = random_seed
-        stats = run_multiple_backtests(["papl", "mss"], strategy_name, params, log_level=log_level)
-        all_stats.append(stats)
-    df = pd.concat(all_stats)
-
-    if False:
-        engine = run_single_backtest(dataset_name, strategy_name, params, return_engine=True, log_level=log_level)
-
+    if len(datasets) > 1:
+        for random_seed in [1]:
+            params["random_seed"] = random_seed
+            stats = run_multiple_backtests(datasets, strategy_name, params, log_level=log_level)
+            all_stats.append(stats)
+        stats = pd.concat(all_stats)
+        with pd.option_context("display.max_rows", 100, "display.max_columns", None, "display.width", 300):
+            print(stats)
+            pass
+    else:
+        engine = run_single_backtest(BACKTEST_SYMBOL, strategy_name, params, return_engine=True, log_level=log_level)
         order_fills_report = engine.trader.generate_order_fills_report()
         orders_report = engine.trader.generate_orders_report()
         fills_report = engine.trader.generate_fills_report()
@@ -165,10 +168,4 @@ if __name__ == "__main__":
         print()
         # engine.reset()
         # engine.dispose()
-    with pd.option_context("display.max_rows", 100, "display.max_columns", None, "display.width", 300):
-        print(stats)
-        # print(t_orders)
-        # print(engine.trader.generate_account_report(NYSE))
-        # print(order_fills_report)
-        pass
 

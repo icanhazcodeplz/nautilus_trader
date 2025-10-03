@@ -54,3 +54,21 @@ python build.py
 - Rethink plotting to get nanosecond resolution?
 - Figure out why "positions" avg price is not the same as "orders" avg price
 - Add ruff tool
+- Integrate alpaca: https://github.com/d-e-s-o/apca
+
+# Data provider options
+- spiderrock: https://spiderrock.net/data/data-api/
+  - no pricing listed
+- Onix: https://www.onixs.biz/licensing-and-support.html#
+  - No pricing. Might pay for data separately?
+
+/Users/brent/.local/bin:/usr/local/opt/inetutils/libexec/gnubin:/Users/brent/miniconda3/bin:/Users/brent/miniconda3/condabin:/Library/Frameworks/Python.framework/Versions/3.13/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/Users/brent/.cargo/bin
+
+cargo test --package nautilus-bitmex --lib http::parse::tests::test_parse_order_status_report -- --exact
+
+# Running tests from terminal
+
+```bash
+cd nautilus_trader
+cargo nextest run -p <insert_package_name_here>
+```

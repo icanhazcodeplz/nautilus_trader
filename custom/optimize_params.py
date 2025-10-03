@@ -90,15 +90,7 @@ def optimize(trial):
     return value
 
 
-
-def load_or_create_optuna_study(study_name, sampler, delete_existing=False):
-    if delete_existing:
-        try:
-            optuna.delete_study(study_name=study_name, storage=DATABASE_STR)
-        except KeyError:
-            print("Study does not exist, nothing deleted")
-            pass
-
+def load_or_create_optuna_study(study_name, sampler):
     return optuna.create_study(
         study_name=study_name,
         storage=DATABASE_STR,
@@ -109,8 +101,9 @@ def load_or_create_optuna_study(study_name, sampler, delete_existing=False):
     )
 
 
-def target(study_name, sampler, delete_existing, n_trials):
-    study = load_or_create_optuna_study(study_name, sampler=sampler, delete_existing=delete_existing)
+def target(study_name, sampler, n_trials):
+    study = load_or_create_optuna_study(study_name, sampler=sampler)
+    # NOTE: setting n_jobs above 1 creates more threads, not processes. It is not any faster than n_jobs=1.
     study.optimize(optimize, n_trials=n_trials, timeout=60 * n_trials, n_jobs=1)
 
 
@@ -133,18 +126,25 @@ if __name__ == "__main__":
     sampler = optuna.samplers.GridSampler(search_space=search_space)
     total_trials = sampler._n_min_trials
     print(f"Running {total_trials} trials")
+
+    if delete_existing:
+        try:
+            optuna.delete_study(study_name=study_name, storage=DATABASE_STR)
+        except KeyError:
+            print("Study does not exist, nothing deleted")
+            pass
     if run_trials:
         start = datetime.now()
 
         # RUN SINGLE PROCESS
-        # target(study_name, sampler, delete_existing, total_trials)
+        # target(study_name, sampler, total_trials)
 
         # RUN MULTIPROCESSING
         n_processes = max(os.cpu_count() - 2, 2)
         n_trials = int(total_trials / n_processes) + 1
         pm = ProcessManager()
         for i in range(n_processes):
-            pm.add_and_start(name=str(i), target=target, args=(study_name, sampler, delete_existing, n_trials))
+            pm.add_and_start(name=str(i), target=target, args=(study_name, sampler, n_trials))
         pm.block(sleep_secs=1)
         print(f"TOTAL RUN TIME: {datetime.now() - start}")
 
