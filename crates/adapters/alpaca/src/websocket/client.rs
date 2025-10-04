@@ -86,14 +86,14 @@ use crate::{
             ALPACATriggerType, conditional_order_to_algo_type, is_conditional_order,
         },
         parse::{
-            bar_spec_as_alpaca_channel, alpaca_instrument_type, parse_account_state,
+            bar_spec_to_alpaca_channel, alpaca_instrument_type, parse_account_state,
             parse_client_order_id, parse_millisecond_timestamp,
         },
     },
     http::models::ALPACAAccount,
     websocket::{
         messages::{ALPACAAlgoOrderMsg, ALPACAOrderMsg},
-        parse::{parse_algo_order_msg, parse_order_msg_vec},
+        parse::{parse_order_msg_vec},
     },
 };
 
@@ -445,21 +445,10 @@ impl ALPACAWebSocketClient {
                         let inner_guard = inner_client.read().await;
                         if let Some(cred) = &credential_clone
                             && let Some(client) = &*inner_guard {
-                                let timestamp = SystemTime::now()
-                                    .duration_since(SystemTime::UNIX_EPOCH)
-                                    .expect("System time should be after UNIX epoch")
-                                    .as_secs()
-                                    .to_string();
-                                let signature = cred.sign(&timestamp, "GET", "/users/self/verify", "");
-
                                 let auth_message = ALPACAAuthentication {
-                                    op: "login",
-                                    args: vec![ALPACAAuthenticationArg {
-                                        api_key: cred.api_key.to_string(),
-                                        passphrase: cred.api_passphrase.clone(),
-                                        timestamp,
-                                        sign: signature,
-                                    }],
+                                    action: "auth",
+                                    key: cred.api_key().to_string(),
+                                    secret: cred.api_secret().to_string(),
                                 };
 
                                 if let Err(e) = client.send_text(serde_json::to_string(&auth_message).unwrap(), None).await {
@@ -627,21 +616,10 @@ impl ALPACAWebSocketClient {
             ))
         })?;
 
-        let timestamp = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .expect("System time should be after UNIX epoch")
-            .as_secs()
-            .to_string();
-        let signature = credential.sign(&timestamp, "GET", "/users/self/verify", "");
-
         let auth_message = ALPACAAuthentication {
-            op: "login",
-            args: vec![ALPACAAuthenticationArg {
-                api_key: credential.api_key.to_string(),
-                passphrase: credential.api_passphrase.clone(),
-                timestamp,
-                sign: signature,
-            }],
+            action: "auth",
+            key: credential.api_key().to_string(),
+            secret: credential.api_secret().to_string(),
         };
 
         {
@@ -1345,7 +1323,7 @@ impl ALPACAWebSocketClient {
     /// <https://www.alpaca.com/docs-v5/en/#order-book-trading-market-data-ws-candlesticks-channel>.
     pub async fn subscribe_bars(&self, bar_type: BarType) -> Result<(), ALPACAWsError> {
         // Use regular trade-price candlesticks which work for all instrument types
-        let channel = bar_spec_as_alpaca_channel(bar_type.spec())
+        let channel = bar_spec_to_alpaca_channel(bar_type.spec())
             .map_err(|e| ALPACAWsError::ClientError(e.to_string()))?;
 
         let arg = ALPACASubscriptionArg {
@@ -1523,7 +1501,7 @@ impl ALPACAWebSocketClient {
     /// Unsubscribe from candlestick/bar data for an instrument.
     pub async fn unsubscribe_bars(&self, bar_type: BarType) -> Result<(), ALPACAWsError> {
         // Use regular trade-price candlesticks which work for all instrument types
-        let channel = bar_spec_as_alpaca_channel(bar_type.spec())
+        let channel = bar_spec_to_alpaca_channel(bar_type.spec())
             .map_err(|e| ALPACAWsError::ClientError(e.to_string()))?;
 
         let arg = ALPACASubscriptionArg {

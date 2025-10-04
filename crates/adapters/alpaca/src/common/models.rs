@@ -17,8 +17,10 @@
 
 // Re-export the main Alpaca models from http/models for convenience
 pub use crate::http::models::{
-    AlpacaAccount, AlpacaAsset, AlpacaBar, AlpacaBarsResponse, AlpacaCalendar, AlpacaClock,
-    AlpacaLatestQuote, AlpacaLatestTrade, AlpacaOrder, AlpacaOrderRequest, AlpacaPosition,
-    AlpacaQuote, AlpacaQuotesResponse, AlpacaSnapshot, AlpacaTrade, AlpacaTradesResponse,
-    StopLossSpec, TakeProfitSpec,
+    ALPACAAccount, ALPACAAsset, ALPACABalanceDetail, ALPACABar, ALPACABarsResponse,
+    ALPACACalendar, ALPACACandlestick, ALPACAClock, ALPACAIndexTicker, ALPACAInstrument,
+    ALPACALatestQuote, ALPACALatestTrade, ALPACAMarkPrice, ALPACAOrder, ALPACAOrderHistory,
+    ALPACAOrderRequest, ALPACAPlaceOrderResponse, ALPACAPosition, ALPACAPositionHistory,
+    ALPACAPositionTier, ALPACAQuote, ALPACAQuotesResponse, ALPACASnapshot, ALPACATrade,
+    ALPACATradesResponse, ALPACATransactionDetail, StopLossSpec, TakeProfitSpec,
 };

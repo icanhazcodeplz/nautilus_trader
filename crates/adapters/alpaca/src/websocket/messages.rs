@@ -24,7 +24,7 @@ use nautilus_model::{
 use serde::{Deserialize, Serialize};
 use ustr::Ustr;
 
-use crate::common::enums::{AlpacaOrderStatus, AlpacaSide};
+use crate::common::enums::{ALPACAOrderStatus, ALPACASide};
 
 /// Represents the various message types that can be received from Alpaca WebSocket.
 #[derive(Debug, Clone)]
@@ -46,7 +46,7 @@ pub enum NautilusWsMessage {
     /// Execution reports (order updates and fills).
     ExecutionReports(Vec<ExecutionReport>),
     /// Error from Alpaca.
-    Error(AlpacaWebSocketError),
+    Error(ALPACAWebSocketError),
     /// Raw unhandled message.
     Raw(serde_json::Value),
     /// Reconnected signal.
@@ -56,13 +56,16 @@ pub enum NautilusWsMessage {
 /// Represents an Alpaca WebSocket error.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "python", pyo3::pyclass)]
-pub struct AlpacaWebSocketError {
+pub struct ALPACAWebSocketError {
     /// Error code from Alpaca.
     pub code: String,
     /// Error message from Alpaca.
     pub message: String,
     /// Timestamp when the error occurred.
     pub timestamp: u64,
+    /// Connection ID (placeholder for compatibility).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conn_id: Option<String>,
 }
 
 /// Execution report can be either an order status update or a fill.
@@ -155,6 +158,23 @@ pub enum AlpacaWebSocketEvent {
     /// Trading update (for trading WebSocket).
     #[serde(rename = "trading_status")]
     TradingUpdate(AlpacaTradingUpdateMsg),
+    /// Login response (placeholder for compatibility).
+    #[serde(rename = "login")]
+    Login {
+        success: bool,
+    },
+    /// Book data (placeholder - not used by basic Alpaca).
+    #[serde(rename = "book")]
+    BookData(serde_json::Value),
+    /// Order response (placeholder for compatibility).
+    #[serde(rename = "order")]
+    OrderResponse(serde_json::Value),
+    /// Generic data message (placeholder).
+    #[serde(rename = "data")]
+    Data(serde_json::Value),
+    /// Reconnected signal (not from API, generated internally).
+    #[serde(skip)]
+    Reconnected,
 }
 
 // =============================================================================
@@ -341,7 +361,7 @@ pub struct AlpacaOrderUpdateMsg {
     /// Symbol.
     pub symbol: String,
     /// Side (buy/sell).
-    pub side: AlpacaSide,
+    pub side: ALPACASide,
     /// Order type.
     pub order_type: String,
     /// Time in force.
@@ -351,7 +371,7 @@ pub struct AlpacaOrderUpdateMsg {
     /// Filled quantity.
     pub filled_qty: String,
     /// Order status.
-    pub status: AlpacaOrderStatus,
+    pub status: ALPACAOrderStatus,
     /// Created timestamp.
     pub created_at: String,
     /// Updated timestamp.
@@ -384,6 +404,122 @@ pub struct AlpacaOrderUpdateMsg {
     /// Extended hours.
     pub extended_hours: bool,
 }
+
+// =============================================================================
+// Funding Rate (Placeholder for compatibility)
+// =============================================================================
+
+/// Funding rate message (placeholder for compatibility, not applicable to stocks).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ALPACAFundingRateMsg {
+    /// Symbol/Instrument ID.
+    pub symbol: Ustr,
+    /// Funding rate.
+    pub funding_rate: String,
+    /// Timestamp.
+    pub timestamp: String,
+}
+
+// =============================================================================
+// Type Aliases for WebSocket (compatibility with client code)
+// =============================================================================
+
+/// Type alias for authentication message.
+pub type ALPACAAuthentication = AlpacaAuthentication;
+
+/// Subscription message wrapper (bridges OKX-style code with Alpaca format).
+/// This struct accepts OKX-style format but needs conversion to Alpaca format before sending.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ALPACASubscription {
+    pub op: super::enums::ALPACAWsOperation,
+    pub args: Vec<ALPACASubscriptionArg>,
+}
+
+/// Type alias for WebSocket events.
+pub type ALPACAWebSocketEvent = AlpacaWebSocketEvent;
+
+/// Placeholder for authentication argument (not used by Alpaca).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ALPACAAuthenticationArg {
+    pub api_key: String,
+}
+
+/// Placeholder for subscription argument (not used by Alpaca in this format).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ALPACASubscriptionArg {
+    pub channel: super::enums::ALPACAWsChannel,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inst_type: Option<crate::common::enums::ALPACAInstrumentType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inst_family: Option<Ustr>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inst_id: Option<Ustr>,
+}
+
+/// Placeholder for WebSocket request (not used by Alpaca, uses different format).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ALPACAWsRequest {
+    pub op: String,
+}
+
+/// Placeholder for order message (not used by Alpaca WebSocket).
+pub type ALPACAOrderMsg = AlpacaOrderUpdateMsg;
+
+/// Placeholder for algo order message (not applicable to Alpaca).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ALPACAAlgoOrderMsg {
+    pub id: String,
+}
+
+/// Placeholder for book message (not directly used by Alpaca).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ALPACABookMsg {
+    pub symbol: String,
+}
+
+/// Placeholder for candle message.
+pub type ALPACACandleMsg = AlpacaBarMsg;
+
+/// Placeholder for index price message (not applicable to stocks).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ALPACAIndexPriceMsg {
+    pub symbol: String,
+}
+
+/// Placeholder for mark price message (not applicable to stocks).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ALPACAMarkPriceMsg {
+    pub symbol: String,
+}
+
+/// Placeholder for ticker message.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ALPACATickerMsg {
+    pub symbol: String,
+}
+
+/// Type alias for trade message.
+pub type ALPACATradeMsg = AlpacaTradeMsg;
+
+/// Placeholder for order book entry (simplified).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrderBookEntry {
+    pub price: String,
+    pub size: String,
+}
+
+// WebSocket order parameter placeholders (not directly used by Alpaca API)
+pub type WsAmendOrderParams = String;
+pub type WsAmendOrderParamsBuilder = String;
+pub type WsCancelAlgoOrderParams = String;
+pub type WsCancelAlgoOrderParamsBuilder = String;
+pub type WsCancelOrderParams = String;
+pub type WsCancelOrderParamsBuilder = String;
+pub type WsMassCancelParams = String;
+pub type WsPostAlgoOrderParams = String;
+pub type WsPostAlgoOrderParamsBuilder = String;
+pub type WsPostOrderParams = String;
+pub type WsPostOrderParamsBuilder = String;
 
 ////////////////////////////////////////////////////////////////////////////////
 // Tests

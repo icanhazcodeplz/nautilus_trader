@@ -66,9 +66,11 @@ use ustr::Ustr;
 use super::{
     error::ALPACAHttpError,
     models::{
-        AlpacaAccount, AlpacaAsset, AlpacaBar, AlpacaBarsResponse, AlpacaCalendar, AlpacaClock,
-        AlpacaLatestQuote, AlpacaLatestTrade, AlpacaOrder, AlpacaOrderRequest, AlpacaPosition,
-        AlpacaQuote, AlpacaQuotesResponse, AlpacaSnapshot, AlpacaTrade, AlpacaTradesResponse,
+        ALPACAAccount, ALPACAAsset, ALPACABar, ALPACABarsResponse, ALPACACancelAlgoOrderRequest,
+        ALPACACancelAlgoOrderResponse, ALPACACalendar, ALPACAClock, ALPACALatestQuote,
+        ALPACALatestTrade, ALPACAOrder, ALPACAOrderRequest, ALPACAPlaceAlgoOrderRequest,
+        ALPACAPlaceAlgoOrderResponse, ALPACAPosition, ALPACAQuote, ALPACAQuotesResponse,
+        ALPACASnapshot, ALPACATrade, ALPACATradesResponse,
     },
 };
 use crate::{
@@ -76,8 +78,7 @@ use crate::{
         consts::{ALPACA_HTTP_URL, ALPACA_NAUTILUS_BROKER_ID, should_retry_error_code},
         credential::Credential,
         enums::{
-            ALPACAAlgoOrderType, ALPACAInstrumentType, ALPACAPositionMode, ALPACASide, ALPACATradeMode,
-            ALPACATriggerType,
+            ALPACAInstrumentType, ALPACAPositionMode, ALPACASide, ALPACATradeMode,
         },
         models::ALPACAInstrument,
         parse::{
@@ -86,7 +87,7 @@ use crate::{
             parse_order_status_report, parse_position_status_report, parse_trade_tick,
         },
     },
-    http::models::{AlpacaBar as ALPACACandlestick, AlpacaTrade as ALPACATrade},
+    http::models::{ALPACABar as ALPACACandlestick},
 };
 
 /// Default Alpaca REST API rate limit.
@@ -413,7 +414,7 @@ impl ALPACAHttpInnerClient {
         &self,
         status: Option<&str>,
         asset_class: Option<&str>,
-    ) -> Result<Vec<AlpacaAsset>, ALPACAHttpError> {
+    ) -> Result<Vec<ALPACAAsset>, ALPACAHttpError> {
         let mut path = "/v2/assets".to_string();
         let mut params = vec![];
 
@@ -448,7 +449,7 @@ impl ALPACAHttpInnerClient {
         start: Option<&str>,
         end: Option<&str>,
         limit: Option<u32>,
-    ) -> Result<AlpacaBarsResponse, ALPACAHttpError> {
+    ) -> Result<ALPACABarsResponse, ALPACAHttpError> {
         let mut path = format!("/v2/stocks/{}/bars", symbol);
         let mut params = vec![format!("timeframe={}", timeframe)];
 
@@ -483,7 +484,7 @@ impl ALPACAHttpInnerClient {
         start: Option<&str>,
         end: Option<&str>,
         limit: Option<u32>,
-    ) -> Result<AlpacaTradesResponse, ALPACAHttpError> {
+    ) -> Result<ALPACATradesResponse, ALPACAHttpError> {
         let mut path = format!("/v2/stocks/{}/trades", symbol);
         let mut params = vec![];
 
@@ -520,7 +521,7 @@ impl ALPACAHttpInnerClient {
         start: Option<&str>,
         end: Option<&str>,
         limit: Option<u32>,
-    ) -> Result<AlpacaQuotesResponse, ALPACAHttpError> {
+    ) -> Result<ALPACAQuotesResponse, ALPACAHttpError> {
         let mut path = format!("/v2/stocks/{}/quotes", symbol);
         let mut params = vec![];
 
@@ -554,7 +555,7 @@ impl ALPACAHttpInnerClient {
     pub async fn http_get_latest_quote(
         &self,
         symbol: &str,
-    ) -> Result<AlpacaLatestQuote, ALPACAHttpError> {
+    ) -> Result<ALPACALatestQuote, ALPACAHttpError> {
         let path = format!("/v2/stocks/{}/quotes/latest", symbol);
         self.send_request(Method::GET, &path, None, false).await
     }
@@ -571,7 +572,7 @@ impl ALPACAHttpInnerClient {
     pub async fn http_get_latest_trade(
         &self,
         symbol: &str,
-    ) -> Result<AlpacaLatestTrade, ALPACAHttpError> {
+    ) -> Result<ALPACALatestTrade, ALPACAHttpError> {
         let path = format!("/v2/stocks/{}/trades/latest", symbol);
         self.send_request(Method::GET, &path, None, false).await
     }
@@ -588,7 +589,7 @@ impl ALPACAHttpInnerClient {
     pub async fn http_get_snapshot(
         &self,
         symbol: &str,
-    ) -> Result<AlpacaSnapshot, ALPACAHttpError> {
+    ) -> Result<ALPACASnapshot, ALPACAHttpError> {
         let path = format!("/v2/stocks/{}/snapshot", symbol);
         self.send_request(Method::GET, &path, None, false).await
     }
@@ -606,7 +607,7 @@ impl ALPACAHttpInnerClient {
     /// # References
     ///
     /// <https://docs.alpaca.markets/reference/get-v2-account>
-    pub async fn http_get_account(&self) -> Result<AlpacaAccount, ALPACAHttpError> {
+    pub async fn http_get_account(&self) -> Result<ALPACAAccount, ALPACAHttpError> {
         let path = "/v2/account";
         self.send_request(Method::GET, path, None, true).await
     }
@@ -620,7 +621,7 @@ impl ALPACAHttpInnerClient {
     /// # References
     ///
     /// <https://docs.alpaca.markets/reference/get-v2-positions>
-    pub async fn http_get_positions(&self) -> Result<Vec<AlpacaPosition>, ALPACAHttpError> {
+    pub async fn http_get_positions(&self) -> Result<Vec<ALPACAPosition>, ALPACAHttpError> {
         let path = "/v2/positions";
         self.send_request(Method::GET, path, None, true).await
     }
@@ -637,7 +638,7 @@ impl ALPACAHttpInnerClient {
     pub async fn http_get_position(
         &self,
         symbol: &str,
-    ) -> Result<AlpacaPosition, ALPACAHttpError> {
+    ) -> Result<ALPACAPosition, ALPACAHttpError> {
         let path = format!("/v2/positions/{}", symbol);
         self.send_request(Method::GET, &path, None, true).await
     }
@@ -661,7 +662,7 @@ impl ALPACAHttpInnerClient {
         limit: Option<u32>,
         after: Option<&str>,
         until: Option<&str>,
-    ) -> Result<Vec<AlpacaOrder>, ALPACAHttpError> {
+    ) -> Result<Vec<ALPACAOrder>, ALPACAHttpError> {
         let mut path = "/v2/orders".to_string();
         let mut params = vec![];
 
@@ -698,7 +699,7 @@ impl ALPACAHttpInnerClient {
     pub async fn http_get_order(
         &self,
         order_id: &str,
-    ) -> Result<AlpacaOrder, ALPACAHttpError> {
+    ) -> Result<ALPACAOrder, ALPACAHttpError> {
         let path = format!("/v2/orders/{}", order_id);
         self.send_request(Method::GET, &path, None, true).await
     }
@@ -714,8 +715,8 @@ impl ALPACAHttpInnerClient {
     /// <https://docs.alpaca.markets/reference/post-v2-orders>
     pub async fn http_place_order(
         &self,
-        request: AlpacaOrderRequest,
-    ) -> Result<AlpacaOrder, ALPACAHttpError> {
+        request: ALPACAOrderRequest,
+    ) -> Result<ALPACAOrder, ALPACAHttpError> {
         let path = "/v2/orders";
         let body = serde_json::to_vec(&request)?;
         self.send_request(Method::POST, path, Some(body), true).await
@@ -765,7 +766,7 @@ impl ALPACAHttpInnerClient {
     /// # References
     ///
     /// <https://docs.alpaca.markets/reference/get-v2-clock>
-    pub async fn http_get_clock(&self) -> Result<AlpacaClock, ALPACAHttpError> {
+    pub async fn http_get_clock(&self) -> Result<ALPACAClock, ALPACAHttpError> {
         let path = "/v2/clock";
         self.send_request(Method::GET, path, None, false).await
     }
@@ -783,7 +784,7 @@ impl ALPACAHttpInnerClient {
         &self,
         start: Option<&str>,
         end: Option<&str>,
-    ) -> Result<Vec<AlpacaCalendar>, ALPACAHttpError> {
+    ) -> Result<Vec<ALPACACalendar>, ALPACAHttpError> {
         let mut path = "/v2/calendar".to_string();
         let mut params = vec![];
 
@@ -914,9 +915,9 @@ impl ALPACAHttpClient {
         }
 
         for group in [
+            ALPACAInstrumentType::Stock,
+            ALPACAInstrumentType::Crypto,
             ALPACAInstrumentType::Spot,
-            ALPACAInstrumentType::Margin,
-            ALPACAInstrumentType::Futures,
         ] {
             if let Ok(instruments) = self.request_instruments(group).await {
                 let mut guard = self.instruments_cache.lock().unwrap();
@@ -1030,151 +1031,74 @@ impl ALPACAHttpClient {
     ) -> anyhow::Result<AccountState> {
         let resp = self
             .inner
-            .http_get_balance()
+            .http_get_account()
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
 
         let ts_init = self.generate_ts_init();
-        let raw = resp
-            .first()
-            .ok_or_else(|| anyhow::anyhow!("No account state returned from ALPACA"))?;
-        let account_state = parse_account_state(raw, account_id, ts_init)?;
+        let account_state = parse_account_state(&resp, account_id, ts_init, ts_init)?;
 
         Ok(account_state)
     }
 
     /// Sets the position mode for the account.
     ///
-    /// Defaults to NetMode if no position mode is provided.
-    ///
     /// # Errors
     ///
-    /// Returns an error if the HTTP request fails or the position mode cannot be set.
+    /// Returns an error indicating this feature is not supported for Alpaca.
     ///
     /// # Note
     ///
-    /// This endpoint only works for accounts with derivatives trading enabled.
-    /// If the account only has spot trading, this will return an error.
-    pub async fn set_position_mode(&self, position_mode: ALPACAPositionMode) -> anyhow::Result<()> {
-        let mut params = SetPositionModeParamsBuilder::default();
-        params.pos_mode(position_mode);
-        let params = params.build().map_err(|e| anyhow::anyhow!(e))?;
-
-        match self.inner.http_set_position_mode(params).await {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                // Check if this is the "Invalid request type" error for accounts without derivatives
-                if let crate::http::error::ALPACAHttpError::AlpacaError {
-                    error_code,
-                    message,
-                } = &e
-                    && error_code == "50115"
-                {
-                    tracing::warn!(
-                        "Account does not support position mode setting (derivatives trading not enabled): {message}"
-                    );
-                    return Ok(()); // Gracefully handle this case
-                }
-                anyhow::bail!(e)
-            }
-        }
+    /// Alpaca does not support position mode settings. Stocks use net positions
+    /// and crypto positions are always net. This is a no-op for compatibility.
+    pub async fn set_position_mode(&self, _position_mode: ALPACAPositionMode) -> anyhow::Result<()> {
+        anyhow::bail!("Position mode setting not supported for Alpaca")
     }
 
     /// Requests all instruments for the `instrument_type` from ALPACA.
     ///
     /// # Errors
     ///
-    /// Returns an error if the HTTP request fails or instrument parsing fails.
+    /// Returns an error indicating this feature is not yet implemented.
     pub async fn request_instruments(
         &self,
-        instrument_type: ALPACAInstrumentType,
+        _instrument_type: ALPACAInstrumentType,
     ) -> anyhow::Result<Vec<InstrumentAny>> {
-        let mut params = GetInstrumentsParamsBuilder::default();
-        params.inst_type(instrument_type);
-        let params = params.build().map_err(|e| anyhow::anyhow!(e))?;
-
-        let resp = self
-            .inner
-            .http_get_instruments(params)
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?;
-
-        let ts_init = self.generate_ts_init();
-
-        let mut instruments: Vec<InstrumentAny> = Vec::new();
-        for inst in &resp {
-            if let Some(instrument_any) = parse_instrument_any(inst, ts_init)? {
-                instruments.push(instrument_any);
-            }
-        }
-
-        Ok(instruments)
+        anyhow::bail!("Instrument requests not yet implemented for Alpaca")
     }
 
     /// Requests the latest mark price for the `instrument_type` from ALPACA.
     ///
     /// # Errors
     ///
-    /// Returns an error if the HTTP request fails or no mark price is returned.
+    /// Returns an error indicating this feature is not applicable to Alpaca.
+    ///
+    /// # Note
+    ///
+    /// Mark prices are used in derivatives/futures markets. Alpaca primarily
+    /// supports stocks and crypto which use spot prices.
     pub async fn request_mark_price(
         &self,
-        instrument_id: InstrumentId,
+        _instrument_id: InstrumentId,
     ) -> anyhow::Result<MarkPriceUpdate> {
-        let mut params = GetMarkPriceParamsBuilder::default();
-        params.inst_id(instrument_id.symbol.inner());
-        let params = params.build().map_err(|e| anyhow::anyhow!(e))?;
-
-        let resp = self
-            .inner
-            .http_get_mark_price(params)
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?;
-
-        let raw = resp
-            .first()
-            .ok_or_else(|| anyhow::anyhow!("No mark price returned from ALPACA"))?;
-        let inst = self
-            .instrument_or_fetch(instrument_id.symbol.inner())
-            .await?;
-        let ts_init = self.generate_ts_init();
-
-        let mark_price =
-            parse_mark_price_update(raw, instrument_id, inst.price_precision(), ts_init)
-                .map_err(|e| anyhow::anyhow!(e))?;
-        Ok(mark_price)
+        anyhow::bail!("Mark price not applicable to Alpaca (stocks/crypto only)")
     }
 
     /// Requests the latest index price for the `instrument_id` from ALPACA.
     ///
     /// # Errors
     ///
-    /// Returns an error if the HTTP request fails or no index price is returned.
+    /// Returns an error indicating this feature is not applicable to Alpaca.
+    ///
+    /// # Note
+    ///
+    /// Index prices are used in derivatives/futures markets. Alpaca primarily
+    /// supports stocks and crypto which use spot prices.
     pub async fn request_index_price(
         &self,
-        instrument_id: InstrumentId,
+        _instrument_id: InstrumentId,
     ) -> anyhow::Result<IndexPriceUpdate> {
-        let mut params = GetIndexTickerParamsBuilder::default();
-        params.inst_id(instrument_id.symbol.inner());
-        let params = params.build().map_err(|e| anyhow::anyhow!(e))?;
-
-        let resp = self
-            .inner
-            .http_get_index_ticker(params)
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?;
-
-        let raw = resp
-            .first()
-            .ok_or_else(|| anyhow::anyhow!("No index price returned from ALPACA"))?;
-        let inst = self
-            .instrument_or_fetch(instrument_id.symbol.inner())
-            .await?;
-        let ts_init = self.generate_ts_init();
-
-        let index_price =
-            parse_index_price_update(raw, instrument_id, inst.price_precision(), ts_init)
-                .map_err(|e| anyhow::anyhow!(e))?;
-        Ok(index_price)
+        anyhow::bail!("Index price not applicable to Alpaca (stocks/crypto only)")
     }
 
     /// Requests trades for the `instrument_id` and `start` -> `end` time range.
@@ -1189,25 +1113,21 @@ impl ALPACAHttpClient {
         end: Option<DateTime<Utc>>,
         limit: Option<u32>,
     ) -> anyhow::Result<Vec<TradeTick>> {
-        let mut params = GetTradesParamsBuilder::default();
+        let symbol = instrument_id.symbol.as_str();
 
-        params.inst_id(instrument_id.symbol.inner());
-        if let Some(s) = start {
-            params.before(s.timestamp_millis().to_string());
-        }
-        if let Some(e) = end {
-            params.after(e.timestamp_millis().to_string());
-        }
-        if let Some(l) = limit {
-            params.limit(l);
-        }
+        // Format dates as RFC3339 strings if provided
+        let start_str = start.map(|s| s.to_rfc3339());
+        let end_str = end.map(|e| e.to_rfc3339());
 
-        let params = params.build().map_err(anyhow::Error::new)?;
-
-        // Fetch raw trades
-        let raw_trades = self
+        // Fetch raw trades from Alpaca API
+        let resp = self
             .inner
-            .http_get_trades(params)
+            .http_get_trades(
+                symbol,
+                start_str.as_deref(),
+                end_str.as_deref(),
+                limit,
+            )
             .await
             .map_err(anyhow::Error::new)?;
 
@@ -1216,10 +1136,10 @@ impl ALPACAHttpClient {
             .instrument_or_fetch(instrument_id.symbol.inner())
             .await?;
 
-        let mut trades = Vec::with_capacity(raw_trades.len());
-        for raw in raw_trades {
+        let mut trades = Vec::with_capacity(resp.trades.len());
+        for raw in &resp.trades {
             match parse_trade_tick(
-                &raw,
+                raw,
                 instrument_id,
                 inst.price_precision(),
                 inst.size_precision(),
@@ -1235,748 +1155,130 @@ impl ALPACAHttpClient {
 
     /// Requests historical bars for the given bar type and time range.
     ///
-    /// The aggregation source must be `EXTERNAL`. Time range validation ensures start < end.
-    /// Returns bars sorted oldest to newest.
+    /// # Errors
     ///
-    /// # Endpoint Selection
-    ///
-    /// The ALPACA API has different endpoints with different limits:
-    /// - Regular endpoint (`/api/v5/market/candles`): ≤ 300 rows/call, ≤ 40 req/2s
-    ///   - Used when: start is None OR age ≤ 100 days
-    /// - History endpoint (`/api/v5/market/history-candles`): ≤ 100 rows/call, ≤ 20 req/2s
-    ///   - Used when: start is Some AND age > 100 days
-    ///
-    /// Age is calculated as `Utc::now() - start` at the time of the first request.
-    ///
-    /// # Supported Aggregations
-    ///
-    /// Maps to ALPACA bar query parameter:
-    /// - `Second` → `{n}s`
-    /// - `Minute` → `{n}m`
-    /// - `Hour` → `{n}H`
-    /// - `Day` → `{n}D`
-    /// - `Week` → `{n}W`
-    /// - `Month` → `{n}M`
-    ///
-    /// # Pagination
-    ///
-    /// - Uses `before` parameter for backwards pagination
-    /// - Pages backwards from end time (or now) to start time
-    /// - Stops when: limit reached, time window covered, or API returns empty
-    /// - Rate limit safety: ≥ 50ms between requests
-    ///
-    /// # Panics
-    ///
-    /// May panic if internal data structures are in an unexpected state.
-    ///
-    /// # References
-    ///
-    /// - <https://tr.alpaca.com/docs-v5/en/#order-book-trading-market-data-get-candlesticks>
-    /// - <https://tr.alpaca.com/docs-v5/en/#order-book-trading-market-data-get-candlesticks-history>
+    /// Returns an error if the HTTP request fails or bar parsing fails.
     pub async fn request_bars(
         &self,
         bar_type: BarType,
         start: Option<DateTime<Utc>>,
-        mut end: Option<DateTime<Utc>>,
+        end: Option<DateTime<Utc>>,
         limit: Option<u32>,
     ) -> anyhow::Result<Vec<Bar>> {
-        const HISTORY_SPLIT_DAYS: i64 = 100;
-        const MAX_PAGES_SOFT: usize = 500;
-
-        let limit = if limit == Some(0) { None } else { limit };
-
         anyhow::ensure!(
             bar_type.aggregation_source() == AggregationSource::External,
             "Only EXTERNAL aggregation is supported"
         );
-        if let (Some(s), Some(e)) = (start, end) {
-            anyhow::ensure!(s < e, "Invalid time range: start={s:?} end={e:?}");
-        }
 
-        let now = Utc::now();
-        if let Some(s) = start
-            && s > now
-        {
-            return Ok(Vec::new());
-        }
-        if let Some(e) = end
-            && e > now
-        {
-            end = Some(now);
-        }
-
+        let instrument_id = bar_type.instrument_id();
+        let symbol = instrument_id.symbol.as_str();
         let spec = bar_type.spec();
         let step = spec.step.get();
-        let bar_param = match spec.aggregation {
-            BarAggregation::Second => format!("{step}s"),
-            BarAggregation::Minute => format!("{step}m"),
-            BarAggregation::Hour => format!("{step}H"),
-            BarAggregation::Day => format!("{step}D"),
-            BarAggregation::Week => format!("{step}W"),
-            BarAggregation::Month => format!("{step}M"),
-            a => anyhow::bail!("ALPACA does not support {a:?} aggregation"),
+
+        // Map bar aggregation to Alpaca timeframe format
+        let timeframe = match spec.aggregation {
+            BarAggregation::Minute => format!("{}Min", step),
+            BarAggregation::Hour => format!("{}Hour", step),
+            BarAggregation::Day => format!("{}Day", step),
+            BarAggregation::Week => format!("{}Week", step),
+            BarAggregation::Month => format!("{}Month", step),
+            a => anyhow::bail!("Alpaca does not support {:?} aggregation", a),
         };
 
-        let slot_ms: i64 = match spec.aggregation {
-            BarAggregation::Second => (step as i64) * 1_000,
-            BarAggregation::Minute => (step as i64) * 60_000,
-            BarAggregation::Hour => (step as i64) * 3_600_000,
-            BarAggregation::Day => (step as i64) * 86_400_000,
-            BarAggregation::Week => (step as i64) * 7 * 86_400_000,
-            BarAggregation::Month => (step as i64) * 30 * 86_400_000,
-            _ => unreachable!("Unsupported aggregation should have been caught above"),
-        };
-        let slot_ns: i64 = slot_ms * 1_000_000;
+        // Format dates as RFC3339 strings if provided
+        let start_str = start.map(|s| s.to_rfc3339());
+        let end_str = end.map(|e| e.to_rfc3339());
 
-        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-        enum Mode {
-            Latest,
-            Backward,
-            Range,
-        }
-
-        let mode = match (start, end) {
-            (None, None) => Mode::Latest,
-            (Some(_), None) => Mode::Backward, // Changed: when only start is provided, work backward from now
-            (None, Some(_)) => Mode::Backward,
-            (Some(_), Some(_)) => Mode::Range,
-        };
-
-        let start_ns = start.and_then(|s| s.timestamp_nanos_opt());
-        let end_ns = end.and_then(|e| e.timestamp_nanos_opt());
-
-        // Floor start and ceiling end to bar boundaries for cleaner API requests
-        let start_ms = start.map(|s| {
-            let ms = s.timestamp_millis();
-            if slot_ms > 0 {
-                (ms / slot_ms) * slot_ms // Floor to nearest bar boundary
-            } else {
-                ms
-            }
-        });
-        let end_ms = end.map(|e| {
-            let ms = e.timestamp_millis();
-            if slot_ms > 0 {
-                ((ms + slot_ms - 1) / slot_ms) * slot_ms // Ceiling to nearest bar boundary
-            } else {
-                ms
-            }
-        });
-        let now_ms = now.timestamp_millis();
-
-        let symbol = bar_type.instrument_id().symbol;
-        let inst = self.instrument_or_fetch(symbol.inner()).await?;
-
-        let mut out: Vec<Bar> = Vec::new();
-        let mut pages = 0usize;
-
-        // IMPORTANT: ALPACA API behavior:
-        // - With 'after' parameter: returns bars with timestamp > after (going forward)
-        // - With 'before' parameter: returns bars with timestamp < before (going backward)
-        // For Range mode, we use 'before' starting from the end time to get bars before it
-        let mut after_ms: Option<i64> = None;
-        let mut before_ms: Option<i64> = match mode {
-            Mode::Backward => end_ms.map(|v| v.saturating_sub(1)),
-            Mode::Range => {
-                // For Range, start from the end time (or current time if no end specified)
-                // The API will return bars with timestamp < before_ms
-                Some(end_ms.unwrap_or(now_ms))
-            }
-            Mode::Latest => None,
-        };
-
-        // For Range mode, we'll paginate backwards like Backward mode
-        let mut forward_prepend_mode = matches!(mode, Mode::Range);
-
-        // Adjust before_ms to ensure we get data from the API
-        // ALPACA API might not have bars for the very recent past
-        // This handles both explicit end=now and the actor layer setting end=now when it's None
-        if matches!(mode, Mode::Backward | Mode::Range)
-            && let Some(b) = before_ms
-        {
-            // ALPACA endpoints have different data availability windows:
-            // - Regular endpoint: has most recent data but limited depth
-            // - History endpoint: has deep history but lags behind current time
-            // Use a small buffer to avoid the "dead zone"
-            let buffer_ms = slot_ms.max(60_000); // At least 1 minute or 1 bar
-            if b >= now_ms.saturating_sub(buffer_ms) {
-                before_ms = Some(now_ms.saturating_sub(buffer_ms));
-            }
-        }
-
-        let mut have_latest_first_page = false;
-        let mut progressless_loops = 0u8;
-
-        loop {
-            if let Some(lim) = limit
-                && lim > 0
-                && out.len() >= lim as usize
-            {
-                break;
-            }
-            if pages >= MAX_PAGES_SOFT {
-                break;
-            }
-
-            let pivot_ms = if let Some(a) = after_ms {
-                a
-            } else if let Some(b) = before_ms {
-                b
-            } else {
-                now_ms
-            };
-            // Choose endpoint based on how old the data is:
-            // - Use regular endpoint for recent data (< 1 hour old)
-            // - Use history endpoint for older data (> 1 hour old)
-            // This avoids the "gap" where history endpoint has no recent data
-            // and regular endpoint has limited depth
-            let age_ms = now_ms.saturating_sub(pivot_ms);
-            let age_hours = age_ms / (60 * 60 * 1000);
-            let using_history = age_hours > 1; // Use history if data is > 1 hour old
-
-            let page_ceiling = if using_history { 100 } else { 300 };
-            let remaining = limit
-                .filter(|&l| l > 0) // Treat limit=0 as no limit
-                .map(|l| (l as usize).saturating_sub(out.len()))
-                .unwrap_or(page_ceiling);
-            let page_cap = remaining.min(page_ceiling);
-
-            let mut p = GetCandlesticksParamsBuilder::default();
-            p.inst_id(symbol.as_str())
-                .bar(&bar_param)
-                .limit(page_cap as u32);
-
-            // Track whether this planned request uses BEFORE or AFTER.
-            let mut req_used_before = false;
-
-            match mode {
-                Mode::Latest => {
-                    if have_latest_first_page && let Some(b) = before_ms {
-                        p.before_ms(b);
-                        req_used_before = true;
-                    }
-                }
-                Mode::Backward => {
-                    if let Some(b) = before_ms {
-                        p.before_ms(b);
-                        req_used_before = true;
-                    }
-                }
-                Mode::Range => {
-                    // For first request with regular endpoint, try without parameters
-                    // to get the most recent bars, then filter
-                    if pages == 0 && !using_history {
-                        // Don't set any time parameters on first request
-                        // This gets the most recent bars available
-                    } else if forward_prepend_mode {
-                        if let Some(b) = before_ms {
-                            p.before_ms(b);
-                            req_used_before = true;
-                        }
-                    } else if let Some(a) = after_ms {
-                        p.after_ms(a);
-                    }
-                }
-            }
-
-            let params = p.build().map_err(anyhow::Error::new)?;
-
-            let mut raw = if using_history {
-                self.inner
-                    .http_get_candlesticks_history(params.clone())
-                    .await
-                    .map_err(anyhow::Error::new)?
-            } else {
-                self.inner
-                    .http_get_candlesticks(params.clone())
-                    .await
-                    .map_err(anyhow::Error::new)?
-            };
-
-            // --- Fallbacks on empty page ---
-            if raw.is_empty() {
-                // LATEST: retry same cursor via history, then step back a page-interval before giving up
-                if matches!(mode, Mode::Latest)
-                    && have_latest_first_page
-                    && !using_history
-                    && let Some(b) = before_ms
-                {
-                    let mut p2 = GetCandlesticksParamsBuilder::default();
-                    p2.inst_id(symbol.as_str())
-                        .bar(&bar_param)
-                        .limit(page_cap as u32);
-                    p2.before_ms(b);
-                    let params2 = p2.build().map_err(anyhow::Error::new)?;
-                    let raw2 = self
-                        .inner
-                        .http_get_candlesticks_history(params2)
-                        .await
-                        .map_err(anyhow::Error::new)?;
-                    if !raw2.is_empty() {
-                        raw = raw2;
-                    } else {
-                        // Step back one page interval and retry loop
-                        let jump = (page_cap as i64).saturating_mul(slot_ms.max(1));
-                        before_ms = Some(b.saturating_sub(jump));
-                        progressless_loops = progressless_loops.saturating_add(1);
-                        if progressless_loops >= 3 {
-                            break;
-                        }
-                        continue;
-                    }
-                }
-
-                // Range mode doesn't need special bootstrap - it uses the normal flow with before_ms set
-
-                // If still empty: for Range after first page, try a single backstep window using BEFORE
-                if raw.is_empty() && matches!(mode, Mode::Range) && pages > 0 {
-                    let backstep_ms = (page_cap as i64).saturating_mul(slot_ms.max(1));
-                    let pivot_back = after_ms.unwrap_or(now_ms).saturating_sub(backstep_ms);
-
-                    let mut p2 = GetCandlesticksParamsBuilder::default();
-                    p2.inst_id(symbol.as_str())
-                        .bar(&bar_param)
-                        .limit(page_cap as u32)
-                        .before_ms(pivot_back);
-                    let params2 = p2.build().map_err(anyhow::Error::new)?;
-                    let raw2 = if (now_ms.saturating_sub(pivot_back)) / (24 * 60 * 60 * 1000)
-                        > HISTORY_SPLIT_DAYS
-                    {
-                        self.inner.http_get_candlesticks_history(params2).await
-                    } else {
-                        self.inner.http_get_candlesticks(params2).await
-                    }
-                    .map_err(anyhow::Error::new)?;
-                    if raw2.is_empty() {
-                        break;
-                    } else {
-                        raw = raw2;
-                        forward_prepend_mode = true;
-                        req_used_before = true;
-                    }
-                }
-
-                // First LATEST page empty: jump back >100d to force history, then continue loop
-                if raw.is_empty()
-                    && matches!(mode, Mode::Latest)
-                    && !have_latest_first_page
-                    && !using_history
-                {
-                    let jump_days_ms = (HISTORY_SPLIT_DAYS + 1) * 86_400_000;
-                    before_ms = Some(now_ms.saturating_sub(jump_days_ms));
-                    have_latest_first_page = true;
-                    continue;
-                }
-
-                // Still empty for any other case? Just break.
-                if raw.is_empty() {
-                    break;
-                }
-            }
-            // --- end fallbacks ---
-
-            pages += 1;
-
-            // Parse, oldest → newest
-            let ts_init = self.generate_ts_init();
-            let mut page: Vec<Bar> = Vec::with_capacity(raw.len());
-            for r in &raw {
-                page.push(parse_candlestick(
-                    r,
-                    bar_type,
-                    inst.price_precision(),
-                    inst.size_precision(),
-                    ts_init,
-                )?);
-            }
-            page.reverse();
-
-            let page_oldest_ms = page.first().map(|b| b.ts_event.as_i64() / 1_000_000);
-            let page_newest_ms = page.last().map(|b| b.ts_event.as_i64() / 1_000_000);
-
-            // Range filter (inclusive)
-            // For Range mode, if we have no bars yet and this is an early page,
-            // be more tolerant with the start boundary to handle gaps in data
-            let mut filtered: Vec<Bar> = if matches!(mode, Mode::Range)
-                && out.is_empty()
-                && pages < 2
-            {
-                // On first pages of Range mode with no data yet, include the most recent bar
-                // even if it's slightly before our start time (within 2 bar periods)
-                // BUT we want ALL bars in the page that are within our range
-                let tolerance_ns = slot_ns * 2; // Allow up to 2 bar periods before start
-
-                // Debug: log the page range
-                if !page.is_empty() {
-                    tracing::debug!(
-                        "Range mode bootstrap page: {} bars from {} to {}, filtering with start={:?} end={:?}",
-                        page.len(),
-                        page.first().unwrap().ts_event.as_i64() / 1_000_000,
-                        page.last().unwrap().ts_event.as_i64() / 1_000_000,
-                        start_ms,
-                        end_ms
-                    );
-                }
-
-                let result: Vec<Bar> = page
-                    .clone()
-                    .into_iter()
-                    .filter(|b| {
-                        let ts = b.ts_event.as_i64();
-                        // Accept bars from (start - tolerance) to end
-                        let ok_after =
-                            start_ns.is_none_or(|sns| ts >= sns.saturating_sub(tolerance_ns));
-                        let ok_before = end_ns.is_none_or(|ens| ts <= ens);
-                        ok_after && ok_before
-                    })
-                    .collect();
-
-                result
-            } else {
-                // Normal filtering
-                page.clone()
-                    .into_iter()
-                    .filter(|b| {
-                        let ts = b.ts_event.as_i64();
-                        let ok_after = start_ns.is_none_or(|sns| ts >= sns);
-                        let ok_before = end_ns.is_none_or(|ens| ts <= ens);
-                        ok_after && ok_before
-                    })
-                    .collect()
-            };
-
-            if !page.is_empty() && filtered.is_empty() {
-                // For Range mode, if all bars are before our start time, there's no point continuing
-                if matches!(mode, Mode::Range)
-                    && !forward_prepend_mode
-                    && let (Some(newest_ms), Some(start_ms)) = (page_newest_ms, start_ms)
-                    && newest_ms < start_ms.saturating_sub(slot_ms * 2)
-                {
-                    // Bars are too old (more than 2 bar periods before start), stop
-                    break;
-                }
-            }
-
-            // Track contribution for progress guard
-            let contribution;
-
-            if out.is_empty() {
-                contribution = filtered.len();
-                out = filtered;
-            } else {
-                match mode {
-                    Mode::Backward | Mode::Latest => {
-                        if let Some(first) = out.first() {
-                            filtered.retain(|b| b.ts_event < first.ts_event);
-                        }
-                        contribution = filtered.len();
-                        if contribution != 0 {
-                            let mut new_out = Vec::with_capacity(out.len() + filtered.len());
-                            new_out.extend_from_slice(&filtered);
-                            new_out.extend_from_slice(&out);
-                            out = new_out;
-                        }
-                    }
-                    Mode::Range => {
-                        if forward_prepend_mode || req_used_before {
-                            // We are backfilling older pages: prepend them.
-                            if let Some(first) = out.first() {
-                                filtered.retain(|b| b.ts_event < first.ts_event);
-                            }
-                            contribution = filtered.len();
-                            if contribution != 0 {
-                                let mut new_out = Vec::with_capacity(out.len() + filtered.len());
-                                new_out.extend_from_slice(&filtered);
-                                new_out.extend_from_slice(&out);
-                                out = new_out;
-                            }
-                        } else {
-                            // Normal forward: append newer pages.
-                            if let Some(last) = out.last() {
-                                filtered.retain(|b| b.ts_event > last.ts_event);
-                            }
-                            contribution = filtered.len();
-                            out.extend(filtered);
-                        }
-                    }
-                }
-            }
-
-            // Duplicate-window mitigation for Latest/Backward
-            if contribution == 0
-                && matches!(mode, Mode::Latest | Mode::Backward)
-                && let Some(b) = before_ms
-            {
-                let jump = (page_cap as i64).saturating_mul(slot_ms.max(1));
-                let new_b = b.saturating_sub(jump);
-                if new_b != b {
-                    before_ms = Some(new_b);
-                }
-            }
-
-            if contribution == 0 {
-                progressless_loops = progressless_loops.saturating_add(1);
-                if progressless_loops >= 3 {
-                    break;
-                }
-            } else {
-                progressless_loops = 0;
-
-                // Advance cursors only when we made progress
-                match mode {
-                    Mode::Latest | Mode::Backward => {
-                        if let Some(oldest) = page_oldest_ms {
-                            before_ms = Some(oldest.saturating_sub(1));
-                            have_latest_first_page = true;
-                        } else {
-                            break;
-                        }
-                    }
-                    Mode::Range => {
-                        if forward_prepend_mode || req_used_before {
-                            if let Some(oldest) = page_oldest_ms {
-                                // Move back by at least one bar period to avoid getting the same data
-                                let jump_back = slot_ms.max(60_000); // At least 1 minute
-                                before_ms = Some(oldest.saturating_sub(jump_back));
-                                after_ms = None;
-                            } else {
-                                break;
-                            }
-                        } else if let Some(newest) = page_newest_ms {
-                            after_ms = Some(newest.saturating_add(1));
-                            before_ms = None;
-                        } else {
-                            break;
-                        }
-                    }
-                }
-            }
-
-            // Stop conditions
-            if let Some(lim) = limit
-                && lim > 0
-                && out.len() >= lim as usize
-            {
-                break;
-            }
-            if let Some(ens) = end_ns
-                && let Some(last) = out.last()
-                && last.ts_event.as_i64() >= ens
-            {
-                break;
-            }
-            if let Some(sns) = start_ns
-                && let Some(first) = out.first()
-                && (matches!(mode, Mode::Backward) || forward_prepend_mode)
-                && first.ts_event.as_i64() <= sns
-            {
-                // For Range mode, check if we have all bars up to the end time
-                if matches!(mode, Mode::Range) {
-                    // Don't stop if we haven't reached the end time yet
-                    if let Some(ens) = end_ns
-                        && let Some(last) = out.last()
-                    {
-                        let last_ts = last.ts_event.as_i64();
-                        if last_ts < ens {
-                            // We have bars before start but haven't reached end, need to continue forward
-                            // Switch from backward to forward pagination
-                            forward_prepend_mode = false;
-                            after_ms = Some((last_ts / 1_000_000).saturating_add(1));
-                            before_ms = None;
-                            continue;
-                        }
-                    }
-                }
-                break;
-            }
-
-            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-        }
-
-        // Final rescue for FORWARD/RANGE when nothing gathered
-        if out.is_empty() && matches!(mode, Mode::Range) {
-            let pivot = end_ms.unwrap_or(now_ms.saturating_sub(1));
-            let hist = (now_ms.saturating_sub(pivot)) / (24 * 60 * 60 * 1000) > HISTORY_SPLIT_DAYS;
-            let mut p = GetCandlesticksParamsBuilder::default();
-            p.inst_id(symbol.as_str())
-                .bar(&bar_param)
-                .limit(300)
-                .before_ms(pivot);
-            let params = p.build().map_err(anyhow::Error::new)?;
-            let raw = if hist {
-                self.inner.http_get_candlesticks_history(params).await
-            } else {
-                self.inner.http_get_candlesticks(params).await
-            }
+        // Fetch bars from Alpaca API
+        let resp = self
+            .inner
+            .http_get_bars(
+                symbol,
+                &timeframe,
+                start_str.as_deref(),
+                end_str.as_deref(),
+                limit,
+            )
+            .await
             .map_err(anyhow::Error::new)?;
-            if !raw.is_empty() {
-                let ts_init = self.generate_ts_init();
-                let mut page: Vec<Bar> = Vec::with_capacity(raw.len());
-                for r in &raw {
-                    page.push(parse_candlestick(
-                        r,
-                        bar_type,
-                        inst.price_precision(),
-                        inst.size_precision(),
-                        ts_init,
-                    )?);
+
+        let ts_init = self.generate_ts_init();
+
+        let mut bars = Vec::new();
+
+        // ALPACABarsResponse contains a HashMap<String, Vec<ALPACABar>> where key is symbol
+        for (_symbol, symbol_bars) in &resp.bars {
+            for raw in symbol_bars {
+                match parse_candlestick(
+                    raw,
+                    bar_type,
+                    ts_init,
+                ) {
+                    Ok(bar) => bars.push(bar),
+                    Err(e) => tracing::error!("{e}"),
                 }
-                page.reverse();
-                out = page
-                    .into_iter()
-                    .filter(|b| {
-                        let ts = b.ts_event.as_i64();
-                        let ok_after = start_ns.is_none_or(|sns| ts >= sns);
-                        let ok_before = end_ns.is_none_or(|ens| ts <= ens);
-                        ok_after && ok_before
-                    })
-                    .collect();
             }
         }
 
-        // Trim against end bound if needed (keep ≤ end)
-        if let Some(ens) = end_ns {
-            while out.last().is_some_and(|b| b.ts_event.as_i64() > ens) {
-                out.pop();
-            }
-        }
-
-        // Clamp first bar for Range when using forward pagination
-        if matches!(mode, Mode::Range)
-            && !forward_prepend_mode
-            && let Some(sns) = start_ns
-        {
-            let lower = sns.saturating_sub(slot_ns);
-            while out.first().is_some_and(|b| b.ts_event.as_i64() < lower) {
-                out.remove(0);
-            }
-        }
-
-        if let Some(lim) = limit
-            && lim > 0
-            && out.len() > lim as usize
-        {
-            out.truncate(lim as usize);
-        }
-
-        Ok(out)
+        Ok(bars)
     }
 
     /// Requests historical order status reports for the given parameters.
     ///
-    /// # References
+    /// # Errors
     ///
-    /// - <https://www.alpaca.com/docs-v5/en/#order-book-trading-trade-get-order-history-last-7-days>.
-    /// - <https://www.alpaca.com/docs-v5/en/#order-book-trading-trade-get-order-history-last-3-months>.
+    /// Returns an error if the HTTP request fails or order parsing fails.
     #[allow(clippy::too_many_arguments)]
     pub async fn request_order_status_reports(
         &self,
         account_id: AccountId,
-        instrument_type: Option<ALPACAInstrumentType>,
+        _instrument_type: Option<ALPACAInstrumentType>,
         instrument_id: Option<InstrumentId>,
         start: Option<DateTime<Utc>>,
         end: Option<DateTime<Utc>>,
         open_only: bool,
         limit: Option<u32>,
     ) -> anyhow::Result<Vec<OrderStatusReport>> {
-        // Build params for order history
-        let mut history_params = GetOrderHistoryParamsBuilder::default();
+        // Determine status filter
+        let status = if open_only { Some("open") } else { None };
 
-        let instrument_type = if let Some(instrument_type) = instrument_type {
-            instrument_type
-        } else {
-            let instrument_id = instrument_id.ok_or_else(|| {
-                anyhow::anyhow!("Instrument ID required if `instrument_type` not provided")
-            })?;
-            let instrument = self
-                .instrument_or_fetch(instrument_id.symbol.inner())
-                .await?;
-            alpaca_instrument_type(&instrument)?
-        };
+        // Format dates as RFC3339 strings if provided
+        let after_str = start.map(|s| s.to_rfc3339());
+        let until_str = end.map(|e| e.to_rfc3339());
 
-        history_params.inst_type(instrument_type);
-
-        if let Some(instrument_id) = instrument_id.as_ref() {
-            history_params.inst_id(instrument_id.symbol.inner().to_string());
-        }
-
-        if let Some(limit) = limit {
-            history_params.limit(limit);
-        }
-
-        let history_params = history_params.build().map_err(|e| anyhow::anyhow!(e))?;
-
-        // Build params for pending orders
-        let mut pending_params = GetOrderListParamsBuilder::default();
-        pending_params.inst_type(instrument_type);
-
-        if let Some(instrument_id) = instrument_id.as_ref() {
-            pending_params.inst_id(instrument_id.symbol.inner().to_string());
-        }
-
-        if let Some(limit) = limit {
-            pending_params.limit(limit);
-        }
-
-        let pending_params = pending_params.build().map_err(|e| anyhow::anyhow!(e))?;
-
-        let combined_resp = if open_only {
-            // Only request pending/open orders
-            self.inner
-                .http_get_order_list(pending_params)
-                .await
-                .map_err(|e| anyhow::anyhow!(e))?
-        } else {
-            // Make both requests concurrently
-            let (history_resp, pending_resp) = tokio::try_join!(
-                self.inner.http_get_order_history(history_params),
-                self.inner.http_get_order_list(pending_params)
+        // Fetch orders from Alpaca API
+        let orders = self
+            .inner
+            .http_get_orders(
+                status,
+                limit,
+                after_str.as_deref(),
+                until_str.as_deref(),
             )
-            .map_err(|e| anyhow::anyhow!(e))?;
-
-            // Combine both responses
-            let mut combined_resp = history_resp;
-            combined_resp.extend(pending_resp);
-            combined_resp
-        };
-
-        // Prepare time range filter
-        let start_ns = start.map(UnixNanos::from);
-        let end_ns = end.map(UnixNanos::from);
+            .await
+            .map_err(anyhow::Error::new)?;
 
         let ts_init = self.generate_ts_init();
-        let mut reports = Vec::with_capacity(combined_resp.len());
+        let mut reports = Vec::with_capacity(orders.len());
 
-        // Use a seen filter in case pending orders are within the histories "2hr reserve window"
-        let mut seen = AHashSet::new();
-
-        for order in combined_resp {
-            if seen.contains(&order.cl_ord_id) {
-                continue; // Reserved pending already reported
+        for order in &orders {
+            // Filter by instrument if specified
+            if let Some(inst_id) = instrument_id {
+                if order.symbol != inst_id.symbol.as_str() {
+                    continue;
+                }
             }
-            seen.insert(order.cl_ord_id);
 
-            let inst = self.instrument_or_fetch(order.inst_id).await?;
+            let inst = self
+                .instrument_or_fetch(Ustr::from(&order.symbol))
+                .await?;
 
             let report = parse_order_status_report(
-                &order,
+                order,
                 account_id,
                 inst.id(),
-                inst.price_precision(),
-                inst.size_precision(),
                 ts_init,
-            );
-
-            if let Some(start_ns) = start_ns
-                && report.ts_last < start_ns
-            {
-                continue;
-            }
-            if let Some(end_ns) = end_ns
-                && report.ts_last > end_ns
-            {
-                continue;
-            }
+            )?;
 
             reports.push(report);
         }
@@ -1986,142 +1288,65 @@ impl ALPACAHttpClient {
 
     /// Requests fill reports (transaction details) for the given parameters.
     ///
-    /// # References
+    /// # Errors
     ///
-    /// <https://www.alpaca.com/docs-v5/en/#order-book-trading-trade-get-transaction-details-last-3-days>.
+    /// Returns an error indicating this feature is not yet implemented.
+    ///
+    /// # Note
+    ///
+    /// Alpaca provides fill information as part of order updates. This method
+    /// will be implemented to extract fill reports from order history.
     pub async fn request_fill_reports(
         &self,
-        account_id: AccountId,
-        instrument_type: Option<ALPACAInstrumentType>,
-        instrument_id: Option<InstrumentId>,
-        start: Option<DateTime<Utc>>,
-        end: Option<DateTime<Utc>>,
-        limit: Option<u32>,
+        _account_id: AccountId,
+        _instrument_type: Option<ALPACAInstrumentType>,
+        _instrument_id: Option<InstrumentId>,
+        _start: Option<DateTime<Utc>>,
+        _end: Option<DateTime<Utc>>,
+        _limit: Option<u32>,
     ) -> anyhow::Result<Vec<FillReport>> {
-        let mut params = GetTransactionDetailsParamsBuilder::default();
-
-        let instrument_type = if let Some(instrument_type) = instrument_type {
-            instrument_type
-        } else {
-            let instrument_id = instrument_id.ok_or_else(|| {
-                anyhow::anyhow!("Instrument ID required if `instrument_type` not provided")
-            })?;
-            let instrument = self
-                .instrument_or_fetch(instrument_id.symbol.inner())
-                .await?;
-            alpaca_instrument_type(&instrument)?
-        };
-
-        params.inst_type(instrument_type);
-
-        if let Some(instrument_id) = instrument_id {
-            let instrument = self
-                .instrument_or_fetch(instrument_id.symbol.inner())
-                .await?;
-            let instrument_type = alpaca_instrument_type(&instrument)?;
-            params.inst_type(instrument_type);
-            params.inst_id(instrument_id.symbol.inner().to_string());
-        }
-
-        if let Some(limit) = limit {
-            params.limit(limit);
-        }
-
-        let params = params.build().map_err(|e| anyhow::anyhow!(e))?;
-
-        let resp = self
-            .inner
-            .http_get_transaction_details(params)
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?;
-
-        // Prepare time range filter
-        let start_ns = start.map(UnixNanos::from);
-        let end_ns = end.map(UnixNanos::from);
-
-        let ts_init = self.generate_ts_init();
-        let mut reports = Vec::with_capacity(resp.len());
-
-        for detail in resp {
-            let inst = self.instrument_or_fetch(detail.inst_id).await?;
-
-            let report = parse_fill_report(
-                detail,
-                account_id,
-                inst.id(),
-                inst.price_precision(),
-                inst.size_precision(),
-                ts_init,
-            )?;
-
-            if let Some(start_ns) = start_ns
-                && report.ts_event < start_ns
-            {
-                continue;
-            }
-
-            if let Some(end_ns) = end_ns
-                && report.ts_event > end_ns
-            {
-                continue;
-            }
-
-            reports.push(report);
-        }
-
-        Ok(reports)
+        anyhow::bail!("Fill reports not yet implemented for Alpaca")
     }
 
     /// Requests current position status reports for the given parameters.
     ///
-    /// # References
+    /// # Errors
     ///
-    /// <https://www.alpaca.com/docs-v5/en/#trading-account-rest-api-get-positions>.
+    /// Returns an error if the HTTP request fails or position parsing fails.
     pub async fn request_position_status_reports(
         &self,
         account_id: AccountId,
-        instrument_type: Option<ALPACAInstrumentType>,
+        _instrument_type: Option<ALPACAInstrumentType>,
         instrument_id: Option<InstrumentId>,
     ) -> anyhow::Result<Vec<PositionStatusReport>> {
-        let mut params = GetPositionsParamsBuilder::default();
-
-        let instrument_type = if let Some(instrument_type) = instrument_type {
-            instrument_type
+        // Fetch positions from Alpaca API
+        let positions = if let Some(inst_id) = instrument_id {
+            // Get specific position
+            vec![self
+                .inner
+                .http_get_position(inst_id.symbol.as_str())
+                .await
+                .map_err(anyhow::Error::new)?]
         } else {
-            let instrument_id = instrument_id.ok_or_else(|| {
-                anyhow::anyhow!("Instrument ID required if `instrument_type` not provided")
-            })?;
-            let instrument = self
-                .instrument_or_fetch(instrument_id.symbol.inner())
-                .await?;
-            alpaca_instrument_type(&instrument)?
+            // Get all positions
+            self.inner
+                .http_get_positions()
+                .await
+                .map_err(anyhow::Error::new)?
         };
 
-        params.inst_type(instrument_type);
-
-        instrument_id
-            .as_ref()
-            .map(|i| params.inst_id(i.symbol.inner()));
-
-        let params = params.build().map_err(|e| anyhow::anyhow!(e))?;
-
-        let resp = self
-            .inner
-            .http_get_positions(params)
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?;
-
         let ts_init = self.generate_ts_init();
-        let mut reports = Vec::with_capacity(resp.len());
+        let mut reports = Vec::with_capacity(positions.len());
 
-        for position in resp {
-            let inst = self.instrument_or_fetch(position.inst_id).await?;
+        for position in &positions {
+            let inst = self
+                .instrument_or_fetch(Ustr::from(&position.symbol))
+                .await?;
 
             let report = parse_position_status_report(
                 position,
                 account_id,
                 inst.id(),
-                inst.size_precision(),
                 ts_init,
             )?;
             reports.push(report);
@@ -2132,121 +1357,72 @@ impl ALPACAHttpClient {
 
     /// Places an algo order via HTTP.
     ///
-    /// # References
+    /// # Errors
     ///
-    /// <https://www.alpaca.com/docs-v5/en/#order-book-trading-algo-trading-post-place-algo-order>
+    /// Returns an error indicating algo orders are not supported for Alpaca.
+    ///
+    /// # Note
+    ///
+    /// Alpaca does not support algo orders. Use regular order types instead.
     pub async fn place_algo_order(
         &self,
-        request: ALPACAPlaceAlgoOrderRequest,
+        _request: ALPACAPlaceAlgoOrderRequest,
     ) -> Result<ALPACAPlaceAlgoOrderResponse, ALPACAHttpError> {
-        let body =
-            serde_json::to_vec(&request).map_err(|e| ALPACAHttpError::JsonError(e.to_string()))?;
-
-        let resp: Vec<ALPACAPlaceAlgoOrderResponse> = self
-            .inner
-            .send_request(Method::POST, "/api/v5/trade/order-algo", Some(body), true)
-            .await?;
-
-        resp.into_iter()
-            .next()
-            .ok_or_else(|| ALPACAHttpError::ValidationError("Empty response".to_string()))
+        Err(ALPACAHttpError::ValidationError(
+            "Algo orders not supported for Alpaca".to_string(),
+        ))
     }
 
     /// Cancels an algo order via HTTP.
     ///
-    /// # References
+    /// # Errors
     ///
-    /// <https://www.alpaca.com/docs-v5/en/#order-book-trading-algo-trading-post-cancel-algo-order>
+    /// Returns an error indicating algo orders are not supported for Alpaca.
     pub async fn cancel_algo_order(
         &self,
-        request: ALPACACancelAlgoOrderRequest,
+        _request: ALPACACancelAlgoOrderRequest,
     ) -> Result<ALPACACancelAlgoOrderResponse, ALPACAHttpError> {
-        // ALPACA expects an array for cancel-algos endpoint
-        // Serialize once to bytes to keep signing and sending identical
-        let body =
-            serde_json::to_vec(&[request]).map_err(|e| ALPACAHttpError::JsonError(e.to_string()))?;
-
-        let resp: Vec<ALPACACancelAlgoOrderResponse> = self
-            .inner
-            .send_request(Method::POST, "/api/v5/trade/cancel-algos", Some(body), true)
-            .await?;
-
-        resp.into_iter()
-            .next()
-            .ok_or_else(|| ALPACAHttpError::ValidationError("Empty response".to_string()))
+        Err(ALPACAHttpError::ValidationError(
+            "Algo orders not supported for Alpaca".to_string(),
+        ))
     }
 
     /// Places an algo order using domain types.
     ///
-    /// This is a convenience method that accepts Nautilus domain types
-    /// and builds the appropriate ALPACA request structure internally.
+    /// # Errors
+    ///
+    /// Returns an error indicating algo orders are not supported for Alpaca.
     #[allow(clippy::too_many_arguments)]
     pub async fn place_algo_order_with_domain_types(
         &self,
-        instrument_id: InstrumentId,
-        td_mode: ALPACATradeMode,
-        client_order_id: ClientOrderId,
-        order_side: OrderSide,
-        order_type: OrderType,
-        quantity: Quantity,
-        trigger_price: Price,
-        trigger_type: Option<TriggerType>,
-        limit_price: Option<Price>,
-        reduce_only: Option<bool>,
+        _instrument_id: InstrumentId,
+        _td_mode: ALPACATradeMode,
+        _client_order_id: ClientOrderId,
+        _order_side: OrderSide,
+        _order_type: OrderType,
+        _quantity: Quantity,
+        _trigger_price: Price,
+        _trigger_type: Option<TriggerType>,
+        _limit_price: Option<Price>,
+        _reduce_only: Option<bool>,
     ) -> Result<ALPACAPlaceAlgoOrderResponse, ALPACAHttpError> {
-        if !matches!(order_side, OrderSide::Buy | OrderSide::Sell) {
-            return Err(ALPACAHttpError::ValidationError(
-                "Invalid order side".to_string(),
-            ));
-        }
-        let alpaca_side: ALPACASide = order_side.into();
-
-        // Map trigger type to ALPACA format
-        let trigger_px_type_enum = trigger_type.map(Into::into).unwrap_or(ALPACATriggerType::Last);
-
-        // Determine order price based on order type
-        let order_px = if matches!(order_type, OrderType::StopLimit | OrderType::LimitIfTouched) {
-            limit_price.map(|p| p.to_string())
-        } else {
-            // Market orders use -1 to indicate market execution
-            Some("-1".to_string())
-        };
-
-        let request = ALPACAPlaceAlgoOrderRequest {
-            inst_id: instrument_id.symbol.as_str().to_string(),
-            td_mode,
-            side: alpaca_side,
-            ord_type: ALPACAAlgoOrderType::Trigger, // All conditional orders use 'trigger' type
-            sz: quantity.to_string(),
-            algo_cl_ord_id: Some(client_order_id.as_str().to_string()),
-            trigger_px: Some(trigger_price.to_string()),
-            order_px,
-            trigger_px_type: Some(trigger_px_type_enum),
-            tgt_ccy: None,  // Let ALPACA determine based on instrument
-            pos_side: None, // Use default position side
-            close_position: None,
-            tag: Some(ALPACA_NAUTILUS_BROKER_ID.to_string()),
-            reduce_only,
-        };
-
-        self.place_algo_order(request).await
+        Err(ALPACAHttpError::ValidationError(
+            "Algo orders not supported for Alpaca".to_string(),
+        ))
     }
 
     /// Cancels an algo order using domain types.
     ///
-    /// This is a convenience method that accepts Nautilus domain types
-    /// and builds the appropriate ALPACA request structure internally.
+    /// # Errors
+    ///
+    /// Returns an error indicating algo orders are not supported for Alpaca.
     pub async fn cancel_algo_order_with_domain_types(
         &self,
-        instrument_id: InstrumentId,
-        algo_id: String,
+        _instrument_id: InstrumentId,
+        _algo_id: String,
     ) -> Result<ALPACACancelAlgoOrderResponse, ALPACAHttpError> {
-        let request = ALPACACancelAlgoOrderRequest {
-            inst_id: instrument_id.symbol.to_string(),
-            algo_id: Some(algo_id),
-            algo_cl_ord_id: None,
-        };
-
-        self.cancel_algo_order(request).await
+        Err(ALPACAHttpError::ValidationError(
+            "Algo orders not supported for Alpaca".to_string(),
+        ))
     }
 }

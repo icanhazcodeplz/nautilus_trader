@@ -25,7 +25,7 @@ use ustr::Ustr;
 
 /// Represents an asset (tradable symbol) from the GET /v2/assets endpoint.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AlpacaAsset {
+pub struct ALPACAAsset {
     /// Asset ID (UUID).
     pub id: String,
     /// Symbol name.
@@ -57,9 +57,46 @@ pub struct AlpacaAsset {
     pub status: String,
 }
 
+/// Represents an instrument definition (extended asset info).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ALPACAInstrument {
+    /// Symbol/Instrument ID.
+    pub symbol: String,
+    /// Instrument type (Stock, Crypto, Spot, Swap, Futures, Option).
+    #[serde(default)]
+    pub instrument_type: Option<String>,
+    /// Base currency (for crypto pairs).
+    #[serde(default)]
+    pub base_currency: Option<String>,
+    /// Quote currency.
+    #[serde(default)]
+    pub quote_currency: Option<String>,
+    /// Settlement currency.
+    #[serde(default)]
+    pub settlement_currency: Option<String>,
+    /// Contract size/multiplier.
+    #[serde(default)]
+    pub contract_size: Option<String>,
+    /// Tick size (minimum price increment).
+    #[serde(default)]
+    pub tick_size: Option<String>,
+    /// Lot size (minimum quantity increment).
+    #[serde(default)]
+    pub lot_size: Option<String>,
+    /// Minimum order size.
+    #[serde(default)]
+    pub min_size: Option<String>,
+    /// Expiry time (for derivatives).
+    #[serde(default)]
+    pub expiry_time: Option<String>,
+    /// Status.
+    #[serde(default)]
+    pub status: Option<String>,
+}
+
 /// Represents a bar/candlestick from the GET /v2/stocks/{symbol}/bars endpoint.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AlpacaBar {
+pub struct ALPACABar {
     /// Timestamp (RFC3339).
     pub t: String,
     /// Open price.
@@ -82,9 +119,9 @@ pub struct AlpacaBar {
 
 /// Response wrapper for bars endpoint.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AlpacaBarsResponse {
+pub struct ALPACABarsResponse {
     /// Map of symbol to bars.
-    pub bars: std::collections::HashMap<String, Vec<AlpacaBar>>,
+    pub bars: std::collections::HashMap<String, Vec<ALPACABar>>,
     /// Symbol queried.
     pub symbol: String,
     /// Next page token.
@@ -94,7 +131,7 @@ pub struct AlpacaBarsResponse {
 
 /// Represents a trade from the GET /v2/stocks/{symbol}/trades endpoint.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AlpacaTrade {
+pub struct ALPACATrade {
     /// Timestamp (RFC3339).
     pub t: String,
     /// Exchange where the trade occurred.
@@ -115,9 +152,9 @@ pub struct AlpacaTrade {
 
 /// Response wrapper for trades endpoint.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AlpacaTradesResponse {
+pub struct ALPACATradesResponse {
     /// List of trades.
-    pub trades: Vec<AlpacaTrade>,
+    pub trades: Vec<ALPACATrade>,
     /// Symbol queried.
     pub symbol: String,
     /// Next page token.
@@ -127,7 +164,7 @@ pub struct AlpacaTradesResponse {
 
 /// Represents a quote from the GET /v2/stocks/{symbol}/quotes endpoint.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AlpacaQuote {
+pub struct ALPACAQuote {
     /// Timestamp (RFC3339).
     pub t: String,
     /// Ask exchange.
@@ -152,9 +189,9 @@ pub struct AlpacaQuote {
 
 /// Response wrapper for quotes endpoint.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AlpacaQuotesResponse {
+pub struct ALPACAQuotesResponse {
     /// List of quotes.
-    pub quotes: Vec<AlpacaQuote>,
+    pub quotes: Vec<ALPACAQuote>,
     /// Symbol queried.
     pub symbol: String,
     /// Next page token.
@@ -164,7 +201,7 @@ pub struct AlpacaQuotesResponse {
 
 /// Represents the latest quote for a symbol.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AlpacaLatestQuote {
+pub struct ALPACALatestQuote {
     /// Symbol.
     pub symbol: String,
     /// Ask price.
@@ -185,7 +222,7 @@ pub struct AlpacaLatestQuote {
 
 /// Represents the latest trade for a symbol.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AlpacaLatestTrade {
+pub struct ALPACALatestTrade {
     /// Symbol.
     pub symbol: String,
     /// Price.
@@ -200,24 +237,24 @@ pub struct AlpacaLatestTrade {
 
 /// Represents a snapshot of current market data.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AlpacaSnapshot {
+pub struct ALPACASnapshot {
     /// Symbol.
     pub symbol: String,
     /// Latest trade.
     #[serde(default)]
-    pub latest_trade: Option<AlpacaLatestTrade>,
+    pub latest_trade: Option<ALPACALatestTrade>,
     /// Latest quote.
     #[serde(default)]
-    pub latest_quote: Option<AlpacaLatestQuote>,
+    pub latest_quote: Option<ALPACALatestQuote>,
     /// Minute bar.
     #[serde(default)]
-    pub minute_bar: Option<AlpacaBar>,
+    pub minute_bar: Option<ALPACABar>,
     /// Daily bar.
     #[serde(default)]
-    pub daily_bar: Option<AlpacaBar>,
+    pub daily_bar: Option<ALPACABar>,
     /// Previous daily bar.
     #[serde(default)]
-    pub prev_daily_bar: Option<AlpacaBar>,
+    pub prev_daily_bar: Option<ALPACABar>,
 }
 
 // =============================================================================
@@ -226,7 +263,7 @@ pub struct AlpacaSnapshot {
 
 /// Represents account information from GET /v2/account.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AlpacaAccount {
+pub struct ALPACAAccount {
     /// Account ID.
     pub id: String,
     /// Account number.
@@ -286,7 +323,7 @@ pub struct AlpacaAccount {
 
 /// Represents an order from GET /v2/orders or POST /v2/orders.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AlpacaOrder {
+pub struct ALPACAOrder {
     /// Order ID.
     pub id: String,
     /// Client order ID.
@@ -355,7 +392,7 @@ pub struct AlpacaOrder {
     pub extended_hours: bool,
     /// Legs (for complex orders).
     #[serde(default)]
-    pub legs: Option<Vec<AlpacaOrder>>,
+    pub legs: Option<Vec<ALPACAOrder>>,
     /// Trail percent.
     #[serde(default)]
     pub trail_percent: Option<Decimal>,
@@ -369,7 +406,7 @@ pub struct AlpacaOrder {
 
 /// Request to create an order via POST /v2/orders.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AlpacaOrderRequest {
+pub struct ALPACAOrderRequest {
     /// Symbol to trade.
     pub symbol: String,
     /// Quantity.
@@ -437,7 +474,7 @@ pub struct StopLossSpec {
 
 /// Represents a position from GET /v2/positions.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AlpacaPosition {
+pub struct ALPACAPosition {
     /// Asset ID.
     pub asset_id: String,
     /// Symbol.
@@ -478,7 +515,7 @@ pub struct AlpacaPosition {
 
 /// Represents market clock from GET /v2/clock.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AlpacaClock {
+pub struct ALPACAClock {
     /// Current timestamp.
     pub timestamp: String,
     /// Whether market is open.
@@ -495,11 +532,119 @@ pub struct AlpacaClock {
 
 /// Represents a calendar day from GET /v2/calendar.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AlpacaCalendar {
+pub struct ALPACACalendar {
     /// Date.
     pub date: String,
     /// Market open time.
     pub open: String,
     /// Market close time.
     pub close: String,
+}
+
+// =============================================================================
+// Type Aliases and Additional Models
+// =============================================================================
+
+/// Type alias for candlestick data (Alpaca uses bars).
+pub type ALPACACandlestick = ALPACABar;
+
+/// Type alias for order history (same as order).
+pub type ALPACAOrderHistory = ALPACAOrder;
+
+/// Represents mark price data (placeholder for compatibility).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ALPACAMarkPrice {
+    /// Symbol/Instrument ID.
+    pub symbol: String,
+    /// Mark price.
+    pub mark_price: String,
+    /// Timestamp.
+    pub timestamp: String,
+}
+
+/// Represents index ticker data (placeholder for compatibility).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ALPACAIndexTicker {
+    /// Symbol/Instrument ID.
+    pub symbol: String,
+    /// Index price.
+    pub index_price: String,
+    /// Timestamp.
+    pub timestamp: String,
+}
+
+/// Represents transaction detail (placeholder for compatibility).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ALPACATransactionDetail {
+    /// Transaction ID.
+    pub id: String,
+    /// Type of transaction.
+    #[serde(rename = "type")]
+    pub transaction_type: String,
+    /// Amount.
+    pub amount: Decimal,
+    /// Currency.
+    pub currency: String,
+    /// Timestamp.
+    pub timestamp: String,
+}
+
+/// Represents balance detail (placeholder for compatibility).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ALPACABalanceDetail {
+    /// Currency.
+    pub currency: String,
+    /// Available balance.
+    pub available: Decimal,
+    /// Cash balance.
+    pub cash: Decimal,
+}
+
+/// Represents place order response (type alias for order).
+pub type ALPACAPlaceOrderResponse = ALPACAOrder;
+
+/// Represents position history (type alias for position).
+pub type ALPACAPositionHistory = ALPACAPosition;
+
+/// Represents position tier information (placeholder for compatibility).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ALPACAPositionTier {
+    /// Tier level.
+    pub tier: String,
+    /// Minimum size.
+    pub min_size: String,
+    /// Maximum size.
+    pub max_size: String,
+}
+
+// =============================================================================
+// Algo Order Models (Placeholders - Not supported by Alpaca)
+// =============================================================================
+
+/// Placeholder for algo order request (not supported by Alpaca).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ALPACAPlaceAlgoOrderRequest {
+    /// Symbol.
+    pub symbol: String,
+}
+
+/// Placeholder for algo order response (not supported by Alpaca).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ALPACAPlaceAlgoOrderResponse {
+    /// Order ID.
+    pub id: String,
+}
+
+/// Placeholder for cancel algo order request (not supported by Alpaca).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ALPACACancelAlgoOrderRequest {
+    /// Order ID.
+    pub id: String,
+}
+
+/// Placeholder for cancel algo order response (not supported by Alpaca).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ALPACACancelAlgoOrderResponse {
+    /// Order ID.
+    pub id: String,
 }

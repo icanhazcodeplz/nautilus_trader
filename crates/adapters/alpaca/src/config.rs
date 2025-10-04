@@ -16,7 +16,7 @@
 //! Configuration structures for the ALPACA adapter.
 
 use crate::common::{
-    enums::{ALPACAContractType, ALPACAInstrumentType, ALPACAVipLevel},
+    enums::{ALPACAContractType, ALPACAInstrumentType},
     urls::{
         get_http_base_url, get_ws_base_url_business, get_ws_base_url_private,
         get_ws_base_url_public,
@@ -48,8 +48,9 @@ pub struct ALPACADataClientConfig {
     pub http_timeout_secs: Option<u64>,
     /// Optional interval for refreshing instruments.
     pub update_instruments_interval_mins: Option<u64>,
-    /// Optional VIP level that unlocks additional subscriptions.
-    pub vip_level: Option<ALPACAVipLevel>,
+    // Note: VIP levels are not applicable to Alpaca
+    // /// Optional VIP level that unlocks additional subscriptions.
+    // pub vip_level: Option<ALPACAVipLevel>,
 }
 
 impl Default for ALPACADataClientConfig {
@@ -66,7 +67,7 @@ impl Default for ALPACADataClientConfig {
             is_demo: false,
             http_timeout_secs: Some(60),
             update_instruments_interval_mins: Some(60),
-            vip_level: None,
+            // vip_level: None,
         }
     }
 }

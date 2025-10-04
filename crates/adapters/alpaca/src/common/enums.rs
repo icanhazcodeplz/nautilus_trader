@@ -35,14 +35,14 @@ use strum::{AsRefStr, Display, EnumIter, EnumString};
     Deserialize,
 )]
 #[serde(rename_all = "snake_case")]
-pub enum AlpacaSide {
+pub enum ALPACASide {
     /// Buy side of a trade or order.
     Buy,
     /// Sell side of a trade or order.
     Sell,
 }
 
-impl From<OrderSide> for AlpacaSide {
+impl From<OrderSide> for ALPACASide {
     fn from(value: OrderSide) -> Self {
         match value {
             OrderSide::Buy => Self::Buy,
@@ -52,20 +52,20 @@ impl From<OrderSide> for AlpacaSide {
     }
 }
 
-impl From<AlpacaSide> for OrderSide {
-    fn from(side: AlpacaSide) -> Self {
+impl From<ALPACASide> for OrderSide {
+    fn from(side: ALPACASide) -> Self {
         match side {
-            AlpacaSide::Buy => Self::Buy,
-            AlpacaSide::Sell => Self::Sell,
+            ALPACASide::Buy => Self::Buy,
+            ALPACASide::Sell => Self::Sell,
         }
     }
 }
 
-impl From<AlpacaSide> for AggressorSide {
-    fn from(value: AlpacaSide) -> Self {
+impl From<ALPACASide> for AggressorSide {
+    fn from(value: ALPACASide) -> Self {
         match value {
-            AlpacaSide::Buy => Self::Buyer,
-            AlpacaSide::Sell => Self::Seller,
+            ALPACASide::Buy => Self::Buyer,
+            ALPACASide::Sell => Self::Seller,
         }
     }
 }
@@ -86,7 +86,7 @@ impl From<AlpacaSide> for AggressorSide {
     Deserialize,
 )]
 #[serde(rename_all = "snake_case")]
-pub enum AlpacaOrderType {
+pub enum ALPACAOrderType {
     /// Market order, executed immediately at current market price.
     Market,
     /// Limit order, executed only at specified price or better.
@@ -99,7 +99,7 @@ pub enum AlpacaOrderType {
     TrailingStop,
 }
 
-impl From<OrderType> for AlpacaOrderType {
+impl From<OrderType> for ALPACAOrderType {
     fn from(value: OrderType) -> Self {
         match value {
             OrderType::Market => Self::Market,
@@ -112,14 +112,14 @@ impl From<OrderType> for AlpacaOrderType {
     }
 }
 
-impl From<AlpacaOrderType> for OrderType {
-    fn from(ord_type: AlpacaOrderType) -> Self {
+impl From<ALPACAOrderType> for OrderType {
+    fn from(ord_type: ALPACAOrderType) -> Self {
         match ord_type {
-            AlpacaOrderType::Market => Self::Market,
-            AlpacaOrderType::Limit => Self::Limit,
-            AlpacaOrderType::Stop => Self::StopMarket,
-            AlpacaOrderType::StopLimit => Self::StopLimit,
-            AlpacaOrderType::TrailingStop => Self::TrailingStopMarket,
+            ALPACAOrderType::Market => Self::Market,
+            ALPACAOrderType::Limit => Self::Limit,
+            ALPACAOrderType::Stop => Self::StopMarket,
+            ALPACAOrderType::StopLimit => Self::StopLimit,
+            ALPACAOrderType::TrailingStop => Self::TrailingStopMarket,
         }
     }
 }
@@ -140,7 +140,7 @@ impl From<AlpacaOrderType> for OrderType {
     Deserialize,
 )]
 #[serde(rename_all = "snake_case")]
-pub enum AlpacaOrderStatus {
+pub enum ALPACAOrderStatus {
     /// Order has been received by Alpaca and is being processed.
     New,
     /// Order has been partially filled.
@@ -175,30 +175,30 @@ pub enum AlpacaOrderStatus {
     AcceptedForBidding,
 }
 
-impl From<AlpacaOrderStatus> for OrderStatus {
-    fn from(status: AlpacaOrderStatus) -> Self {
+impl From<ALPACAOrderStatus> for OrderStatus {
+    fn from(status: ALPACAOrderStatus) -> Self {
         match status {
-            AlpacaOrderStatus::New
-            | AlpacaOrderStatus::Accepted
-            | AlpacaOrderStatus::PendingNew => Self::Accepted,
-            AlpacaOrderStatus::PartiallyFilled => Self::PartiallyFilled,
-            AlpacaOrderStatus::Filled => Self::Filled,
-            AlpacaOrderStatus::Canceled
-            | AlpacaOrderStatus::PendingCancel => Self::Canceled,
-            AlpacaOrderStatus::Rejected => Self::Rejected,
-            AlpacaOrderStatus::Expired => Self::Expired,
-            AlpacaOrderStatus::Replaced
-            | AlpacaOrderStatus::PendingReplace
-            | AlpacaOrderStatus::Stopped
-            | AlpacaOrderStatus::Suspended
-            | AlpacaOrderStatus::DoneForDay
-            | AlpacaOrderStatus::Calculated
-            | AlpacaOrderStatus::AcceptedForBidding => Self::Accepted,
+            ALPACAOrderStatus::New
+            | ALPACAOrderStatus::Accepted
+            | ALPACAOrderStatus::PendingNew => Self::Accepted,
+            ALPACAOrderStatus::PartiallyFilled => Self::PartiallyFilled,
+            ALPACAOrderStatus::Filled => Self::Filled,
+            ALPACAOrderStatus::Canceled
+            | ALPACAOrderStatus::PendingCancel => Self::Canceled,
+            ALPACAOrderStatus::Rejected => Self::Rejected,
+            ALPACAOrderStatus::Expired => Self::Expired,
+            ALPACAOrderStatus::Replaced
+            | ALPACAOrderStatus::PendingReplace
+            | ALPACAOrderStatus::Stopped
+            | ALPACAOrderStatus::Suspended
+            | ALPACAOrderStatus::DoneForDay
+            | ALPACAOrderStatus::Calculated
+            | ALPACAOrderStatus::AcceptedForBidding => Self::Accepted,
         }
     }
 }
 
-impl From<OrderStatus> for AlpacaOrderStatus {
+impl From<OrderStatus> for ALPACAOrderStatus {
     fn from(value: OrderStatus) -> Self {
         match value {
             OrderStatus::Accepted | OrderStatus::Submitted => Self::Accepted,
@@ -228,7 +228,7 @@ impl From<OrderStatus> for AlpacaOrderStatus {
     Deserialize,
 )]
 #[serde(rename_all = "snake_case")]
-pub enum AlpacaTimeInForce {
+pub enum ALPACATimeInForce {
     /// Day order - valid until market close.
     Day,
     /// Good-till-canceled - valid until explicitly canceled.
@@ -264,7 +264,7 @@ pub enum AlpacaTimeInForce {
     feature = "python",
     pyo3::pyclass(eq, eq_int, module = "nautilus_trader.core.nautilus_pyo3.alpaca")
 )]
-pub enum AlpacaAssetClass {
+pub enum ALPACAAssetClass {
     /// US equity securities.
     #[default]
     UsEquity,
@@ -288,7 +288,7 @@ pub enum AlpacaAssetClass {
     Deserialize,
 )]
 #[serde(rename_all = "snake_case")]
-pub enum AlpacaAssetStatus {
+pub enum ALPACAAssetStatus {
     /// Asset is active and tradable.
     Active,
     /// Asset is inactive and not tradable.
@@ -311,14 +311,14 @@ pub enum AlpacaAssetStatus {
     Serialize,
     Deserialize,
 )]
-pub enum AlpacaExecType {
+pub enum ALPACAExecType {
     #[default]
     None,
     Taker,
     Maker,
 }
 
-impl From<LiquiditySide> for AlpacaExecType {
+impl From<LiquiditySide> for ALPACAExecType {
     fn from(value: LiquiditySide) -> Self {
         match value {
             LiquiditySide::NoLiquiditySide => Self::None,
@@ -328,12 +328,12 @@ impl From<LiquiditySide> for AlpacaExecType {
     }
 }
 
-impl From<AlpacaExecType> for LiquiditySide {
-    fn from(exec: AlpacaExecType) -> Self {
+impl From<ALPACAExecType> for LiquiditySide {
+    fn from(exec: ALPACAExecType) -> Self {
         match exec {
-            AlpacaExecType::Maker => Self::Maker,
-            AlpacaExecType::Taker => Self::Taker,
-            AlpacaExecType::None => Self::NoLiquiditySide,
+            ALPACAExecType::Maker => Self::Maker,
+            ALPACAExecType::Taker => Self::Taker,
+            ALPACAExecType::None => Self::NoLiquiditySide,
         }
     }
 }
@@ -353,7 +353,7 @@ impl From<AlpacaExecType> for LiquiditySide {
     Serialize,
     Deserialize,
 )]
-pub enum AlpacaBarTimeframe {
+pub enum ALPACABarTimeframe {
     #[serde(rename = "1Min")]
     Minute1,
     #[serde(rename = "5Min")]
@@ -382,7 +382,7 @@ pub enum AlpacaBarTimeframe {
     Deserialize,
 )]
 #[serde(rename_all = "snake_case")]
-pub enum AlpacaOrderClass {
+pub enum ALPACAOrderClass {
     /// Simple order.
     Simple,
     /// Bracket order (entry + take profit + stop loss).
@@ -391,4 +391,250 @@ pub enum AlpacaOrderClass {
     Oco,
     /// One-triggers-other order.
     Oto,
+}
+
+/// Represents the instrument type on Alpaca.
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Default,
+    Display,
+    PartialEq,
+    Eq,
+    Hash,
+    AsRefStr,
+    EnumIter,
+    EnumString,
+    Serialize,
+    Deserialize,
+)]
+#[serde(rename_all = "UPPERCASE")]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(eq, eq_int, module = "nautilus_trader.core.nautilus_pyo3.alpaca")
+)]
+pub enum ALPACAInstrumentType {
+    #[default]
+    /// Stock/Equity instrument.
+    Stock,
+    /// Cryptocurrency.
+    Crypto,
+    /// Spot products.
+    Spot,
+    /// Perpetual swap products.
+    Swap,
+    /// Futures products.
+    Futures,
+    /// Option products.
+    Option,
+}
+
+/// Represents an instrument contract type on Alpaca.
+#[derive(
+    Copy,
+    Clone,
+    Default,
+    Debug,
+    Display,
+    PartialEq,
+    Eq,
+    Hash,
+    AsRefStr,
+    EnumIter,
+    EnumString,
+    Serialize,
+    Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(eq, eq_int, module = "nautilus_trader.core.nautilus_pyo3.alpaca")
+)]
+pub enum ALPACAContractType {
+    #[serde(rename = "")]
+    #[default]
+    None,
+    Linear,
+    Inverse,
+}
+
+/// Represents position mode on Alpaca.
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Default,
+    Display,
+    PartialEq,
+    Eq,
+    Hash,
+    AsRefStr,
+    EnumIter,
+    EnumString,
+    Serialize,
+    Deserialize,
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(eq, eq_int, module = "nautilus_trader.core.nautilus_pyo3.alpaca")
+)]
+pub enum ALPACAPositionMode {
+    #[default]
+    #[serde(rename = "net_mode")]
+    NetMode,
+    #[serde(rename = "long_short_mode")]
+    LongShortMode,
+}
+
+/// Represents position side on Alpaca.
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Display,
+    PartialEq,
+    Eq,
+    Hash,
+    AsRefStr,
+    EnumIter,
+    EnumString,
+    Serialize,
+    Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ALPACAPositionSide {
+    #[serde(rename = "")]
+    None,
+    Net,
+    Long,
+    Short,
+}
+
+/// Represents order book channel types on Alpaca.
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Display,
+    PartialEq,
+    Eq,
+    Hash,
+    AsRefStr,
+    EnumIter,
+    EnumString,
+    Serialize,
+    Deserialize,
+)]
+pub enum ALPACABookChannel {
+    /// Standard depth-first book channel.
+    Book,
+    /// Low-latency Level 2 time-based book channel.
+    BookL2Tbt,
+    /// Low-latency 50-depth Level 2 time-based book channel.
+    Books50L2Tbt,
+}
+
+/// Represents trading mode on Alpaca.
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Default,
+    Display,
+    PartialEq,
+    Eq,
+    Hash,
+    AsRefStr,
+    EnumIter,
+    EnumString,
+    Serialize,
+    Deserialize,
+)]
+pub enum ALPACATradeMode {
+    #[default]
+    Cash,
+    Isolated,
+    Cross,
+}
+
+/// Represents trigger type for conditional orders.
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Default,
+    Display,
+    PartialEq,
+    Eq,
+    Hash,
+    AsRefStr,
+    EnumIter,
+    EnumString,
+    Serialize,
+    Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ALPACATriggerType {
+    #[default]
+    Last,
+    Index,
+    Mark,
+}
+
+/// Represents order book action type.
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Display,
+    PartialEq,
+    Eq,
+    Hash,
+    AsRefStr,
+    EnumIter,
+    EnumString,
+    Serialize,
+    Deserialize,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum ALPACABookAction {
+    /// Incremental update.
+    Update,
+    /// Full snapshot.
+    Snapshot,
+}
+
+/// Represents candle confirmation status.
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Display,
+    PartialEq,
+    Eq,
+    Hash,
+    AsRefStr,
+    EnumIter,
+    EnumString,
+    Serialize,
+    Deserialize,
+)]
+pub enum ALPACACandleConfirm {
+    /// Candle is incomplete (partial).
+    #[serde(rename = "0")]
+    Partial,
+    /// Candle is complete (closed).
+    #[serde(rename = "1")]
+    Closed,
+}
+
+/// Helper function to check if an order type is conditional (placeholder).
+pub fn is_conditional_order(_order_type: &ALPACAOrderType) -> bool {
+    false // Alpaca doesn't have conditional orders like OKX
+}
+
+/// Helper function to convert conditional order to algo type (placeholder).
+pub fn conditional_order_to_algo_type(_order_type: &OrderType) -> Option<String> {
+    None // Not applicable to Alpaca
 }
