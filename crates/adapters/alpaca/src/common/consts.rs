@@ -27,18 +27,24 @@ use ustr::Ustr;
 pub const ALPACA: &str = "ALPACA";
 pub static ALPACA_VENUE: LazyLock<Venue> = LazyLock::new(|| Venue::new(Ustr::from(ALPACA)));
 
-/// See <https://www.alpaca.com/docs-v5/en/#overview-broker-program> for further details.
-pub const ALPACA_NAUTILUS_BROKER_ID: &str = "a535cbe8d0c8BCDE";
+/// Alpaca broker ID for NautilusTrader
+pub const ALPACA_NAUTILUS_BROKER_ID: &str = "nautilus";
 
-// Use the canonical host with www to avoid cross-domain redirects which may
-// strip authentication headers in some HTTP clients and middleboxes.
-pub const ALPACA_HTTP_URL: &str = "https://www.alpaca.com";
-pub const ALPACA_WS_PUBLIC_URL: &str = "wss://ws.alpaca.com:8443/ws/v5/public";
-pub const ALPACA_WS_PRIVATE_URL: &str = "wss://ws.alpaca.com:8443/ws/v5/private";
-pub const ALPACA_WS_BUSINESS_URL: &str = "wss://ws.alpaca.com:8443/ws/v5/business";
-pub const ALPACA_WS_DEMO_PUBLIC_URL: &str = "wss://wspap.alpaca.com:8443/ws/v5/public";
-pub const ALPACA_WS_DEMO_PRIVATE_URL: &str = "wss://wspap.alpaca.com:8443/ws/v5/private";
-pub const ALPACA_WS_DEMO_BUSINESS_URL: &str = "wss://wspap.alpaca.com:8443/ws/v5/business";
+// Alpaca API URLs
+// Live trading URLs
+pub const ALPACA_HTTP_URL: &str = "https://api.alpaca.markets";
+pub const ALPACA_DATA_HTTP_URL: &str = "https://data.alpaca.markets";
+pub const ALPACA_WS_TRADING_URL: &str = "wss://api.alpaca.markets/stream";
+pub const ALPACA_WS_DATA_URL: &str = "wss://stream.data.alpaca.markets";
+
+// Paper trading URLs
+pub const ALPACA_PAPER_HTTP_URL: &str = "https://paper-api.alpaca.markets";
+pub const ALPACA_PAPER_DATA_HTTP_URL: &str = "https://data.alpaca.markets"; // Same for paper
+pub const ALPACA_PAPER_WS_TRADING_URL: &str = "wss://paper-api.alpaca.markets/stream";
+pub const ALPACA_PAPER_WS_DATA_URL: &str = "wss://stream.data.alpaca.markets"; // Same for paper
+
+// WebSocket URLs (aliases for compatibility)
+pub const ALPACA_WS_PUBLIC_URL: &str = ALPACA_WS_DATA_URL;
 
 /// ALPACA supported order time in force for market orders.
 ///
@@ -76,44 +82,44 @@ pub const ALPACA_CONDITIONAL_ORDER_TYPES: &[OrderType] = &[
     OrderType::LimitIfTouched,
 ];
 
-/// ALPACA error codes that should trigger retries.
+/// Alpaca HTTP status codes that should trigger retries.
 ///
 /// Only retry on temporary network/system issues.
 ///
 /// # References
 ///
-/// Based on ALPACA API documentation: <https://www.alpaca.com/docs-v5/en/#error-codes>
+/// Based on Alpaca API documentation: <https://docs.alpaca.markets/docs/api-error-codes>
 pub static ALPACA_RETRY_ERROR_CODES: LazyLock<AHashSet<&'static str>> = LazyLock::new(|| {
     let mut codes = AHashSet::new();
 
-    // Temporary system errors
-    codes.insert("50001"); // Service temporarily unavailable
-    codes.insert("50004"); // API endpoint request timeout (does not mean that the request was successful or failed, please check the request result)
-    codes.insert("50005"); // API is offline or unavailable
-    codes.insert("50013"); // System busy, please try again later
-    codes.insert("50026"); // System error, please try again later
+    // Rate limiting
+    codes.insert("429"); // Too Many Requests - rate limited
 
-    // Rate limit errors (temporary)
-    codes.insert("50011"); // Request too frequent
-    codes.insert("50113"); // API requests exceed the limit
-
-    // WebSocket connection issues (temporary)
-    codes.insert("60001"); // OK not received in time
-    codes.insert("60005"); // Connection closed as there was no data transmission in the last 30 seconds
+    // Server errors (5xx)
+    codes.insert("500"); // Internal Server Error
+    codes.insert("502"); // Bad Gateway
+    codes.insert("503"); // Service Unavailable
+    codes.insert("504"); // Gateway Timeout
 
     codes
 });
 
-/// Determines if an ALPACA error code should trigger a retry.
+/// Determines if an Alpaca error code should trigger a retry.
 pub fn should_retry_error_code(error_code: &str) -> bool {
     ALPACA_RETRY_ERROR_CODES.contains(error_code)
 }
 
-/// ALPACA error code returned when a post-only order would immediately take liquidity.
-pub const ALPACA_POST_ONLY_ERROR_CODE: &str = "51019";
+/// Alpaca error code for insufficient buying power.
+pub const ALPACA_INSUFFICIENT_BUYING_POWER: i32 = 40310000;
 
-/// ALPACA cancel source code used when a post-only order is auto-cancelled for taking liquidity.
-pub const ALPACA_POST_ONLY_CANCEL_SOURCE: &str = "31";
+/// Alpaca error code for order not found.
+pub const ALPACA_ORDER_NOT_FOUND: i32 = 40410000;
 
-/// Human-readable reason used when a post-only order is auto-cancelled for taking liquidity.
-pub const ALPACA_POST_ONLY_CANCEL_REASON: &str = "POST_ONLY would take liquidity";
+/// Post-only order error code (Alpaca doesn't specifically use this, but included for compatibility).
+pub const ALPACA_POST_ONLY_ERROR_CODE: &str = "40010001";
+
+/// Post-only order cancel source.
+pub const ALPACA_POST_ONLY_CANCEL_SOURCE: &str = "post_only_reject";
+
+/// Post-only order cancel reason.
+pub const ALPACA_POST_ONLY_CANCEL_REASON: &str = "Order would immediately match and trade as a taker order";

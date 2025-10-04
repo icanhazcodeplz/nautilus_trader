@@ -13,814 +13,493 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
-//! Data transfer objects for deserializing ALPACA HTTP API payloads.
+//! Data transfer objects for deserializing Alpaca HTTP API payloads.
 
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use ustr::Ustr;
 
-use crate::common::parse::{deserialize_empty_string_as_none, deserialize_empty_ustr_as_none};
+// =============================================================================
+// Market Data Models
+// =============================================================================
 
-/// Represents a trade tick from the GET /api/v5/market/trades endpoint.
+/// Represents an asset (tradable symbol) from the GET /v2/assets endpoint.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ALPACATrade {
-    /// Instrument ID.
-    pub inst_id: Ustr,
-    /// Trade price.
-    pub px: String,
-    /// Trade size.
-    pub sz: String,
-    /// Trade side: buy or sell.
-    pub side: ALPACASide,
-    /// Trade ID assigned by ALPACA.
-    pub trade_id: Ustr,
-    /// Trade timestamp in milliseconds.
-    #[serde(deserialize_with = "deserialize_string_to_u64")]
-    pub ts: u64,
+pub struct AlpacaAsset {
+    /// Asset ID (UUID).
+    pub id: String,
+    /// Symbol name.
+    pub symbol: String,
+    /// Exchange where the asset is traded.
+    pub exchange: String,
+    /// Asset class (us_equity, crypto).
+    pub class: String,
+    /// Whether the asset is tradable.
+    pub tradable: bool,
+    /// Whether the asset is marginable.
+    pub marginable: bool,
+    /// Whether the asset is shortable.
+    pub shortable: bool,
+    /// Whether the asset is easy to borrow for shorting.
+    pub easy_to_borrow: bool,
+    /// Whether the asset is fractionable.
+    pub fractionable: bool,
+    /// Minimum order size.
+    #[serde(default)]
+    pub min_order_size: Option<String>,
+    /// Minimum trade increment.
+    #[serde(default)]
+    pub min_trade_increment: Option<String>,
+    /// Price increment.
+    #[serde(default)]
+    pub price_increment: Option<String>,
+    /// Status of the asset.
+    pub status: String,
 }
 
-/// Represents a candlestick from the GET /api/v5/market/history-candles endpoint.
-/// The tuple contains [timestamp(ms), open, high, low, close, volume, turnover, base_volume, count].
+/// Represents a bar/candlestick from the GET /v2/stocks/{symbol}/bars endpoint.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ALPACACandlestick(
-    /// Timestamp in milliseconds.
-    pub String,
+pub struct AlpacaBar {
+    /// Timestamp (RFC3339).
+    pub t: String,
     /// Open price.
-    pub String,
+    pub o: Decimal,
     /// High price.
-    pub String,
+    pub h: Decimal,
     /// Low price.
-    pub String,
+    pub l: Decimal,
     /// Close price.
-    pub String,
+    pub c: Decimal,
     /// Volume.
-    pub String,
-    /// Turnover in quote currency.
-    pub String,
-    /// Base volume.
-    pub String,
-    /// Record count.
-    pub String,
-);
-
-use crate::common::{
-    enums::{
-        ALPACAAlgoOrderType, ALPACAExecType, ALPACAInstrumentType, ALPACAMarginMode, ALPACAOrderStatus,
-        ALPACAOrderType, ALPACAPositionSide, ALPACASide, ALPACATradeMode, ALPACATriggerType,
-    },
-    parse::deserialize_string_to_u64,
-};
-
-/// Represents a mark price from the GET /api/v5/public/mark-price endpoint.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ALPACAMarkPrice {
-    /// Underlying.
-    pub uly: Option<Ustr>,
-    /// Instrument ID.
-    pub inst_id: Ustr,
-    /// The mark price.
-    pub mark_px: String,
-    /// The timestamp for the mark price.
-    #[serde(deserialize_with = "deserialize_string_to_u64")]
-    pub ts: u64,
+    pub v: u64,
+    /// Number of trades.
+    #[serde(default)]
+    pub n: Option<u64>,
+    /// Volume weighted average price.
+    #[serde(default)]
+    pub vw: Option<Decimal>,
 }
 
-/// Represents an index price from the GET /api/v5/public/index-tickers endpoint.
+/// Response wrapper for bars endpoint.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ALPACAIndexTicker {
-    /// Instrument ID.
-    pub inst_id: Ustr,
-    /// The index price.
-    pub idx_px: String,
-    /// The timestamp for the index price.
-    #[serde(deserialize_with = "deserialize_string_to_u64")]
-    pub ts: u64,
+pub struct AlpacaBarsResponse {
+    /// Map of symbol to bars.
+    pub bars: std::collections::HashMap<String, Vec<AlpacaBar>>,
+    /// Symbol queried.
+    pub symbol: String,
+    /// Next page token.
+    #[serde(default)]
+    pub next_page_token: Option<String>,
 }
 
-/// Represents a position tier from the GET /api/v5/public/position-tiers endpoint.
+/// Represents a trade from the GET /v2/stocks/{symbol}/trades endpoint.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ALPACAPositionTier {
-    /// Underlying.
-    pub uly: Ustr,
-    /// Instrument family.
-    pub inst_family: String,
-    /// Instrument ID.
-    pub inst_id: Ustr,
-    /// Tier level.
-    pub tier: String,
-    /// Minimum size/amount for the tier.
-    pub min_sz: String,
-    /// Maximum size/amount for the tier.
-    pub max_sz: String,
-    /// Maintenance margin requirement rate.
-    pub mmr: String,
-    /// Initial margin requirement rate.
-    pub imr: String,
-    /// Maximum available leverage.
-    pub max_lever: String,
-    /// Option Margin Coefficient (only applicable to options).
-    pub opt_mgn_factor: String,
-    /// Quote currency borrowing amount.
-    pub quote_max_loan: String,
-    /// Base currency borrowing amount.
-    pub base_max_loan: String,
+pub struct AlpacaTrade {
+    /// Timestamp (RFC3339).
+    pub t: String,
+    /// Exchange where the trade occurred.
+    pub x: String,
+    /// Price.
+    pub p: Decimal,
+    /// Size.
+    pub s: u64,
+    /// Trade conditions.
+    #[serde(default)]
+    pub c: Option<Vec<String>>,
+    /// Trade ID.
+    pub i: u64,
+    /// Tape.
+    #[serde(default)]
+    pub z: Option<String>,
 }
 
-/// Represents an account balance snapshot from `GET /api/v5/account/balance`.
+/// Response wrapper for trades endpoint.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ALPACAAccount {
-    /// Adjusted/Effective equity in USD.
-    pub adj_eq: String,
-    /// Borrow frozen amount.
-    pub borrow_froz: String,
-    /// Account details by currency.
-    pub details: Vec<ALPACABalanceDetail>,
-    /// Initial margin requirement.
-    pub imr: String,
-    /// Isolated margin equity.
-    pub iso_eq: String,
-    /// Margin ratio.
-    pub mgn_ratio: String,
-    /// Maintenance margin requirement.
-    pub mmr: String,
-    /// Notional value in USD for borrow.
-    pub notional_usd_for_borrow: String,
-    /// Notional value in USD for futures.
-    pub notional_usd_for_futures: String,
-    /// Notional value in USD for option.
-    pub notional_usd_for_option: String,
-    /// Notional value in USD for swap.
-    pub notional_usd_for_swap: String,
-    /// Notional value in USD.
-    pub notional_usd: String,
-    /// Order frozen.
-    pub ord_froz: String,
-    /// Total equity in USD.
-    pub total_eq: String,
-    /// Last update time, Unix timestamp in milliseconds.
-    #[serde(deserialize_with = "deserialize_string_to_u64")]
-    pub u_time: u64,
-    /// Unrealized profit and loss.
-    pub upl: String,
+pub struct AlpacaTradesResponse {
+    /// List of trades.
+    pub trades: Vec<AlpacaTrade>,
+    /// Symbol queried.
+    pub symbol: String,
+    /// Next page token.
+    #[serde(default)]
+    pub next_page_token: Option<String>,
 }
 
-/// Represents a balance detail for a single currency in an ALPACA account.
+/// Represents a quote from the GET /v2/stocks/{symbol}/quotes endpoint.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ALPACABalanceDetail {
-    /// Available balance.
-    pub avail_bal: String,
-    /// Available equity.
-    pub avail_eq: String,
-    /// Borrow frozen amount.
-    pub borrow_froz: String,
+pub struct AlpacaQuote {
+    /// Timestamp (RFC3339).
+    pub t: String,
+    /// Ask exchange.
+    pub ax: String,
+    /// Ask price.
+    pub ap: Decimal,
+    /// Ask size.
+    pub as_: u64,
+    /// Bid exchange.
+    pub bx: String,
+    /// Bid price.
+    pub bp: Decimal,
+    /// Bid size.
+    pub bs: u64,
+    /// Quote conditions.
+    #[serde(default)]
+    pub c: Option<Vec<String>>,
+    /// Tape.
+    #[serde(default)]
+    pub z: Option<String>,
+}
+
+/// Response wrapper for quotes endpoint.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AlpacaQuotesResponse {
+    /// List of quotes.
+    pub quotes: Vec<AlpacaQuote>,
+    /// Symbol queried.
+    pub symbol: String,
+    /// Next page token.
+    #[serde(default)]
+    pub next_page_token: Option<String>,
+}
+
+/// Represents the latest quote for a symbol.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AlpacaLatestQuote {
+    /// Symbol.
+    pub symbol: String,
+    /// Ask price.
+    pub ap: Decimal,
+    /// Ask size.
+    pub as_: u64,
+    /// Ask exchange.
+    pub ax: String,
+    /// Bid price.
+    pub bp: Decimal,
+    /// Bid size.
+    pub bs: u64,
+    /// Bid exchange.
+    pub bx: String,
+    /// Timestamp.
+    pub t: String,
+}
+
+/// Represents the latest trade for a symbol.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AlpacaLatestTrade {
+    /// Symbol.
+    pub symbol: String,
+    /// Price.
+    pub p: Decimal,
+    /// Size.
+    pub s: u64,
+    /// Exchange.
+    pub x: String,
+    /// Timestamp.
+    pub t: String,
+}
+
+/// Represents a snapshot of current market data.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AlpacaSnapshot {
+    /// Symbol.
+    pub symbol: String,
+    /// Latest trade.
+    #[serde(default)]
+    pub latest_trade: Option<AlpacaLatestTrade>,
+    /// Latest quote.
+    #[serde(default)]
+    pub latest_quote: Option<AlpacaLatestQuote>,
+    /// Minute bar.
+    #[serde(default)]
+    pub minute_bar: Option<AlpacaBar>,
+    /// Daily bar.
+    #[serde(default)]
+    pub daily_bar: Option<AlpacaBar>,
+    /// Previous daily bar.
+    #[serde(default)]
+    pub prev_daily_bar: Option<AlpacaBar>,
+}
+
+// =============================================================================
+// Account Models
+// =============================================================================
+
+/// Represents account information from GET /v2/account.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AlpacaAccount {
+    /// Account ID.
+    pub id: String,
+    /// Account number.
+    pub account_number: String,
+    /// Account status.
+    pub status: String,
+    /// Currency (USD).
+    pub currency: String,
     /// Cash balance.
-    pub cash_bal: String,
-    /// Currency.
-    pub ccy: Ustr,
-    /// Cross liability.
-    pub cross_liab: String,
-    /// Discount equity in USD.
-    pub dis_eq: String,
+    pub cash: Decimal,
+    /// Portfolio value.
+    pub portfolio_value: Decimal,
+    /// Whether pattern day trader.
+    pub pattern_day_trader: bool,
+    /// Whether trading is blocked.
+    pub trading_blocked: bool,
+    /// Whether transfers are blocked.
+    pub transfers_blocked: bool,
+    /// Whether account is blocked.
+    pub account_blocked: bool,
+    /// Account created timestamp.
+    pub created_at: String,
+    /// Whether shorting is enabled.
+    pub shorting_enabled: bool,
+    /// Long market value.
+    pub long_market_value: Decimal,
+    /// Short market value.
+    pub short_market_value: Decimal,
     /// Equity.
-    pub eq: String,
-    /// Equity in USD.
-    pub eq_usd: String,
-    /// Same-token equity.
-    pub smt_sync_eq: String,
-    /// Copy trading equity.
-    pub spot_copy_trading_eq: String,
-    /// Fixed balance.
-    pub fixed_bal: String,
-    /// Frozen balance.
-    pub frozen_bal: String,
-    /// Initial margin requirement.
-    pub imr: String,
-    /// Interest.
-    pub interest: String,
-    /// Isolated margin equity.
-    pub iso_eq: String,
-    /// Isolated margin liability.
-    pub iso_liab: String,
-    /// Isolated unrealized profit and loss.
-    pub iso_upl: String,
-    /// Liability.
-    pub liab: String,
-    /// Maximum loan amount.
-    pub max_loan: String,
-    /// Margin ratio.
-    pub mgn_ratio: String,
-    /// Maintenance margin requirement.
-    pub mmr: String,
-    /// Notional leverage.
-    pub notional_lever: String,
-    /// Order frozen.
-    pub ord_frozen: String,
-    /// Reward balance.
-    pub reward_bal: String,
-    /// Spot in use amount.
-    #[serde(alias = "spotInUse")]
-    pub spot_in_use_amt: String,
-    /// Cross liability spot in use amount.
-    #[serde(alias = "clSpotInUse")]
-    pub cl_spot_in_use_amt: String,
-    /// Maximum spot in use amount.
-    #[serde(alias = "maxSpotInUse")]
-    pub max_spot_in_use_amt: String,
-    /// Spot isolated balance.
-    pub spot_iso_bal: String,
-    /// Strategy equity.
-    pub stgy_eq: String,
-    /// Time-weighted average price.
-    pub twap: String,
-    /// Last update time, Unix timestamp in milliseconds.
-    #[serde(deserialize_with = "deserialize_string_to_u64")]
-    pub u_time: u64,
-    /// Unrealized profit and loss.
-    pub upl: String,
-    /// Unrealized profit and loss liability.
-    pub upl_liab: String,
-    /// Spot balance.
-    pub spot_bal: String,
-    /// Open average price.
-    pub open_avg_px: String,
-    /// Accumulated average price.
-    pub acc_avg_px: String,
-    /// Spot unrealized profit and loss.
-    pub spot_upl: String,
-    /// Spot unrealized profit and loss ratio.
-    pub spot_upl_ratio: String,
-    /// Total profit and loss.
-    pub total_pnl: String,
-    /// Total profit and loss ratio.
-    pub total_pnl_ratio: String,
+    pub equity: Decimal,
+    /// Last equity.
+    pub last_equity: Decimal,
+    /// Multiplier (1 for cash, 2 or 4 for margin).
+    pub multiplier: Decimal,
+    /// Buying power.
+    pub buying_power: Decimal,
+    /// Initial margin.
+    pub initial_margin: Decimal,
+    /// Maintenance margin.
+    pub maintenance_margin: Decimal,
+    /// SMA (Special Memorandum Account).
+    #[serde(default)]
+    pub sma: Option<Decimal>,
+    /// Day trade count in last 5 trading days.
+    pub daytrade_count: i32,
+    /// Last maintenance margin.
+    pub last_maintenance_margin: Decimal,
+    /// Daytrading buying power.
+    pub daytrading_buying_power: Decimal,
+    /// Regt buying power (for cash accounts).
+    pub regt_buying_power: Decimal,
 }
 
-/// Represents a single open position from `GET /api/v5/account/positions`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ALPACAPosition {
-    /// Instrument ID.
-    pub inst_id: Ustr,
-    /// Instrument type.
-    pub inst_type: ALPACAInstrumentType,
-    /// Margin mode: isolated/cross.
-    pub mgn_mode: ALPACAMarginMode,
-    /// Position ID.
-    #[serde(default, deserialize_with = "deserialize_empty_ustr_as_none")]
-    pub pos_id: Option<Ustr>,
-    /// Position side: long/short.
-    pub pos_side: ALPACAPositionSide,
-    /// Position size.
-    pub pos: String,
-    /// Base currency balance.
-    pub base_bal: String,
-    /// Position currency.
-    pub ccy: String,
-    /// Trading fee.
-    pub fee: String,
-    /// Position leverage.
-    pub lever: String,
-    /// Last traded price.
-    pub last: String,
-    /// Mark price.
-    pub mark_px: String,
-    /// Liquidation price.
-    pub liq_px: String,
-    /// Maintenance margin requirement.
-    pub mmr: String,
-    /// Interest.
-    pub interest: String,
-    /// Trade ID.
-    pub trade_id: Ustr,
-    /// Notional value of position in USD.
-    pub notional_usd: String,
-    /// Average entry price.
-    pub avg_px: String,
-    /// Unrealized profit and loss.
-    pub upl: String,
-    /// Unrealized profit and loss ratio.
-    pub upl_ratio: String,
-    /// Last update time, Unix timestamp in milliseconds.
-    #[serde(deserialize_with = "deserialize_string_to_u64")]
-    pub u_time: u64,
-    /// Position margin.
-    pub margin: String,
-    /// Margin ratio.
-    pub mgn_ratio: String,
-    /// Auto-deleveraging (ADL) ranking.
-    pub adl: String,
-    /// Creation time, Unix timestamp in milliseconds.
-    pub c_time: String,
-    /// Realized profit and loss.
-    pub realized_pnl: String,
-    /// Unrealized profit and loss at last price.
-    pub upl_last_px: String,
-    /// Unrealized profit and loss ratio at last price.
-    pub upl_ratio_last_px: String,
-    /// Available position that can be closed.
-    pub avail_pos: String,
-    /// Breakeven price.
-    pub be_px: String,
-    /// Funding fee.
-    pub funding_fee: String,
-    /// Index price.
-    pub idx_px: String,
-    /// Liquidation penalty.
-    pub liq_penalty: String,
-    /// Option value.
-    pub opt_val: String,
-    /// Pending close order liability value.
-    pub pending_close_ord_liab_val: String,
-    /// Total profit and loss.
-    pub pnl: String,
-    /// Position currency.
-    pub pos_ccy: String,
-    /// Quote currency balance.
-    pub quote_bal: String,
-    /// Borrowed amount in quote currency.
-    pub quote_borrowed: String,
-    /// Interest on quote currency.
-    pub quote_interest: String,
-    /// Amount in use for spot trading.
-    #[serde(alias = "spotInUse")]
-    pub spot_in_use_amt: String,
-    /// Currency in use for spot trading.
-    pub spot_in_use_ccy: String,
-    /// USD price.
-    pub usd_px: String,
-}
+// =============================================================================
+// Order Models
+// =============================================================================
 
-/// Represents the response from `POST /api/v5/trade/order` (place order).
-/// This model is designed to be flexible and handle the minimal fields that the API returns.
+/// Represents an order from GET /v2/orders or POST /v2/orders.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ALPACAPlaceOrderResponse {
+pub struct AlpacaOrder {
     /// Order ID.
-    #[serde(default)]
-    pub ord_id: Option<Ustr>,
+    pub id: String,
     /// Client order ID.
+    pub client_order_id: String,
+    /// Created timestamp.
+    pub created_at: String,
+    /// Updated timestamp.
     #[serde(default)]
-    pub cl_ord_id: Option<Ustr>,
-    /// Order tag.
+    pub updated_at: Option<String>,
+    /// Submitted timestamp.
     #[serde(default)]
-    pub tag: Option<String>,
-    /// Instrument ID (optional - might not be in response).
+    pub submitted_at: Option<String>,
+    /// Filled timestamp.
     #[serde(default)]
-    pub inst_id: Option<Ustr>,
-    /// Order side (optional).
+    pub filled_at: Option<String>,
+    /// Expired timestamp.
     #[serde(default)]
-    pub side: Option<ALPACASide>,
-    /// Order type (optional).
+    pub expired_at: Option<String>,
+    /// Canceled timestamp.
     #[serde(default)]
-    pub ord_type: Option<ALPACAOrderType>,
-    /// Order size (optional).
+    pub canceled_at: Option<String>,
+    /// Failed timestamp.
     #[serde(default)]
-    pub sz: Option<String>,
-    /// Order state (optional).
-    pub state: Option<ALPACAOrderStatus>,
-    /// Price (optional).
+    pub failed_at: Option<String>,
+    /// Replaced timestamp.
     #[serde(default)]
-    pub px: Option<String>,
-    /// Average price (optional).
+    pub replaced_at: Option<String>,
+    /// Order that replaced this order.
     #[serde(default)]
-    pub avg_px: Option<String>,
-    /// Accumulated filled size.
+    pub replaced_by: Option<String>,
+    /// Order that this order replaces.
     #[serde(default)]
-    pub acc_fill_sz: Option<String>,
-    /// Fill size (optional).
+    pub replaces: Option<String>,
+    /// Asset ID.
+    pub asset_id: String,
+    /// Symbol.
+    pub symbol: String,
+    /// Asset class.
+    pub asset_class: String,
+    /// Notional amount (for fractional orders).
     #[serde(default)]
-    pub fill_sz: Option<String>,
-    /// Fill price (optional).
+    pub notional: Option<Decimal>,
+    /// Order quantity.
     #[serde(default)]
-    pub fill_px: Option<String>,
-    /// Trade ID (optional).
+    pub qty: Option<Decimal>,
+    /// Filled quantity.
+    pub filled_qty: Decimal,
+    /// Filled average price.
     #[serde(default)]
-    pub trade_id: Option<Ustr>,
-    /// Fill time (optional).
+    pub filled_avg_price: Option<Decimal>,
+    /// Order type: market, limit, stop, stop_limit, trailing_stop.
+    pub order_type: String,
+    /// Side: buy or sell.
+    pub side: String,
+    /// Time in force: day, gtc, opg, cls, ioc, fok.
+    pub time_in_force: String,
+    /// Limit price.
     #[serde(default)]
-    pub fill_time: Option<String>,
-    /// Fee (optional).
+    pub limit_price: Option<Decimal>,
+    /// Stop price.
     #[serde(default)]
-    pub fee: Option<String>,
-    /// Fee currency (optional).
+    pub stop_price: Option<Decimal>,
+    /// Order status.
+    pub status: String,
+    /// Extended hours.
+    pub extended_hours: bool,
+    /// Legs (for complex orders).
     #[serde(default)]
-    pub fee_ccy: Option<String>,
-    /// Request ID (optional).
+    pub legs: Option<Vec<AlpacaOrder>>,
+    /// Trail percent.
     #[serde(default)]
-    pub req_id: Option<Ustr>,
-    /// Position side (optional).
+    pub trail_percent: Option<Decimal>,
+    /// Trail price.
     #[serde(default)]
-    pub pos_side: Option<ALPACAPositionSide>,
-    /// Reduce-only flag (optional).
+    pub trail_price: Option<Decimal>,
+    /// HWMQ (high water mark qty).
     #[serde(default)]
-    pub reduce_only: Option<String>,
-    /// Target currency (optional).
-    #[serde(default)]
-    pub tgt_ccy: Option<String>,
-    /// Creation time.
-    #[serde(default)]
-    pub c_time: Option<String>,
-    /// Last update time (optional).
-    #[serde(default)]
-    pub u_time: Option<String>,
+    pub hwm: Option<Decimal>,
 }
 
-/// Represents a single historical order record from `GET /api/v5/trade/orders-history`.
+/// Request to create an order via POST /v2/orders.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ALPACAOrderHistory {
-    /// Order ID.
-    pub ord_id: Ustr,
-    /// Client order ID.
-    pub cl_ord_id: Ustr,
-    /// Client account ID (may be omitted by ALPACA).
-    #[serde(default)]
-    pub cl_act_id: Option<Ustr>,
-    /// Order tag.
-    pub tag: String,
-    /// Instrument type.
-    pub inst_type: ALPACAInstrumentType,
-    /// Underlying (optional).
-    pub uly: Option<Ustr>,
-    /// Instrument ID.
-    pub inst_id: Ustr,
+pub struct AlpacaOrderRequest {
+    /// Symbol to trade.
+    pub symbol: String,
+    /// Quantity.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qty: Option<Decimal>,
+    /// Notional amount (for fractional/dollar-based orders).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notional: Option<Decimal>,
+    /// Side: buy or sell.
+    pub side: String,
     /// Order type.
-    pub ord_type: ALPACAOrderType,
-    /// Order size.
-    pub sz: String,
-    /// Price (optional).
-    pub px: String,
-    /// Side.
-    pub side: ALPACASide,
-    /// Position side.
-    pub pos_side: ALPACAPositionSide,
-    /// Trade mode.
-    pub td_mode: ALPACATradeMode,
-    /// Reduce-only flag.
-    pub reduce_only: String,
-    /// Target currency (optional).
-    pub tgt_ccy: String,
-    /// Order state.
-    pub state: ALPACAOrderStatus,
-    /// Average price (optional).
-    pub avg_px: String,
-    /// Execution fee.
-    pub fee: String,
-    /// Fee currency.
-    pub fee_ccy: String,
-    /// Filled size (optional).
-    pub fill_sz: String,
-    /// Fill price (optional).
-    pub fill_px: String,
-    /// Trade ID (optional).
-    pub trade_id: Ustr,
-    /// Fill time, Unix timestamp in milliseconds.
-    #[serde(deserialize_with = "deserialize_string_to_u64")]
-    pub fill_time: u64,
-    /// Accumulated filled size.
-    pub acc_fill_sz: String,
-    /// Fill fee (optional, may be omitted).
-    #[serde(default)]
-    pub fill_fee: Option<String>,
-    /// Request ID (optional).
-    #[serde(default)]
-    pub req_id: Option<Ustr>,
-    /// Cancelled filled size (optional).
-    #[serde(default)]
-    pub cancel_fill_sz: Option<String>,
-    /// Cancelled total size (optional).
-    #[serde(default)]
-    pub cancel_total_sz: Option<String>,
-    /// Fee discount (optional).
-    #[serde(default)]
-    pub fee_discount: Option<String>,
-    /// Category (optional).
-    pub category: String,
-    /// Last update time, Unix timestamp in milliseconds.
-    #[serde(deserialize_with = "deserialize_string_to_u64")]
-    pub u_time: u64,
-    /// Creation time.
-    #[serde(deserialize_with = "deserialize_string_to_u64")]
-    pub c_time: u64,
-}
-
-/// Represents a transaction detail (fill) from `GET /api/v5/trade/fills`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ALPACATransactionDetail {
-    /// Product type (SPOT, MARGIN, SWAP, FUTURES, OPTION).
-    pub inst_type: ALPACAInstrumentType,
-    /// Instrument ID, e.g. "BTC-USDT".
-    pub inst_id: Ustr,
-    /// Trade ID.
-    pub trade_id: Ustr,
-    /// Order ID.
-    pub ord_id: Ustr,
-    /// Client order ID.
-    pub cl_ord_id: Ustr,
-    /// Bill ID.
-    pub bill_id: Ustr,
-    /// Last filled price.
-    pub fill_px: String,
-    /// Last filled quantity.
-    pub fill_sz: String,
-    /// Trade side: buy or sell.
-    pub side: ALPACASide,
-    /// Execution type.
-    pub exec_type: ALPACAExecType,
-    /// Fee currency.
-    pub fee_ccy: String,
-    /// Fee amount.
-    #[serde(default, deserialize_with = "deserialize_empty_string_as_none")]
-    pub fee: Option<String>,
-    /// Timestamp, Unix timestamp format in milliseconds.
-    #[serde(deserialize_with = "deserialize_string_to_u64")]
-    pub ts: u64,
-}
-
-/// Represents a single historical position record from `GET /api/v5/account/positions-history`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ALPACAPositionHistory {
-    /// Instrument type (e.g. "SWAP", "FUTURES", etc.).
-    pub inst_type: ALPACAInstrumentType,
-    /// Instrument ID (e.g. "BTC-USD-SWAP").
-    pub inst_id: Ustr,
-    /// Margin mode: e.g. "cross", "isolated".
-    pub mgn_mode: ALPACAMarginMode,
-    /// The type of the last close, e.g. "1" (close partially), "2" (close all), etc.
-    /// See ALPACA docs for the meaning of each numeric code.
     #[serde(rename = "type")]
-    pub r#type: Ustr,
-    /// Creation time of the position (Unix timestamp in milliseconds).
-    pub c_time: String,
-    /// Last update time, Unix timestamp in milliseconds.
-    #[serde(deserialize_with = "deserialize_string_to_u64")]
-    pub u_time: u64,
-    /// Average price of opening position.
-    pub open_avg_px: String,
-    /// Average price of closing position (if applicable).
+    pub order_type: String,
+    /// Time in force.
+    pub time_in_force: String,
+    /// Limit price.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub close_avg_px: Option<String>,
-    /// The position ID.
-    #[serde(default, deserialize_with = "deserialize_empty_ustr_as_none")]
-    pub pos_id: Option<Ustr>,
-    /// Max quantity of the position at open time.
+    pub limit_price: Option<Decimal>,
+    /// Stop price.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub open_max_pos: Option<String>,
-    /// Cumulative closed volume of the position.
+    pub stop_price: Option<Decimal>,
+    /// Trail price.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub close_total_pos: Option<String>,
-    /// Realized profit and loss (only for FUTURES/SWAP/OPTION).
+    pub trail_price: Option<Decimal>,
+    /// Trail percent.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub realized_pnl: Option<String>,
-    /// Accumulated fee for the position.
+    pub trail_percent: Option<Decimal>,
+    /// Extended hours.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fee: Option<String>,
-    /// Accumulated funding fee (for perpetual swaps).
+    pub extended_hours: Option<bool>,
+    /// Client order ID.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub funding_fee: Option<String>,
-    /// Accumulated liquidation penalty. Negative if there was a penalty.
+    pub client_order_id: Option<String>,
+    /// Order class: simple, bracket, oco, oto.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub liq_penalty: Option<String>,
-    /// Profit and loss (realized or unrealized depending on status).
+    pub order_class: Option<String>,
+    /// Take profit leg.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub pnl: Option<String>,
-    /// PnL ratio.
+    pub take_profit: Option<TakeProfitSpec>,
+    /// Stop loss leg.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub pnl_ratio: Option<String>,
-    /// Position side: "long" / "short" / "net".
-    pub pos_side: ALPACAPositionSide,
-    /// Leverage used (the JSON field is "lev", but we rename it in Rust).
-    pub lever: String,
-    /// Direction: "long" or "short" (only for MARGIN/FUTURES/SWAP/OPTION).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub direction: Option<String>,
-    /// Trigger mark price. Populated if `type` indicates liquidation or ADL.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trigger_px: Option<String>,
-    /// The underlying (e.g. "BTC-USD" for futures or swap).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub uly: Option<String>,
-    /// Currency (e.g. "BTC"). May or may not appear in all responses.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ccy: Option<String>,
+    pub stop_loss: Option<StopLossSpec>,
 }
 
-/// Represents the request body for `POST /api/v5/trade/order-algo` (place algo order).
+/// Take profit specification for bracket orders.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ALPACAPlaceAlgoOrderRequest {
-    /// Instrument ID.
-    #[serde(rename = "instId")]
-    pub inst_id: String,
-    /// Trade mode (isolated, cross, cash).
-    #[serde(rename = "tdMode")]
-    pub td_mode: ALPACATradeMode,
-    /// Order side (buy, sell).
-    pub side: ALPACASide,
-    /// Algo order type (trigger).
-    #[serde(rename = "ordType")]
-    pub ord_type: ALPACAAlgoOrderType,
-    /// Order size.
-    pub sz: String,
-    /// Client-supplied algo order ID.
-    #[serde(rename = "algoClOrdId", skip_serializing_if = "Option::is_none")]
-    pub algo_cl_ord_id: Option<String>,
-    /// Trigger price.
-    #[serde(rename = "triggerPx", skip_serializing_if = "Option::is_none")]
-    pub trigger_px: Option<String>,
-    /// Order price (for limit orders).
-    #[serde(rename = "orderPx", skip_serializing_if = "Option::is_none")]
-    pub order_px: Option<String>,
-    /// Trigger type (last, mark, index).
-    #[serde(rename = "triggerPxType", skip_serializing_if = "Option::is_none")]
-    pub trigger_px_type: Option<ALPACATriggerType>,
-    /// Target currency (base_ccy or quote_ccy).
-    #[serde(rename = "tgtCcy", skip_serializing_if = "Option::is_none")]
-    pub tgt_ccy: Option<String>,
-    /// Position side (net, long, short).
-    #[serde(rename = "posSide", skip_serializing_if = "Option::is_none")]
-    pub pos_side: Option<ALPACAPositionSide>,
-    /// Whether to close position.
-    #[serde(rename = "closePosition", skip_serializing_if = "Option::is_none")]
-    pub close_position: Option<bool>,
-    /// Order tag.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tag: Option<String>,
-    /// Whether it's a reduce-only order.
-    #[serde(rename = "reduceOnly", skip_serializing_if = "Option::is_none")]
-    pub reduce_only: Option<bool>,
+pub struct TakeProfitSpec {
+    /// Limit price for take profit.
+    pub limit_price: Decimal,
 }
 
-/// Represents the response from `POST /api/v5/trade/order-algo` (place algo order).
+/// Stop loss specification for bracket orders.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ALPACAPlaceAlgoOrderResponse {
-    /// Algo order ID.
-    pub algo_id: String,
-    /// Client-supplied algo order ID.
+pub struct StopLossSpec {
+    /// Stop price for stop loss.
+    pub stop_price: Decimal,
+    /// Limit price (for stop-limit orders).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub algo_cl_ord_id: Option<String>,
-    /// The result of the request.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub s_code: Option<String>,
-    /// Error message if the request failed.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub s_msg: Option<String>,
-    /// Request ID.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub req_id: Option<String>,
+    pub limit_price: Option<Decimal>,
 }
 
-/// Represents the request body for `POST /api/v5/trade/cancel-algos` (cancel algo order).
+// =============================================================================
+// Position Models
+// =============================================================================
+
+/// Represents a position from GET /v2/positions.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ALPACACancelAlgoOrderRequest {
-    /// Instrument ID.
-    #[serde(rename = "instId")]
-    pub inst_id: String,
-    /// Algo order ID.
-    #[serde(rename = "algoId", skip_serializing_if = "Option::is_none")]
-    pub algo_id: Option<String>,
-    /// Client-supplied algo order ID.
-    #[serde(rename = "algoClOrdId", skip_serializing_if = "Option::is_none")]
-    pub algo_cl_ord_id: Option<String>,
+pub struct AlpacaPosition {
+    /// Asset ID.
+    pub asset_id: String,
+    /// Symbol.
+    pub symbol: String,
+    /// Exchange.
+    pub exchange: String,
+    /// Asset class.
+    pub asset_class: String,
+    /// Average entry price.
+    pub avg_entry_price: Decimal,
+    /// Quantity (negative for short).
+    pub qty: Decimal,
+    /// Side: long or short.
+    pub side: String,
+    /// Market value.
+    pub market_value: Decimal,
+    /// Cost basis.
+    pub cost_basis: Decimal,
+    /// Unrealized P&L.
+    pub unrealized_pl: Decimal,
+    /// Unrealized P&L percent.
+    pub unrealized_plpc: Decimal,
+    /// Unrealized intraday P&L.
+    pub unrealized_intraday_pl: Decimal,
+    /// Unrealized intraday P&L percent.
+    pub unrealized_intraday_plpc: Decimal,
+    /// Current price.
+    pub current_price: Decimal,
+    /// Last day price.
+    pub lastday_price: Decimal,
+    /// Change today.
+    pub change_today: Decimal,
 }
 
-/// Represents the response from `POST /api/v5/trade/cancel-algos` (cancel algo order).
+// =============================================================================
+// Clock Models
+// =============================================================================
+
+/// Represents market clock from GET /v2/clock.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ALPACACancelAlgoOrderResponse {
-    /// Algo order ID.
-    pub algo_id: String,
-    /// The result of the request.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub s_code: Option<String>,
-    /// Error message if the request failed.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub s_msg: Option<String>,
+pub struct AlpacaClock {
+    /// Current timestamp.
+    pub timestamp: String,
+    /// Whether market is open.
+    pub is_open: bool,
+    /// Next open timestamp.
+    pub next_open: String,
+    /// Next close timestamp.
+    pub next_close: String,
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// Tests
-////////////////////////////////////////////////////////////////////////////////
+// =============================================================================
+// Calendar Models
+// =============================================================================
 
-#[cfg(test)]
-mod tests {
-    use serde_json;
-
-    use super::*;
-
-    #[test]
-    fn test_algo_order_request_serialization() {
-        let request = ALPACAPlaceAlgoOrderRequest {
-            inst_id: "ETH-USDT-SWAP".to_string(),
-            td_mode: ALPACATradeMode::Isolated,
-            side: ALPACASide::Buy,
-            ord_type: ALPACAAlgoOrderType::Trigger,
-            sz: "0.01".to_string(),
-            algo_cl_ord_id: Some("test123".to_string()),
-            trigger_px: Some("3000".to_string()),
-            order_px: Some("-1".to_string()),
-            trigger_px_type: Some(ALPACATriggerType::Last),
-            tgt_ccy: None,
-            pos_side: None,
-            close_position: None,
-            tag: None,
-            reduce_only: None,
-        };
-
-        let json = serde_json::to_string(&request).unwrap();
-
-        // Verify that fields are serialized with correct camelCase names
-        assert!(json.contains("\"instId\":\"ETH-USDT-SWAP\""));
-        assert!(json.contains("\"tdMode\":\"isolated\""));
-        assert!(json.contains("\"ordType\":\"trigger\""));
-        assert!(json.contains("\"algoClOrdId\":\"test123\""));
-        assert!(json.contains("\"triggerPx\":\"3000\""));
-        assert!(json.contains("\"orderPx\":\"-1\""));
-        assert!(json.contains("\"triggerPxType\":\"last\""));
-
-        // Verify that None fields are not included
-        assert!(!json.contains("tgtCcy"));
-        assert!(!json.contains("posSide"));
-        assert!(!json.contains("closePosition"));
-    }
-
-    #[test]
-    fn test_algo_order_request_array_serialization() {
-        let request = ALPACAPlaceAlgoOrderRequest {
-            inst_id: "BTC-USDT".to_string(),
-            td_mode: ALPACATradeMode::Cross,
-            side: ALPACASide::Sell,
-            ord_type: ALPACAAlgoOrderType::Trigger,
-            sz: "0.1".to_string(),
-            algo_cl_ord_id: None,
-            trigger_px: Some("50000".to_string()),
-            order_px: Some("49900".to_string()),
-            trigger_px_type: Some(ALPACATriggerType::Mark),
-            tgt_ccy: Some("base_ccy".to_string()),
-            pos_side: Some(ALPACAPositionSide::Net),
-            close_position: None,
-            tag: None,
-            reduce_only: Some(true),
-        };
-
-        // ALPACA expects an array of requests
-        let json = serde_json::to_string(&[request]).unwrap();
-
-        // Verify array format
-        assert!(json.starts_with('['));
-        assert!(json.ends_with(']'));
-
-        // Verify correct field names
-        assert!(json.contains("\"instId\":\"BTC-USDT\""));
-        assert!(json.contains("\"tdMode\":\"cross\""));
-        assert!(json.contains("\"triggerPx\":\"50000\""));
-        assert!(json.contains("\"orderPx\":\"49900\""));
-        assert!(json.contains("\"triggerPxType\":\"mark\""));
-        assert!(json.contains("\"tgtCcy\":\"base_ccy\""));
-        assert!(json.contains("\"posSide\":\"net\""));
-        assert!(json.contains("\"reduceOnly\":true"));
-    }
-
-    #[test]
-    fn test_cancel_algo_order_request_serialization() {
-        let request = ALPACACancelAlgoOrderRequest {
-            inst_id: "ETH-USDT-SWAP".to_string(),
-            algo_id: Some("123456".to_string()),
-            algo_cl_ord_id: None,
-        };
-
-        let json = serde_json::to_string(&request).unwrap();
-
-        // Verify correct field names
-        assert!(json.contains("\"instId\":\"ETH-USDT-SWAP\""));
-        assert!(json.contains("\"algoId\":\"123456\""));
-        assert!(!json.contains("algoClOrdId"));
-    }
-
-    #[test]
-    fn test_cancel_algo_order_with_client_id_serialization() {
-        let request = ALPACACancelAlgoOrderRequest {
-            inst_id: "BTC-USDT".to_string(),
-            algo_id: None,
-            algo_cl_ord_id: Some("client123".to_string()),
-        };
-
-        // ALPACA expects an array of requests
-        let json = serde_json::to_string(&[request]).unwrap();
-
-        // Verify array format and field names
-        assert!(json.starts_with('['));
-        assert!(json.contains("\"instId\":\"BTC-USDT\""));
-        assert!(json.contains("\"algoClOrdId\":\"client123\""));
-        assert!(!json.contains("\"algoId\""));
-    }
+/// Represents a calendar day from GET /v2/calendar.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AlpacaCalendar {
+    /// Date.
+    pub date: String,
+    /// Market open time.
+    pub open: String,
+    /// Market close time.
+    pub close: String,
 }

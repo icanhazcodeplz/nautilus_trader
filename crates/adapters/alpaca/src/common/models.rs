@@ -13,79 +13,12 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
-//! Data models representing ALPACA API payloads consumed by the adapter.
+//! Data models representing Alpaca API payloads consumed by the adapter.
 
-use serde::{Deserialize, Serialize};
-use ustr::Ustr;
-
-use super::enums::ALPACAOptionType;
-use crate::common::{
-    enums::{ALPACAContractType, ALPACAInstrumentStatus, ALPACAInstrumentType},
-    parse::deserialize_optional_string_to_u64,
+// Re-export the main Alpaca models from http/models for convenience
+pub use crate::http::models::{
+    AlpacaAccount, AlpacaAsset, AlpacaBar, AlpacaBarsResponse, AlpacaCalendar, AlpacaClock,
+    AlpacaLatestQuote, AlpacaLatestTrade, AlpacaOrder, AlpacaOrderRequest, AlpacaPosition,
+    AlpacaQuote, AlpacaQuotesResponse, AlpacaSnapshot, AlpacaTrade, AlpacaTradesResponse,
+    StopLossSpec, TakeProfitSpec,
 };
-
-/// Represents an instrument on the ALPACA exchange.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ALPACAInstrument {
-    /// Product type (SPOT, MARGIN, SWAP, FUTURES, OPTION).
-    pub inst_type: ALPACAInstrumentType,
-    /// Instrument ID, e.g. "BTC-USD-SWAP".
-    pub inst_id: Ustr,
-    /// Underlying of the instrument, e.g. "BTC-USD". Only applicable to FUTURES/SWAP/OPTION.
-    pub uly: Ustr,
-    /// Instrument family, e.g. "BTC-USD". Only applicable to FUTURES/SWAP/OPTION.
-    pub inst_family: Ustr,
-    /// Base currency, e.g. "BTC" in BTC-USDT. Applicable to SPOT/MARGIN.
-    pub base_ccy: Ustr,
-    /// Quote currency, e.g. "USDT" in BTC-USDT.
-    pub quote_ccy: Ustr,
-    /// Settlement currency, e.g. "BTC" for BTC-USD-SWAP.
-    pub settle_ccy: Ustr,
-    /// Contract value. Only applicable to FUTURES/SWAP/OPTION.
-    pub ct_val: String,
-    /// Contract multiplier. Only applicable to FUTURES/SWAP/OPTION.
-    pub ct_mult: String,
-    /// Contract value currency. Only applicable to FUTURES/SWAP/OPTION.
-    pub ct_val_ccy: String,
-    /// Option type, "C" for call options, "P" for put options. Only applicable to OPTION.
-    pub opt_type: ALPACAOptionType,
-    /// Strike price. Only applicable to OPTION.
-    pub stk: String,
-    /// Listing time, Unix timestamp format in milliseconds, e.g. "1597026383085".
-    #[serde(deserialize_with = "deserialize_optional_string_to_u64")]
-    pub list_time: Option<u64>,
-    /// Expiry time, Unix timestamp format in milliseconds, e.g. "1597026383085".
-    #[serde(deserialize_with = "deserialize_optional_string_to_u64")]
-    pub exp_time: Option<u64>,
-    /// Leverage. Not applicable to SPOT.
-    pub lever: String,
-    /// Tick size, e.g. "0.1".
-    pub tick_sz: String,
-    /// Lot size, e.g. "1".
-    pub lot_sz: String,
-    /// Minimum order size.
-    pub min_sz: String,
-    /// Contract type. linear: "linear", inverse: "inverse". Only applicable to FUTURES/SWAP.
-    pub ct_type: ALPACAContractType,
-    /// Instrument status.
-    pub state: ALPACAInstrumentStatus,
-    /// Rule type, e.g. "DynamicPL", "CT", etc.
-    pub rule_type: String,
-    /// Maximum limit order size.
-    pub max_lmt_sz: String,
-    /// Maximum market order size.
-    pub max_mkt_sz: String,
-    /// Maximum limit order amount.
-    pub max_lmt_amt: String,
-    /// Maximum market order amount.
-    pub max_mkt_amt: String,
-    /// Maximum TWAP order size.
-    pub max_twap_sz: String,
-    /// Maximum iceberg order size.
-    pub max_iceberg_sz: String,
-    /// Maximum trigger order size.
-    pub max_trigger_sz: String,
-    /// Maximum stop order size.
-    pub max_stop_sz: String,
-}

@@ -66,19 +66,9 @@ use ustr::Ustr;
 use super::{
     error::ALPACAHttpError,
     models::{
-        ALPACAAccount, ALPACACancelAlgoOrderRequest, ALPACACancelAlgoOrderResponse, ALPACAIndexTicker,
-        ALPACAMarkPrice, ALPACAOrderHistory, ALPACAPlaceAlgoOrderRequest, ALPACAPlaceAlgoOrderResponse,
-        ALPACAPosition, ALPACAPositionHistory, ALPACAPositionTier, ALPACATransactionDetail,
-    },
-    query::{
-        GetCandlesticksParams, GetCandlesticksParamsBuilder, GetIndexTickerParams,
-        GetIndexTickerParamsBuilder, GetInstrumentsParams, GetInstrumentsParamsBuilder,
-        GetMarkPriceParams, GetMarkPriceParamsBuilder, GetOrderHistoryParams,
-        GetOrderHistoryParamsBuilder, GetOrderListParams, GetOrderListParamsBuilder,
-        GetPositionTiersParams, GetPositionsHistoryParams, GetPositionsParams,
-        GetPositionsParamsBuilder, GetTradesParams, GetTradesParamsBuilder,
-        GetTransactionDetailsParams, GetTransactionDetailsParamsBuilder, SetPositionModeParams,
-        SetPositionModeParamsBuilder,
+        AlpacaAccount, AlpacaAsset, AlpacaBar, AlpacaBarsResponse, AlpacaCalendar, AlpacaClock,
+        AlpacaLatestQuote, AlpacaLatestTrade, AlpacaOrder, AlpacaOrderRequest, AlpacaPosition,
+        AlpacaQuote, AlpacaQuotesResponse, AlpacaSnapshot, AlpacaTrade, AlpacaTradesResponse,
     },
 };
 use crate::{
@@ -96,35 +86,15 @@ use crate::{
             parse_order_status_report, parse_position_status_report, parse_trade_tick,
         },
     },
-    http::{
-        models::{ALPACACandlestick, ALPACATrade},
-        query::{GetOrderParams, GetPendingOrdersParams},
-    },
+    http::models::{AlpacaBar as ALPACACandlestick, AlpacaTrade as ALPACATrade},
 };
 
-const ALPACA_SUCCESS_CODE: &str = "0";
-
-/// Default ALPACA REST API rate limit: 500 requests per 2 seconds.
+/// Default Alpaca REST API rate limit.
 ///
-/// - Sub-account order limit: 1000 requests per 2 seconds.
-/// - Account balance: 10 requests per 2 seconds.
-/// - Account instruments: 20 requests per 2 seconds.
-///
-/// We use a conservative 250 requests per second (500 per 2 seconds) as a general limit
-/// that should accommodate most use cases while respecting ALPACA's documented limits.
+/// Alpaca has a rate limit of 200 requests per minute for most endpoints.
+/// We use a conservative 150 requests per minute to stay well within limits.
 pub static ALPACA_REST_QUOTA: LazyLock<Quota> =
-    LazyLock::new(|| Quota::per_second(NonZeroU32::new(250).unwrap()));
-
-/// Represents an ALPACA HTTP response.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ALPACAResponse<T> {
-    /// The ALPACA response code, which is `"0"` for success.
-    pub code: String,
-    /// A message string which can be informational or describe an error cause.
-    pub msg: String,
-    /// The typed data returned by the ALPACA endpoint.
-    pub data: Vec<T>,
-}
+    LazyLock::new(|| Quota::per_minute(NonZeroU32::new(150).unwrap()));
 
 /// Provides a HTTP client for connecting to the [ALPACA](https://alpaca.com) REST API.
 ///
@@ -223,7 +193,6 @@ impl ALPACAHttpInnerClient {
     pub fn with_credentials(
         api_key: String,
         api_secret: String,
-        api_passphrase: String,
         base_url: String,
         timeout_secs: Option<u64>,
         max_retries: Option<u32>,
@@ -254,7 +223,7 @@ impl ALPACAHttpInnerClient {
                 Some(*ALPACA_REST_QUOTA),
                 timeout_secs,
             ),
-            credential: Some(Credential::new(api_key, api_secret, api_passphrase)),
+            credential: Some(Credential::new(api_key, api_secret)),
             retry_manager,
             cancellation_token: CancellationToken::new(),
         })
@@ -280,7 +249,11 @@ impl ALPACAHttpInnerClient {
         }
     }
 
-    /// Signs an ALPACA request with timestamp, API key, passphrase, and signature.
+    /// Adds Alpaca authentication headers to the request.
+    ///
+    /// Alpaca uses simple API key/secret authentication via headers:
+    /// - APCA-API-KEY-ID: The API key
+    /// - APCA-API-SECRET-KEY: The API secret
     ///
     /// # Errors
     ///
@@ -288,40 +261,26 @@ impl ALPACAHttpInnerClient {
     /// but the request requires authentication.
     fn sign_request(
         &self,
-        method: &Method,
-        path: &str,
-        body: Option<&[u8]>,
+        _method: &Method,
+        _path: &str,
+        _body: Option<&[u8]>,
     ) -> Result<HashMap<String, String>, ALPACAHttpError> {
         let credential = match self.credential.as_ref() {
             Some(c) => c,
             None => return Err(ALPACAHttpError::MissingCredentials),
         };
 
-        let api_key = credential.api_key.to_string();
-        let api_passphrase = credential.api_passphrase.to_string();
-
-        // ALPACA requires milliseconds in the timestamp (ISO 8601 with milliseconds)
-        let now = Utc::now();
-        let millis = now.timestamp_subsec_millis();
-        let timestamp = now.format("%Y-%m-%dT%H:%M:%S").to_string() + &format!(".{:03}Z", millis);
-        let signature = credential.sign_bytes(&timestamp, method.as_str(), path, body);
-
         let mut headers = HashMap::new();
-        headers.insert("OK-ACCESS-KEY".to_string(), api_key.clone());
-        headers.insert("OK-ACCESS-PASSPHRASE".to_string(), api_passphrase);
-        headers.insert("OK-ACCESS-TIMESTAMP".to_string(), timestamp.clone());
-        headers.insert("OK-ACCESS-SIGN".to_string(), signature);
+        headers.insert("APCA-API-KEY-ID".to_string(), credential.api_key().to_string());
+        headers.insert("APCA-API-SECRET-KEY".to_string(), credential.api_secret().to_string());
 
         Ok(headers)
     }
 
-    /// Sends an HTTP request to ALPACA and parses the response into `Vec<T>`.
+    /// Sends an HTTP request to Alpaca and parses the response into `T`.
     ///
-    /// Internally, this method handles:
-    /// - Building the URL from `base_url` + `path`.
-    /// - Optionally signing the request.
-    /// - Deserializing JSON responses into typed models, or returning a [`ALPACAHttpError`].
-    /// - Retrying with exponential backoff on transient errors.
+    /// Alpaca API returns direct JSON responses (not wrapped), so this method
+    /// deserializes responses directly into the expected type.
     ///
     /// # Errors
     ///
@@ -329,14 +288,14 @@ impl ALPACAHttpInnerClient {
     /// - The HTTP request fails.
     /// - Authentication is required but credentials are missing.
     /// - The response cannot be deserialized into the expected type.
-    /// - The ALPACA API returns an error response.
+    /// - The Alpaca API returns an error response.
     async fn send_request<T: DeserializeOwned>(
         &self,
         method: Method,
         path: &str,
         body: Option<Vec<u8>>,
         authenticate: bool,
-    ) -> Result<Vec<T>, ALPACAHttpError> {
+    ) -> Result<T, ALPACAHttpError> {
         let url = format!("{}{path}", self.base_url);
         let endpoint = path;
         let method_clone = method.clone();
@@ -367,20 +326,14 @@ impl ALPACAHttpInnerClient {
                 tracing::trace!("Response: {resp:?}");
 
                 if resp.status.is_success() {
-                    let alpaca_response: ALPACAResponse<T> =
-                        serde_json::from_slice(&resp.body).map_err(|e| {
-                            tracing::error!("Failed to deserialize ALPACAResponse: {e}");
-                            ALPACAHttpError::JsonError(e.to_string())
-                        })?;
+                    // Alpaca returns direct JSON responses (no wrapping)
+                    let result: T = serde_json::from_slice(&resp.body).map_err(|e| {
+                        tracing::error!("Failed to deserialize Alpaca response: {e}");
+                        tracing::error!("Response body: {}", String::from_utf8_lossy(&resp.body));
+                        ALPACAHttpError::JsonError(e.to_string())
+                    })?;
 
-                    if alpaca_response.code != ALPACA_SUCCESS_CODE {
-                        return Err(ALPACAHttpError::AlpacaError {
-                            error_code: alpaca_response.code,
-                            message: alpaca_response.msg,
-                        });
-                    }
-
-                    Ok(alpaca_response.data)
+                    Ok(result)
                 } else {
                     let error_body = String::from_utf8_lossy(&resp.body);
                     tracing::error!(
@@ -388,10 +341,19 @@ impl ALPACAHttpInnerClient {
                         resp.status.as_str()
                     );
 
-                    if let Ok(parsed_error) = serde_json::from_slice::<ALPACAResponse<T>>(&resp.body) {
+                    // Try to parse Alpaca error response
+                    #[derive(Deserialize)]
+                    struct AlpacaError {
+                        #[serde(default)]
+                        code: Option<u32>,
+                        #[serde(default)]
+                        message: Option<String>,
+                    }
+
+                    if let Ok(parsed_error) = serde_json::from_slice::<AlpacaError>(&resp.body) {
                         return Err(ALPACAHttpError::AlpacaError {
-                            error_code: parsed_error.code,
-                            message: parsed_error.msg,
+                            error_code: parsed_error.code.unwrap_or(0).to_string(),
+                            message: parsed_error.message.unwrap_or_else(|| error_body.to_string()),
                         });
                     }
 
@@ -403,14 +365,7 @@ impl ALPACAHttpInnerClient {
             }
         };
 
-        // Retry strategy based on ALPACA error responses and HTTP status codes:
-        //
-        // 1. Network errors: always retry (transient connection issues)
-        // 2. HTTP 5xx/429: server errors and rate limiting should be retried
-        // 3. ALPACA specific retryable error codes (defined in common::consts)
-        //
-        // Note: ALPACA returns many permanent errors which should NOT be retried
-        // (e.g., "Invalid instrument", "Insufficient balance", "Invalid API Key")
+        // Retry strategy: retry on network errors and HTTP 5xx/429
         let should_retry = |error: &ALPACAHttpError| -> bool {
             match error {
                 ALPACAHttpError::HttpClientError(_) => true,
@@ -441,237 +396,410 @@ impl ALPACAHttpInnerClient {
             .await
     }
 
-    /// Sets the position mode for an account.
+    // =============================================================================
+    // Market Data Endpoints
+    // =============================================================================
+
+    /// Requests a list of assets from Alpaca.
     ///
     /// # Errors
     ///
-    /// Returns an error if JSON serialization of `params` fails, if the HTTP
-    /// request fails, or if the response body cannot be deserialized.
+    /// Returns an error if the HTTP request fails or the response cannot be deserialized.
     ///
     /// # References
     ///
-    /// <https://www.alpaca.com/docs-v5/en/#trading-account-rest-api-set-position-mode>
-    pub async fn http_set_position_mode(
+    /// <https://docs.alpaca.markets/reference/get-v2-assets>
+    pub async fn http_get_assets(
         &self,
-        params: SetPositionModeParams,
-    ) -> Result<Vec<serde_json::Value>, ALPACAHttpError> {
-        let path = "/api/v5/account/set-position-mode";
-        let body = serde_json::to_vec(&params)?;
-        self.send_request(Method::POST, path, Some(body), true)
-            .await
+        status: Option<&str>,
+        asset_class: Option<&str>,
+    ) -> Result<Vec<AlpacaAsset>, ALPACAHttpError> {
+        let mut path = "/v2/assets".to_string();
+        let mut params = vec![];
+
+        if let Some(s) = status {
+            params.push(format!("status={}", s));
+        }
+        if let Some(ac) = asset_class {
+            params.push(format!("asset_class={}", ac));
+        }
+
+        if !params.is_empty() {
+            path.push('?');
+            path.push_str(&params.join("&"));
+        }
+
+        self.send_request(Method::GET, &path, None, false).await
     }
 
-    /// Requests position tiers information, maximum leverage depends on your borrowings and margin ratio.
+    /// Requests bars (candlesticks) for a symbol.
     ///
     /// # Errors
     ///
-    /// Returns an error if the HTTP request fails, authentication is rejected
-    /// or the response cannot be deserialized.
+    /// Returns an error if the HTTP request fails or the response cannot be deserialized.
     ///
     /// # References
     ///
-    /// <https://www.alpaca.com/docs-v5/en/#public-data-rest-api-get-position-tiers>
-    pub async fn http_get_position_tiers(
+    /// <https://docs.alpaca.markets/reference/stockbars-1>
+    pub async fn http_get_bars(
         &self,
-        params: GetPositionTiersParams,
-    ) -> Result<Vec<ALPACAPositionTier>, ALPACAHttpError> {
-        let path = Self::build_path("/api/v5/public/position-tiers", &params)?;
+        symbol: &str,
+        timeframe: &str,
+        start: Option<&str>,
+        end: Option<&str>,
+        limit: Option<u32>,
+    ) -> Result<AlpacaBarsResponse, ALPACAHttpError> {
+        let mut path = format!("/v2/stocks/{}/bars", symbol);
+        let mut params = vec![format!("timeframe={}", timeframe)];
+
+        if let Some(s) = start {
+            params.push(format!("start={}", s));
+        }
+        if let Some(e) = end {
+            params.push(format!("end={}", e));
+        }
+        if let Some(l) = limit {
+            params.push(format!("limit={}", l));
+        }
+
+        path.push('?');
+        path.push_str(&params.join("&"));
+
         self.send_request(Method::GET, &path, None, false).await
     }
 
-    /// Requests a list of instruments with open contracts.
+    /// Requests trades for a symbol.
     ///
     /// # Errors
     ///
-    /// Returns an error if JSON serialization of `params` fails, if the HTTP
-    /// request fails, or if the response body cannot be deserialized.
+    /// Returns an error if the HTTP request fails or the response cannot be deserialized.
     ///
     /// # References
     ///
-    /// <https://www.alpaca.com/docs-v5/en/#public-data-rest-api-get-instruments>
-    pub async fn http_get_instruments(
-        &self,
-        params: GetInstrumentsParams,
-    ) -> Result<Vec<ALPACAInstrument>, ALPACAHttpError> {
-        let path = Self::build_path("/api/v5/public/instruments", &params)?;
-        self.send_request(Method::GET, &path, None, false).await
-    }
-
-    /// Requests a mark price.
-    ///
-    /// We set the mark price based on the SPOT index and at a reasonable basis to prevent individual
-    /// users from manipulating the market and causing the contract price to fluctuate.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the HTTP request fails or if the response body
-    /// cannot be parsed into [`ALPACAMarkPrice`].
-    ///
-    /// # References
-    ///
-    /// <https://www.alpaca.com/docs-v5/en/#public-data-rest-api-get-mark-price>
-    pub async fn http_get_mark_price(
-        &self,
-        params: GetMarkPriceParams,
-    ) -> Result<Vec<ALPACAMarkPrice>, ALPACAHttpError> {
-        let path = Self::build_path("/api/v5/public/mark-price", &params)?;
-        self.send_request(Method::GET, &path, None, false).await
-    }
-
-    /// Requests the latest index price.
-    ///
-    /// # References
-    ///
-    /// <https://www.alpaca.com/docs-v5/en/#public-data-rest-api-get-index-tickers>
-    pub async fn http_get_index_ticker(
-        &self,
-        params: GetIndexTickerParams,
-    ) -> Result<Vec<ALPACAIndexTicker>, ALPACAHttpError> {
-        let path = Self::build_path("/api/v5/market/index-tickers", &params)?;
-        self.send_request(Method::GET, &path, None, false).await
-    }
-
-    /// Requests trades history.
-    ///
-    /// # References
-    ///
-    /// <https://www.alpaca.com/docs-v5/en/#order-book-trading-market-data-get-trades-history>
+    /// <https://docs.alpaca.markets/reference/stocktrades>
     pub async fn http_get_trades(
         &self,
-        params: GetTradesParams,
-    ) -> Result<Vec<ALPACATrade>, ALPACAHttpError> {
-        let path = Self::build_path("/api/v5/market/history-trades", &params)?;
+        symbol: &str,
+        start: Option<&str>,
+        end: Option<&str>,
+        limit: Option<u32>,
+    ) -> Result<AlpacaTradesResponse, ALPACAHttpError> {
+        let mut path = format!("/v2/stocks/{}/trades", symbol);
+        let mut params = vec![];
+
+        if let Some(s) = start {
+            params.push(format!("start={}", s));
+        }
+        if let Some(e) = end {
+            params.push(format!("end={}", e));
+        }
+        if let Some(l) = limit {
+            params.push(format!("limit={}", l));
+        }
+
+        if !params.is_empty() {
+            path.push('?');
+            path.push_str(&params.join("&"));
+        }
+
         self.send_request(Method::GET, &path, None, false).await
     }
 
-    /// Requests recent candlestick data.
+    /// Requests quotes for a symbol.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP request fails or the response cannot be deserialized.
     ///
     /// # References
     ///
-    /// <https://www.alpaca.com/docs-v5/en/#order-book-trading-market-data-get-candlesticks>
-    pub async fn http_get_candlesticks(
+    /// <https://docs.alpaca.markets/reference/stockquotes>
+    pub async fn http_get_quotes(
         &self,
-        params: GetCandlesticksParams,
-    ) -> Result<Vec<ALPACACandlestick>, ALPACAHttpError> {
-        let path = Self::build_path("/api/v5/market/candles", &params)?;
+        symbol: &str,
+        start: Option<&str>,
+        end: Option<&str>,
+        limit: Option<u32>,
+    ) -> Result<AlpacaQuotesResponse, ALPACAHttpError> {
+        let mut path = format!("/v2/stocks/{}/quotes", symbol);
+        let mut params = vec![];
+
+        if let Some(s) = start {
+            params.push(format!("start={}", s));
+        }
+        if let Some(e) = end {
+            params.push(format!("end={}", e));
+        }
+        if let Some(l) = limit {
+            params.push(format!("limit={}", l));
+        }
+
+        if !params.is_empty() {
+            path.push('?');
+            path.push_str(&params.join("&"));
+        }
+
         self.send_request(Method::GET, &path, None, false).await
     }
 
-    /// Requests historical candlestick data.
+    /// Requests the latest quote for a symbol.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP request fails or the response cannot be deserialized.
     ///
     /// # References
     ///
-    /// <https://www.alpaca.com/docs-v5/en/#order-book-trading-market-data-get-candlesticks-history>
-    pub async fn http_get_candlesticks_history(
+    /// <https://docs.alpaca.markets/reference/stocklatestquote>
+    pub async fn http_get_latest_quote(
         &self,
-        params: GetCandlesticksParams,
-    ) -> Result<Vec<ALPACACandlestick>, ALPACAHttpError> {
-        let path = Self::build_path("/api/v5/market/history-candles", &params)?;
+        symbol: &str,
+    ) -> Result<AlpacaLatestQuote, ALPACAHttpError> {
+        let path = format!("/v2/stocks/{}/quotes/latest", symbol);
         self.send_request(Method::GET, &path, None, false).await
     }
 
-    /// Lists current open orders.
+    /// Requests the latest trade for a symbol.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP request fails or the response cannot be deserialized.
     ///
     /// # References
     ///
-    /// <https://www.alpaca.com/docs-v5/en/#order-book-trading-trade-get-orders-pending>
-    pub async fn http_get_pending_orders(
+    /// <https://docs.alpaca.markets/reference/stocklatesttrade>
+    pub async fn http_get_latest_trade(
         &self,
-        params: GetPendingOrdersParams,
-    ) -> Result<Vec<ALPACAOrderHistory>, ALPACAHttpError> {
-        let path = Self::build_path("/api/v5/trade/orders-pending", &params)?;
-        self.send_request(Method::GET, &path, None, true).await
+        symbol: &str,
+    ) -> Result<AlpacaLatestTrade, ALPACAHttpError> {
+        let path = format!("/v2/stocks/{}/trades/latest", symbol);
+        self.send_request(Method::GET, &path, None, false).await
     }
 
-    /// Retrieves a single order’s details.
+    /// Requests a snapshot of current market data for a symbol.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP request fails or the response cannot be deserialized.
     ///
     /// # References
     ///
-    /// <https://www.alpaca.com/docs-v5/en/#order-book-trading-trade-get-order>
-    pub async fn http_get_order(
+    /// <https://docs.alpaca.markets/reference/stocksnapshot>
+    pub async fn http_get_snapshot(
         &self,
-        params: GetOrderParams,
-    ) -> Result<Vec<ALPACAOrderHistory>, ALPACAHttpError> {
-        let path = Self::build_path("/api/v5/trade/order", &params)?;
-        self.send_request(Method::GET, &path, None, true).await
+        symbol: &str,
+    ) -> Result<AlpacaSnapshot, ALPACAHttpError> {
+        let path = format!("/v2/stocks/{}/snapshot", symbol);
+        self.send_request(Method::GET, &path, None, false).await
     }
 
-    /// Requests a list of assets (with non-zero balance), remaining balance, and available amount
-    /// in the trading account.
+    // =============================================================================
+    // Account Endpoints
+    // =============================================================================
+
+    /// Requests account information.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP request fails or the response cannot be deserialized.
     ///
     /// # References
     ///
-    /// <https://www.alpaca.com/docs-v5/en/#trading-account-rest-api-get-balance>
-    pub async fn http_get_balance(&self) -> Result<Vec<ALPACAAccount>, ALPACAHttpError> {
-        let path = "/api/v5/account/balance";
+    /// <https://docs.alpaca.markets/reference/get-v2-account>
+    pub async fn http_get_account(&self) -> Result<AlpacaAccount, ALPACAHttpError> {
+        let path = "/v2/account";
         self.send_request(Method::GET, path, None, true).await
     }
 
-    /// Requests historical order records.
+    /// Requests current positions.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP request fails or the response cannot be deserialized.
     ///
     /// # References
     ///
-    /// <https://www.alpaca.com/docs-v5/en/#order-book-trading-trade-get-orders-history>
-    pub async fn http_get_order_history(
+    /// <https://docs.alpaca.markets/reference/get-v2-positions>
+    pub async fn http_get_positions(&self) -> Result<Vec<AlpacaPosition>, ALPACAHttpError> {
+        let path = "/v2/positions";
+        self.send_request(Method::GET, path, None, true).await
+    }
+
+    /// Requests a specific position by symbol.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP request fails or the response cannot be deserialized.
+    ///
+    /// # References
+    ///
+    /// <https://docs.alpaca.markets/reference/get-v2-positions-symbol>
+    pub async fn http_get_position(
         &self,
-        params: GetOrderHistoryParams,
-    ) -> Result<Vec<ALPACAOrderHistory>, ALPACAHttpError> {
-        let path = Self::build_path("/api/v5/trade/orders-history", &params)?;
+        symbol: &str,
+    ) -> Result<AlpacaPosition, ALPACAHttpError> {
+        let path = format!("/v2/positions/{}", symbol);
         self.send_request(Method::GET, &path, None, true).await
     }
 
-    /// Requests order list (pending orders).
+    // =============================================================================
+    // Trading Endpoints
+    // =============================================================================
+
+    /// Requests all orders.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP request fails or the response cannot be deserialized.
     ///
     /// # References
     ///
-    /// <https://www.alpaca.com/docs-v5/en/#order-book-trading-trade-get-order-list>
-    pub async fn http_get_order_list(
+    /// <https://docs.alpaca.markets/reference/get-v2-orders>
+    pub async fn http_get_orders(
         &self,
-        params: GetOrderListParams,
-    ) -> Result<Vec<ALPACAOrderHistory>, ALPACAHttpError> {
-        let path = Self::build_path("/api/v5/trade/orders-pending", &params)?;
+        status: Option<&str>,
+        limit: Option<u32>,
+        after: Option<&str>,
+        until: Option<&str>,
+    ) -> Result<Vec<AlpacaOrder>, ALPACAHttpError> {
+        let mut path = "/v2/orders".to_string();
+        let mut params = vec![];
+
+        if let Some(s) = status {
+            params.push(format!("status={}", s));
+        }
+        if let Some(l) = limit {
+            params.push(format!("limit={}", l));
+        }
+        if let Some(a) = after {
+            params.push(format!("after={}", a));
+        }
+        if let Some(u) = until {
+            params.push(format!("until={}", u));
+        }
+
+        if !params.is_empty() {
+            path.push('?');
+            path.push_str(&params.join("&"));
+        }
+
         self.send_request(Method::GET, &path, None, true).await
     }
 
-    /// Requests information on your positions. When the account is in net mode, net positions will
-    /// be displayed, and when the account is in long/short mode, long or short positions will be
-    /// displayed. Returns in reverse chronological order using ctime.
+    /// Requests a specific order by ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP request fails or the response cannot be deserialized.
     ///
     /// # References
     ///
-    /// <https://www.alpaca.com/docs-v5/en/#trading-account-rest-api-get-positions>
-    pub async fn http_get_positions(
+    /// <https://docs.alpaca.markets/reference/get-v2-orders-order-id>
+    pub async fn http_get_order(
         &self,
-        params: GetPositionsParams,
-    ) -> Result<Vec<ALPACAPosition>, ALPACAHttpError> {
-        let path = Self::build_path("/api/v5/account/positions", &params)?;
+        order_id: &str,
+    ) -> Result<AlpacaOrder, ALPACAHttpError> {
+        let path = format!("/v2/orders/{}", order_id);
         self.send_request(Method::GET, &path, None, true).await
     }
 
-    /// Requests closed or historical position data.
+    /// Places a new order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP request fails or the response cannot be deserialized.
     ///
     /// # References
     ///
-    /// <https://www.alpaca.com/docs-v5/en/#trading-account-rest-api-get-positions-history>
-    pub async fn http_get_position_history(
+    /// <https://docs.alpaca.markets/reference/post-v2-orders>
+    pub async fn http_place_order(
         &self,
-        params: GetPositionsHistoryParams,
-    ) -> Result<Vec<ALPACAPositionHistory>, ALPACAHttpError> {
-        let path = Self::build_path("/api/v5/account/positions-history", &params)?;
-        self.send_request(Method::GET, &path, None, true).await
+        request: AlpacaOrderRequest,
+    ) -> Result<AlpacaOrder, ALPACAHttpError> {
+        let path = "/v2/orders";
+        let body = serde_json::to_vec(&request)?;
+        self.send_request(Method::POST, path, Some(body), true).await
     }
 
-    /// Requests transaction details (fills) for the given parameters.
+    /// Cancels an order by ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP request fails or the response cannot be deserialized.
     ///
     /// # References
     ///
-    /// <https://www.alpaca.com/docs-v5/en/#order-book-trading-trade-get-transaction-details-last-3-days>
-    pub async fn http_get_transaction_details(
+    /// <https://docs.alpaca.markets/reference/delete-v2-orders-order-id>
+    pub async fn http_cancel_order(
         &self,
-        params: GetTransactionDetailsParams,
-    ) -> Result<Vec<ALPACATransactionDetail>, ALPACAHttpError> {
-        let path = Self::build_path("/api/v5/trade/fills", &params)?;
-        self.send_request(Method::GET, &path, None, true).await
+        order_id: &str,
+    ) -> Result<serde_json::Value, ALPACAHttpError> {
+        let path = format!("/v2/orders/{}", order_id);
+        self.send_request(Method::DELETE, &path, None, true).await
+    }
+
+    /// Cancels all orders.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP request fails or the response cannot be deserialized.
+    ///
+    /// # References
+    ///
+    /// <https://docs.alpaca.markets/reference/delete-v2-orders>
+    pub async fn http_cancel_all_orders(&self) -> Result<Vec<serde_json::Value>, ALPACAHttpError> {
+        let path = "/v2/orders";
+        self.send_request(Method::DELETE, path, None, true).await
+    }
+
+    // =============================================================================
+    // Clock & Calendar Endpoints
+    // =============================================================================
+
+    /// Requests market clock information.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP request fails or the response cannot be deserialized.
+    ///
+    /// # References
+    ///
+    /// <https://docs.alpaca.markets/reference/get-v2-clock>
+    pub async fn http_get_clock(&self) -> Result<AlpacaClock, ALPACAHttpError> {
+        let path = "/v2/clock";
+        self.send_request(Method::GET, path, None, false).await
+    }
+
+    /// Requests market calendar.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP request fails or the response cannot be deserialized.
+    ///
+    /// # References
+    ///
+    /// <https://docs.alpaca.markets/reference/get-v2-calendar>
+    pub async fn http_get_calendar(
+        &self,
+        start: Option<&str>,
+        end: Option<&str>,
+    ) -> Result<Vec<AlpacaCalendar>, ALPACAHttpError> {
+        let mut path = "/v2/calendar".to_string();
+        let mut params = vec![];
+
+        if let Some(s) = start {
+            params.push(format!("start={}", s));
+        }
+        if let Some(e) = end {
+            params.push(format!("end={}", e));
+        }
+
+        if !params.is_empty() {
+            path.push('?');
+            path.push_str(&params.join("&"));
+        }
+
+        self.send_request(Method::GET, &path, None, false).await
     }
 }
 
