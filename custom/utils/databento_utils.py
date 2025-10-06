@@ -104,6 +104,7 @@ DatabentoClient = _DatabentoClient()
 if __name__ == "__main__":
     """
     Candidates
+    10/6 - SOPA
     10/2 - IVDA
     10/2 - CIGL
     10/1 - AKAN

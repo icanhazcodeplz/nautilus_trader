@@ -37,12 +37,12 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Deserializer};
 use ustr::Ustr;
 
-use super::enums::ALPACAInstrumentType;
+use super::enums::AlpacaInstrumentType;
 use crate::{
     common::consts::ALPACA_VENUE,
-    http::models::{ALPACAAccount, ALPACABar, ALPACAOrder, ALPACAPosition, ALPACATrade},
+    http::models::{AlpacaAccount, AlpacaBar, AlpacaOrder, AlpacaPosition, AlpacaTrade},
     websocket::{
-        enums::ALPACAWsChannel,
+        enums::AlpacaWsChannel,
         messages::{AlpacaBarMsg, AlpacaQuoteMsg, AlpacaTradeMsg},
     },
 };
@@ -76,17 +76,17 @@ where
 // =============================================================================
 
 /// Returns the Alpaca instrument type for the given Nautilus instrument.
-pub fn alpaca_instrument_type(instrument: &InstrumentAny) -> Result<ALPACAInstrumentType> {
+pub fn alpaca_instrument_type(instrument: &InstrumentAny) -> Result<AlpacaInstrumentType> {
     match instrument {
-        InstrumentAny::Equity(_) => Ok(ALPACAInstrumentType::Stock),
-        InstrumentAny::CurrencyPair(_) => Ok(ALPACAInstrumentType::Crypto),
+        InstrumentAny::Equity(_) => Ok(AlpacaInstrumentType::Stock),
+        InstrumentAny::CurrencyPair(_) => Ok(AlpacaInstrumentType::Crypto),
         _ => anyhow::bail!("Unsupported instrument type for Alpaca: {instrument:?}"),
     }
 }
 
 /// Parses an instrument ID from an Alpaca symbol.
 pub fn parse_instrument_id(symbol: Ustr) -> InstrumentId {
-    InstrumentId::new(Symbol::new(symbol), Venue::new(ALPACA_VENUE))
+    InstrumentId::new(Symbol::new(symbol), Venue::new(*ALPACA_VENUE))
 }
 
 /// Parses a client order ID, returning None if the string is not a valid UUID.
@@ -153,7 +153,7 @@ pub fn parse_fee(value: Option<&str>, currency: Currency) -> Result<Money> {
 
 /// Parses an Alpaca trade (from REST API) into a TradeTick.
 pub fn parse_trade_tick(
-    trade: &ALPACATrade,
+    trade: &AlpacaTrade,
     instrument_id: InstrumentId,
     price_precision: u8,
     size_precision: u8,
@@ -178,7 +178,7 @@ pub fn parse_trade_tick(
 
 /// Parses an Alpaca bar (candlestick) into a Bar.
 pub fn parse_candlestick(
-    bar: &ALPACABar,
+    bar: &AlpacaBar,
     bar_type: BarType,
     ts_init: UnixNanos,
 ) -> Result<Bar> {
@@ -286,9 +286,8 @@ pub fn parse_ws_bar(
 
 /// Parses an Alpaca account into an AccountState.
 pub fn parse_account_state(
-    account: &ALPACAAccount,
+    account: &AlpacaAccount,
     account_id: AccountId,
-    ts_event: UnixNanos,
     ts_init: UnixNanos,
 ) -> Result<AccountState> {
     let base_currency = Currency::USD(); // Alpaca accounts are USD-based
@@ -309,14 +308,14 @@ pub fn parse_account_state(
         vec![], // Margins not applicable for cash accounts
         false,  // Not reported
         UUID4::new(),
-        ts_event,
+        ts_init,
         ts_init,
     ))
 }
 
 /// Parses an Alpaca order into an OrderStatusReport.
 pub fn parse_order_status_report(
-    order: &ALPACAOrder,
+    order: &AlpacaOrder,
     account_id: AccountId,
     instrument_id: InstrumentId,
     ts_init: UnixNanos,
@@ -380,7 +379,7 @@ pub fn parse_order_status_report(
     Ok(OrderStatusReport::new(
         account_id,
         instrument_id,
-        client_order_id,
+        Some(client_order_id),
         venue_order_id,
         order_side,
         order_type,
@@ -388,18 +387,21 @@ pub fn parse_order_status_report(
         order_status,
         quantity,
         filled_qty,
-        None,  // post_only not applicable
-        false, // reduce_only not applicable
-        false, // quote_quantity not applicable
         ts_accepted,
         ts_last,
         ts_init,
+        None, // report_id
+        avg_px,
+        None, // post_only
+        false, // reduce_only
+        false, // quote_quantity
+        None, // cancel_reason
     ))
 }
 
 /// Parses an Alpaca position into a PositionStatusReport.
 pub fn parse_position_status_report(
-    position: &ALPACAPosition,
+    position: &AlpacaPosition,
     account_id: AccountId,
     instrument_id: InstrumentId,
     ts_init: UnixNanos,
@@ -424,12 +426,15 @@ pub fn parse_position_status_report(
         quantity,
         ts_init,
         ts_init,
+        None, // report_id
+        None, // venue_position_id
+        None, // avg_px_open
     ))
 }
 
 /// Parses an Alpaca fill (from order data) into a FillReport.
 pub fn parse_fill_report(
-    order: &ALPACAOrder,
+    order: &AlpacaOrder,
     account_id: AccountId,
     instrument_id: InstrumentId,
     ts_init: UnixNanos,
@@ -466,14 +471,17 @@ pub fn parse_fill_report(
         account_id,
         instrument_id,
         venue_order_id,
-        client_order_id,
+        TradeId::new(&order.id), // Use order ID as trade ID
         order_side,
         last_qty,
         last_px,
         commission,
         liquidity_side,
+        Some(client_order_id),
+        None, // venue_position_id
         ts_event,
         ts_init,
+        None, // report_id
     ))
 }
 
@@ -511,10 +519,10 @@ pub fn parse_index_price_update(
 // =============================================================================
 
 /// Converts a BarSpecification to an Alpaca WebSocket channel.
-pub fn bar_spec_to_alpaca_channel(bar_spec: &BarSpecification) -> Result<ALPACAWsChannel> {
+pub fn bar_spec_to_alpaca_channel(bar_spec: &BarSpecification) -> Result<AlpacaWsChannel> {
     match (bar_spec.aggregation(), bar_spec.step()) {
-        (BarAggregation::Minute, 1) => Ok(ALPACAWsChannel::Bars),
-        (BarAggregation::Day, 1) => Ok(ALPACAWsChannel::DailyBars),
+        (BarAggregation::Minute, 1) => Ok(AlpacaWsChannel::Bars),
+        (BarAggregation::Day, 1) => Ok(AlpacaWsChannel::DailyBars),
         _ => anyhow::bail!("Unsupported bar specification for Alpaca: {bar_spec}"),
     }
 }
