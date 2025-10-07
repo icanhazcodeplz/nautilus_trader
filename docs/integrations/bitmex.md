@@ -58,7 +58,7 @@ NautilusTrader integration guide.
 | Quanto Futures    | ✓         | ✓       | Settled in different currency than underlying.  |
 | Options           | -         | -       | *Not available*.                                |
 
-:::info
+:::note
 BitMEX has discontinued their options products to focus on their core derivatives and spot offerings.
 :::
 
@@ -73,11 +73,6 @@ BitMEX has discontinued their options products to focus on their core derivative
 - **Perpetual contracts**: Inverse (e.g., XBTUSD) and linear (e.g., ETHUSDT).
 - **Traditional futures**: Fixed expiration date contracts.
 - **Quanto futures**: Contracts settled in a different currency than the underlying.
-
-:::note
-While BitMEX has added spot trading capabilities, their primary focus remains on derivatives.
-The platform uses a unified wallet for both spot and derivatives trading.
-:::
 
 ## Symbology
 
@@ -159,7 +154,7 @@ accordingly, so quantities in Nautilus are always expressed in base units (SOL, 
 
 See the BitMEX API documentation for details on these fields: <https://www.bitmex.com/app/apiOverview#Instrument-Properties>.
 
-## Order capability
+## Orders capability
 
 The BitMEX integration supports the following order types and execution features.
 
@@ -167,7 +162,7 @@ The BitMEX integration supports the following order types and execution features
 
 | Order Type             | Supported | Notes                                         |
 |------------------------|-----------|-----------------------------------------------|
-| `MARKET`               | ✓         | Executed immediately at current market price. |
+| `MARKET`               | ✓         | Executed immediately at current market price. Quote quantity not supported. |
 | `LIMIT`                | ✓         | Executed only at specified price or better.   |
 | `STOP_MARKET`          | ✓         | Supported (set `trigger_price`).              |
 | `STOP_LIMIT`           | ✓         | Supported (set `price` and `trigger_price`).  |
@@ -290,45 +285,6 @@ BitMEX caps each REST response at 1,000 rows and requires manual pagination via 
 first page; wider pagination support is scheduled for a future update.
 :::
 
-## Rate limits
-
-BitMEX implements a dual-layer rate limiting system:
-
-### REST API limits
-
-- **Primary rate limit**:
-  - 120 requests per minute for authenticated users.
-  - 30 requests per minute for unauthenticated users.
-  - Uses a token bucket mechanism with continuous refill.
-- **Secondary rate limit**:
-  - 10 requests per second burst limit for specific endpoints (order management).
-  - Applies to order placement, modification, and cancellation.
-- **Order limits**:
-  - 200 open orders per symbol per account.
-  - 10 stop orders per symbol per account.
-
-The adapter automatically respects these limits through built-in rate limiting with a
-10 requests/second quota that handles both the burst limit and average rate requirements.
-
-### WebSocket limits
-
-- Refer to the BitMEX documentation for current connection limits.
-- Authentication is required for private data streams.
-
-### Rate limit headers
-
-BitMEX provides rate limit information in response headers:
-
-- `x-ratelimit-limit`: Total allowed requests.
-- `x-ratelimit-remaining`: Remaining requests in current window.
-- `x-ratelimit-reset`: Unix timestamp when limits reset.
-- `retry-after`: Seconds to wait if rate limited (429 response).
-
-:::warning
-Exceeding rate limits will result in HTTP 429 responses and potential temporary IP bans.
-Multiple 4xx/5xx errors in quick succession may trigger longer bans.
-:::
-
 ## Connection management
 
 ### HTTP Keep-Alive
@@ -343,13 +299,86 @@ The BitMEX adapter utilizes HTTP keep-alive for optimal performance:
 This configuration ensures low-latency communication with BitMEX servers by maintaining
 persistent connections and avoiding the overhead of establishing new connections for each request.
 
-### Request expiration
+### Request authentication and expiration
 
-BitMEX uses an `api-expires` header for request authentication:
+BitMEX uses an `api-expires` header for request authentication to prevent replay attacks:
 
-- Requests include a UNIX timestamp indicating when they expire.
-- Default expiration window is 10 seconds from request creation.
-- Prevents replay attacks and ensures request freshness.
+- Each signed request includes a Unix timestamp (in seconds) indicating when it expires.
+- The timestamp is calculated as: `current_timestamp + (recv_window_ms / 1000)`.
+- BitMEX rejects requests where the `api-expires` timestamp has already passed.
+
+#### Configuring the expiration window
+
+The expiration window is controlled by the `recv_window_ms` configuration parameter (default: 10000ms = 10 seconds):
+
+```python
+from nautilus_trader.adapters.bitmex.config import BitmexExecClientConfig
+
+config = BitmexExecClientConfig(
+    api_key="YOUR_API_KEY",
+    api_secret="YOUR_API_SECRET",
+    recv_window_ms=30000,  # 30 seconds for high-latency networks
+)
+```
+
+**When to adjust this value:**
+
+- **Default (10s)**: Sufficient for most deployments with accurate system clocks and low network latency.
+- **Increase (20-30s)**: If you experience "request has expired" errors due to:
+  - Clock skew between your system and BitMEX servers.
+  - High network latency or packet loss.
+  - Requests queued due to rate limiting.
+- **Decrease (5s)**: For tighter security in low-latency, time-synchronized environments.
+
+**Important considerations:**
+
+- **Milliseconds to seconds**: Specified in milliseconds for consistency with other adapters, but converted to seconds via integer division (`recv_window_ms / 1000`) since BitMEX uses seconds-granularity timestamps.
+- Larger windows increase tolerance for timing issues but widen the replay attack window.
+- Ensure your system clock is synchronized with NTP to minimize clock drift.
+- Network latency and processing time consume part of the window.
+
+## Rate limiting
+
+BitMEX implements a dual-layer rate limiting system:
+
+### REST limits
+
+- **Burst limit**: 10 requests per second for authenticated users (applies to order placement, modification, and cancel endpoints).
+- **Rolling minute limit**: 120 requests per minute for authenticated users (30 requests per minute for unauthenticated users).
+- **Order caps**: 200 open orders and 10 stop orders per symbol; exceeding these caps triggers exchange-side rejections.
+
+The adapter enforces these quotas automatically and surfaces the rate-limit headers BitMEX returns with each response.
+
+### WebSocket limits
+
+- Connection requests: follow the exchange guidance (currently 3 connections per second per IP).
+- Private streams require authentication; the adapter reconnects automatically if a limit is exceeded.
+
+:::warning
+Exceeding BitMEX rate limits returns HTTP 429 and may trigger temporary IP bans; persistent 4xx/5xx errors can extend the lockout period.
+:::
+
+| Key / Endpoint                    | Limit (req/sec) | Additional quota              | Notes                                    |
+|-----------------------------------|-----------------|-------------------------------|------------------------------------------|
+| `bitmex:global`                   | 10              | `bitmex:minute` = 120 req/min | Burst limit for authenticated users.     |
+| `/api/v1/order`                   | 10              | `/api/v1/order:minute` = 60   | Mirrors BitMEX per-user allowances.      |
+| `/api/v1/order/bulk`              | 5               | –                             | Batch operations throttled tighter.      |
+| `/api/v1/order/cancelAll`         | 2               | –                             | Cancel all orders.                       |
+
+All requests automatically consume both the global burst bucket and the rolling minute bucket. Endpoints that have their own minute quota (e.g. `/api/v1/order`) also queue against that per-route key, so repeated calls with different parameters still share a single rate bucket.
+
+:::info
+For more details on rate limiting, see the [BitMEX API documentation on rate limits](https://www.bitmex.com/app/restAPI#Limits).
+:::
+
+### Rate-limit headers
+
+BitMEX exposes the current allowance via response headers:
+
+- `x-ratelimit-limit`: total requests permitted in the current window.
+- `x-ratelimit-remaining`: remaining requests before throttling occurs.
+- `x-ratelimit-reset`: UNIX timestamp when the allowance resets.
+- `retry-after`: seconds to wait after a 429 response.
 
 ## Configuration
 
@@ -357,8 +386,10 @@ BitMEX uses an `api-expires` header for request authentication:
 
 BitMEX API credentials can be provided either directly in the configuration or via environment variables:
 
-- `BITMEX_API_KEY`: Your BitMEX API key.
-- `BITMEX_API_SECRET`: Your BitMEX API secret.
+- `BITMEX_API_KEY`: Your BitMEX API key for production.
+- `BITMEX_API_SECRET`: Your BitMEX API secret for production.
+- `BITMEX_TESTNET_API_KEY`: Your BitMEX API key for testnet (when `testnet=True`).
+- `BITMEX_TESTNET_API_SECRET`: Your BitMEX API secret for testnet (when `testnet=True`).
 
 To generate API keys:
 
@@ -367,38 +398,49 @@ To generate API keys:
 3. Create a new API key with appropriate permissions.
 4. For testnet, use [testnet.bitmex.com](https://testnet.bitmex.com).
 
+:::note
+**Testnet API endpoints**:
+
+- REST API: `https://testnet.bitmex.com/api/v1`
+- WebSocket: `wss://ws.testnet.bitmex.com/realtime`
+
+The adapter automatically routes requests to the correct endpoints when `testnet=True` is configured.
+:::
+
 ### Data client configuration options
 
 The BitMEX data client provides the following configuration options:
 
-| Option                            | Default | Description |
-|-----------------------------------|---------|-------------|
-| `api_key`                         | `None`  | Optional API key; if `None`, loaded from `BITMEX_API_KEY`. |
-| `api_secret`                      | `None`  | Optional API secret; if `None`, loaded from `BITMEX_API_SECRET`. |
-| `base_url_http`                   | `None`  | Override for the REST base URL (defaults to production). |
-| `base_url_ws`                     | `None`  | Override for the WebSocket base URL (defaults to production). |
-| `testnet`                         | `False` | Route requests to the BitMEX testnet when `True`. |
-| `http_timeout_secs`               | `60`    | Request timeout applied to HTTP calls. |
-| `max_retries`                     | `None`  | Maximum retry attempts for HTTP calls (disabled when `None`). |
-| `retry_delay_initial_ms`          | `1,000` | Initial backoff delay (milliseconds) between retries. |
-| `retry_delay_max_ms`              | `5,000` | Maximum backoff delay (milliseconds) between retries. |
-| `update_instruments_interval_mins`| `60`    | Interval (minutes) between instrument catalogue refreshes. |
+| Option                            | Default  | Description |
+|-----------------------------------|----------|-------------|
+| `api_key`                         | `None`   | Optional API key; if `None`, loaded from `BITMEX_API_KEY`. |
+| `api_secret`                      | `None`   | Optional API secret; if `None`, loaded from `BITMEX_API_SECRET`. |
+| `base_url_http`                   | `None`   | Override for the REST base URL (defaults to production). |
+| `base_url_ws`                     | `None`   | Override for the WebSocket base URL (defaults to production). |
+| `testnet`                         | `False`  | Route requests to the BitMEX testnet when `True`. |
+| `http_timeout_secs`               | `60`     | Request timeout applied to HTTP calls. |
+| `max_retries`                     | `None`   | Maximum retry attempts for HTTP calls (disabled when `None`). |
+| `retry_delay_initial_ms`          | `1,000`  | Initial backoff delay (milliseconds) between retries. |
+| `retry_delay_max_ms`              | `5,000`  | Maximum backoff delay (milliseconds) between retries. |
+| `recv_window_ms`                  | `10,000` | Expiration window (milliseconds) for signed requests. See [Request authentication](#request-authentication-and-expiration). |
+| `update_instruments_interval_mins`| `60`     | Interval (minutes) between instrument catalogue refreshes. |
 
 ### Execution client configuration options
 
 The BitMEX execution client provides the following configuration options:
 
-| Option                   | Default | Description |
-|--------------------------|---------|-------------|
-| `api_key`                | `None`  | Optional API key; if `None`, loaded from `BITMEX_API_KEY`. |
-| `api_secret`             | `None`  | Optional API secret; if `None`, loaded from `BITMEX_API_SECRET`. |
-| `base_url_http`          | `None`  | Override for the REST base URL (defaults to production). |
-| `base_url_ws`            | `None`  | Override for the WebSocket base URL (defaults to production). |
-| `testnet`                | `False` | Route orders to the BitMEX testnet when `True`. |
-| `http_timeout_secs`      | `60`    | Request timeout applied to HTTP calls. |
-| `max_retries`            | `None`  | Maximum retry attempts for HTTP calls (disabled when `None`). |
-| `retry_delay_initial_ms` | `1,000` | Initial backoff delay (milliseconds) between retries. |
-| `retry_delay_max_ms`     | `5,000` | Maximum backoff delay (milliseconds) between retries. |
+| Option                   | Default  | Description |
+|--------------------------|----------|-------------|
+| `api_key`                | `None`   | Optional API key; if `None`, loaded from `BITMEX_API_KEY`. |
+| `api_secret`             | `None`   | Optional API secret; if `None`, loaded from `BITMEX_API_SECRET`. |
+| `base_url_http`          | `None`   | Override for the REST base URL (defaults to production). |
+| `base_url_ws`            | `None`   | Override for the WebSocket base URL (defaults to production). |
+| `testnet`                | `False`  | Route orders to the BitMEX testnet when `True`. |
+| `http_timeout_secs`      | `60`     | Request timeout applied to HTTP calls. |
+| `max_retries`            | `None`   | Maximum retry attempts for HTTP calls (disabled when `None`). |
+| `retry_delay_initial_ms` | `1,000`  | Initial backoff delay (milliseconds) between retries. |
+| `retry_delay_max_ms`     | `5,000`  | Maximum backoff delay (milliseconds) between retries. |
+| `recv_window_ms`         | `10,000` | Expiration window (milliseconds) for signed requests. See [Request authentication](#request-authentication-and-expiration). |
 
 ### Configuration examples
 

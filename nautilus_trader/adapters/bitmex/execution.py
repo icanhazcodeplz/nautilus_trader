@@ -139,6 +139,7 @@ class BitmexExecutionClient(LiveExecutionClient):
             api_secret=config.api_secret,
             account_id=self.pyo3_account_id,
             heartbeat=30,
+            testnet=config.testnet,
         )
         self._ws_client_futures: set[asyncio.Future] = set()
         self._log.info(f"WebSocket URL {ws_url}", LogColor.BLUE)
@@ -176,6 +177,14 @@ class BitmexExecutionClient(LiveExecutionClient):
         instruments = self._instrument_provider.instruments_pyo3()  # type: ignore
 
         await self._update_account_state()
+
+        # Check BitMEX-Nautilus clock sync
+        server_time: int = await self._http_client.http_get_server_time()
+        self._log.info(f"BitMEX server time {server_time} UNIX (ms)")
+
+        nautilus_time: int = self._clock.timestamp_ms()
+        self._log.info(f"Nautilus clock time {nautilus_time} UNIX (ms)")
+
         self._ws_client.set_account_id(self.pyo3_account_id)
 
         await self._ws_client.connect(
@@ -356,6 +365,20 @@ class BitmexExecutionClient(LiveExecutionClient):
 
         if order.is_closed:
             self._log.warning(f"Cannot submit already closed order: {order}")
+            return
+
+        if order.is_quote_quantity:
+            reason = "UNSUPPORTED_QUOTE_QUANTITY"
+            self._log.error(
+                f"Cannot submit order {order.client_order_id}: {reason}",
+            )
+            self.generate_order_denied(
+                strategy_id=order.strategy_id,
+                instrument_id=order.instrument_id,
+                client_order_id=order.client_order_id,
+                reason=reason,
+                ts_event=self._clock.timestamp_ns(),
+            )
             return
 
         # Generate OrderSubmitted event here to ensure correct event sequencing

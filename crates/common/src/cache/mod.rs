@@ -44,7 +44,7 @@ use nautilus_core::{
     datetime::secs_to_nanos,
 };
 #[cfg(feature = "defi")]
-use nautilus_model::defi::Pool;
+use nautilus_model::defi::{Pool, PoolProfiler};
 use nautilus_model::{
     accounts::{Account, AccountAny},
     data::{
@@ -100,6 +100,8 @@ pub struct Cache {
     position_snapshots: AHashMap<PositionId, Bytes>,
     #[cfg(feature = "defi")]
     pools: AHashMap<InstrumentId, Pool>,
+    #[cfg(feature = "defi")]
+    pool_profilers: AHashMap<InstrumentId, PoolProfiler>,
 }
 
 impl Debug for Cache {
@@ -174,6 +176,8 @@ impl Cache {
             position_snapshots: AHashMap::new(),
             #[cfg(feature = "defi")]
             pools: AHashMap::new(),
+            #[cfg(feature = "defi")]
+            pool_profilers: AHashMap::new(),
         }
     }
 
@@ -900,6 +904,7 @@ impl Cache {
 
         'outer: for client_order_id in self.index.orders_closed.clone() {
             if let Some(order) = self.orders.get(&client_order_id)
+                && order.is_closed()
                 && let Some(ts_closed) = order.ts_closed()
                 && ts_closed + buffer_ns <= ts_now
             {
@@ -935,6 +940,7 @@ impl Cache {
 
         for position_id in self.index.positions_closed.clone() {
             if let Some(position) = self.positions.get(&position_id)
+                && position.is_closed()
                 && let Some(ts_closed) = position.ts_closed
                 && ts_closed + buffer_ns <= ts_now
             {
@@ -1205,6 +1211,20 @@ impl Cache {
         log::debug!("Adding `Pool` {}", pool.instrument_id);
 
         self.pools.insert(pool.instrument_id, pool);
+        Ok(())
+    }
+
+    /// Adds a `PoolProfiler` to the cache.
+    ///
+    /// # Errors
+    ///
+    /// This function currently does not return errors but follows the same pattern as other add methods for consistency.
+    #[cfg(feature = "defi")]
+    pub fn add_pool_profiler(&mut self, pool_profiler: PoolProfiler) -> anyhow::Result<()> {
+        let instrument_id = pool_profiler.pool.instrument_id;
+        log::debug!("Adding `PoolProfiler` {instrument_id}");
+
+        self.pool_profilers.insert(instrument_id, pool_profiler);
         Ok(())
     }
 
@@ -2991,6 +3011,78 @@ impl Cache {
         self.pools.get_mut(instrument_id)
     }
 
+    /// Returns the instrument IDs of all pools in the cache, optionally filtered by `venue`.
+    #[cfg(feature = "defi")]
+    #[must_use]
+    pub fn pool_ids(&self, venue: Option<&Venue>) -> Vec<InstrumentId> {
+        match venue {
+            Some(v) => self
+                .pools
+                .keys()
+                .filter(|id| &id.venue == v)
+                .copied()
+                .collect(),
+            None => self.pools.keys().copied().collect(),
+        }
+    }
+
+    /// Returns references to all pools in the cache, optionally filtered by `venue`.
+    #[cfg(feature = "defi")]
+    #[must_use]
+    pub fn pools(&self, venue: Option<&Venue>) -> Vec<&Pool> {
+        match venue {
+            Some(v) => self
+                .pools
+                .values()
+                .filter(|p| &p.instrument_id.venue == v)
+                .collect(),
+            None => self.pools.values().collect(),
+        }
+    }
+
+    /// Gets a reference to the pool profiler for the `instrument_id`.
+    #[cfg(feature = "defi")]
+    #[must_use]
+    pub fn pool_profiler(&self, instrument_id: &InstrumentId) -> Option<&PoolProfiler> {
+        self.pool_profilers.get(instrument_id)
+    }
+
+    /// Gets a mutable reference to the pool profiler for the `instrument_id`.
+    #[cfg(feature = "defi")]
+    #[must_use]
+    pub fn pool_profiler_mut(&mut self, instrument_id: &InstrumentId) -> Option<&mut PoolProfiler> {
+        self.pool_profilers.get_mut(instrument_id)
+    }
+
+    /// Returns the instrument IDs of all pool profilers in the cache, optionally filtered by `venue`.
+    #[cfg(feature = "defi")]
+    #[must_use]
+    pub fn pool_profiler_ids(&self, venue: Option<&Venue>) -> Vec<InstrumentId> {
+        match venue {
+            Some(v) => self
+                .pool_profilers
+                .keys()
+                .filter(|id| &id.venue == v)
+                .copied()
+                .collect(),
+            None => self.pool_profilers.keys().copied().collect(),
+        }
+    }
+
+    /// Returns references to all pool profilers in the cache, optionally filtered by `venue`.
+    #[cfg(feature = "defi")]
+    #[must_use]
+    pub fn pool_profilers(&self, venue: Option<&Venue>) -> Vec<&PoolProfiler> {
+        match venue {
+            Some(v) => self
+                .pool_profilers
+                .values()
+                .filter(|p| &p.pool.instrument_id.venue == v)
+                .collect(),
+            None => self.pool_profilers.values().collect(),
+        }
+    }
+
     /// Gets a reference to the latest quote for the `instrument_id`.
     #[must_use]
     pub fn quote(&self, instrument_id: &InstrumentId) -> Option<&QuoteTick> {
@@ -3310,25 +3402,28 @@ impl Cache {
     ///
     /// This method adds, updates, or removes an order from the own order book
     /// based on the order's current state.
+    ///
+    /// Orders without prices (MARKET, etc.) are skipped as they cannot be
+    /// represented in own books.
     pub fn update_own_order_book(&mut self, order: &OrderAny) {
+        if !order.has_price() {
+            return;
+        }
+
         let instrument_id = order.instrument_id();
 
-        // Get or create the own order book for this instrument
         let own_book = self
             .own_books
             .entry(instrument_id)
             .or_insert_with(|| OwnOrderBook::new(instrument_id));
 
-        // Convert order to own book order
         let own_book_order = order.to_own_book_order();
 
         if order.is_closed() {
-            // Remove the order from the own book if it's closed
             if let Err(e) = own_book.delete(own_book_order) {
                 log::debug!(
-                    "Failed to delete order {} from own book: {}",
+                    "Failed to delete order {} from own book: {e}",
                     order.client_order_id(),
-                    e
                 );
             } else {
                 log::debug!("Deleted order {} from own book", order.client_order_id());
@@ -3337,12 +3432,67 @@ impl Cache {
             // Add or update the order in the own book
             own_book.update(own_book_order).unwrap_or_else(|e| {
                 log::debug!(
-                    "Failed to update order {} in own book: {}",
+                    "Failed to update order {} in own book: {e}",
                     order.client_order_id(),
-                    e
                 );
             });
             log::debug!("Updated order {} in own book", order.client_order_id());
         }
+    }
+
+    /// Force removal of an order from own order books and clean up all indexes.
+    ///
+    /// This method is used when order event application fails and we need to ensure
+    /// terminal orders are properly cleaned up from own books and all relevant indexes.
+    /// Replicates the index cleanup that update_order performs for closed orders.
+    pub fn force_remove_from_own_order_book(&mut self, client_order_id: &ClientOrderId) {
+        let order = match self.orders.get(client_order_id) {
+            Some(order) => order,
+            None => return,
+        };
+
+        self.index.orders_open.remove(client_order_id);
+        self.index.orders_pending_cancel.remove(client_order_id);
+        self.index.orders_inflight.remove(client_order_id);
+        self.index.orders_emulated.remove(client_order_id);
+
+        if let Some(own_book) = self.own_books.get_mut(&order.instrument_id())
+            && order.has_price()
+        {
+            let own_book_order = order.to_own_book_order();
+            if let Err(e) = own_book.delete(own_book_order) {
+                log::debug!("Could not force delete {client_order_id} from own book: {e}");
+            } else {
+                log::debug!("Force deleted {client_order_id} from own book");
+            }
+        }
+
+        self.index.orders_closed.insert(*client_order_id);
+    }
+
+    /// Audit all own order books against open and inflight order indexes.
+    ///
+    /// Ensures closed orders are removed from own order books. This includes both
+    /// orders tracked in `orders_open` (ACCEPTED, TRIGGERED, PENDING_*, PARTIALLY_FILLED)
+    /// and `orders_inflight` (INITIALIZED, SUBMITTED) to prevent false positives
+    /// during venue latency windows.
+    pub fn audit_own_order_books(&mut self) {
+        log::debug!("Starting own books audit");
+        let start = std::time::Instant::now();
+
+        // Build union of open and inflight orders for audit,
+        // this prevents false positives for SUBMITTED orders during venue latency.
+        let valid_order_ids: HashSet<ClientOrderId> = self
+            .index
+            .orders_open
+            .union(&self.index.orders_inflight)
+            .copied()
+            .collect();
+
+        for own_book in self.own_books.values_mut() {
+            own_book.audit_open_orders(&valid_order_ids);
+        }
+
+        log::debug!("Completed own books audit in {:?}", start.elapsed());
     }
 }

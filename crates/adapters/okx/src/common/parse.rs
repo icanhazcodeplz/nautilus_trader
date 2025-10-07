@@ -424,10 +424,42 @@ pub fn parse_order_status_report(
     let time_in_force = TimeInForce::Gtc;
 
     // Build report
-    let client_ord = if order.cl_ord_id.is_empty() {
+    let mut client_order_id = if order.cl_ord_id.is_empty() {
         None
     } else {
-        Some(ClientOrderId::new(order.cl_ord_id))
+        Some(ClientOrderId::new(order.cl_ord_id.as_str()))
+    };
+
+    let mut linked_ids = Vec::new();
+
+    if let Some(algo_cl_ord_id) = order
+        .algo_cl_ord_id
+        .as_ref()
+        .filter(|value| !value.as_str().is_empty())
+    {
+        let algo_client_id = ClientOrderId::new(algo_cl_ord_id.as_str());
+        match &client_order_id {
+            Some(existing) if existing == &algo_client_id => {}
+            Some(_) => linked_ids.push(algo_client_id),
+            None => client_order_id = Some(algo_client_id),
+        }
+    }
+
+    let venue_order_id = if order.ord_id.is_empty() {
+        if let Some(algo_id) = order
+            .algo_id
+            .as_ref()
+            .filter(|value| !value.as_str().is_empty())
+        {
+            VenueOrderId::new(algo_id.as_str())
+        } else if !order.cl_ord_id.is_empty() {
+            VenueOrderId::new(order.cl_ord_id.as_str())
+        } else {
+            let synthetic_id = format!("{}:{}", account_id, order.c_time);
+            VenueOrderId::new(&synthetic_id)
+        }
+    } else {
+        VenueOrderId::new(order.ord_id.as_str())
     };
 
     let ts_accepted = parse_millisecond_timestamp(order.c_time);
@@ -436,8 +468,8 @@ pub fn parse_order_status_report(
     let mut report = OrderStatusReport::new(
         account_id,
         instrument_id,
-        client_ord,
-        VenueOrderId::new(order.ord_id),
+        client_order_id,
+        venue_order_id,
         order_side,
         order_type,
         time_in_force,
@@ -467,10 +499,19 @@ pub fn parse_order_status_report(
     if order.reduce_only == "true" {
         report = report.with_reduce_only(true);
     }
+
+    if !linked_ids.is_empty() {
+        report = report.with_linked_order_ids(linked_ids);
+    }
+
     report
 }
 
 /// Parses an OKX position into a Nautilus [`PositionStatusReport`].
+///
+/// # Errors
+///
+/// Returns an error if any numeric fields cannot be parsed into their target types.
 ///
 /// # Panics
 ///
@@ -533,7 +574,7 @@ pub fn parse_position_status_report(
 ///
 /// # Errors
 ///
-/// This function will return an error if the OKX transaction detail cannot be parsed.
+/// Returns an error if the OKX transaction detail cannot be parsed.
 pub fn parse_fill_report(
     detail: OKXTransactionDetail,
     account_id: AccountId,
@@ -579,6 +620,11 @@ pub fn parse_fill_report(
 ///
 /// Reduces code duplication by providing a common pattern for deserializing JSON arrays,
 /// parsing each message, and wrapping results in Nautilus Data enum variants.
+///
+/// # Errors
+///
+/// Returns an error if the payload is not an array or if individual messages
+/// cannot be parsed.
 pub fn parse_message_vec<T, R, F, W>(
     data: serde_json::Value,
     parser: F,
@@ -589,11 +635,23 @@ where
     F: Fn(&T) -> anyhow::Result<R>,
     W: Fn(R) -> Data,
 {
-    let msgs: Vec<T> = serde_json::from_value(data)?;
-    let mut results = Vec::with_capacity(msgs.len());
+    let items = match data {
+        serde_json::Value::Array(items) => items,
+        other => {
+            let raw = serde_json::to_string(&other).unwrap_or_else(|_| other.to_string());
+            let mut snippet: String = raw.chars().take(512).collect();
+            if raw.len() > snippet.len() {
+                snippet.push_str("...");
+            }
+            anyhow::bail!("Expected array payload, received {snippet}");
+        }
+    };
 
-    for msg in msgs {
-        let parsed = parser(&msg)?;
+    let mut results = Vec::with_capacity(items.len());
+
+    for item in items {
+        let message: T = serde_json::from_value(item)?;
+        let parsed = parser(&message)?;
         results.push(wrapper(parsed));
     }
 
@@ -601,6 +659,11 @@ where
 }
 
 /// Converts a Nautilus bar specification into the matching OKX candle channel.
+///
+/// # Errors
+///
+/// Returns an error if the provided bar specification does not have a matching
+/// OKX websocket channel.
 pub fn bar_spec_as_okx_channel(bar_spec: BarSpecification) -> anyhow::Result<OKXWsChannel> {
     let channel = match bar_spec {
         BAR_SPEC_1_SECOND_LAST => OKXWsChannel::Candle1Second,
@@ -629,6 +692,11 @@ pub fn bar_spec_as_okx_channel(bar_spec: BarSpecification) -> anyhow::Result<OKX
 }
 
 /// Converts Nautilus bar specification to OKX mark price channel.
+///
+/// # Errors
+///
+/// Returns an error if the bar specification does not map to a mark price
+/// channel.
 pub fn bar_spec_as_okx_mark_price_channel(
     bar_spec: BarSpecification,
 ) -> anyhow::Result<OKXWsChannel> {
@@ -657,6 +725,11 @@ pub fn bar_spec_as_okx_mark_price_channel(
 }
 
 /// Converts Nautilus bar specification to OKX timeframe string.
+///
+/// # Errors
+///
+/// Returns an error if the bar specification does not have a corresponding
+/// OKX timeframe value.
 pub fn bar_spec_as_okx_timeframe(bar_spec: BarSpecification) -> anyhow::Result<&'static str> {
     let timeframe = match bar_spec {
         BAR_SPEC_1_SECOND_LAST => "1s",
@@ -685,6 +758,10 @@ pub fn bar_spec_as_okx_timeframe(bar_spec: BarSpecification) -> anyhow::Result<&
 }
 
 /// Converts OKX timeframe string to Nautilus bar specification.
+///
+/// # Errors
+///
+/// Returns an error if the timeframe string is not recognized.
 pub fn okx_timeframe_as_bar_spec(timeframe: &str) -> anyhow::Result<BarSpecification> {
     let bar_spec = match timeframe {
         "1s" => BAR_SPEC_1_SECOND_LAST,
@@ -714,6 +791,11 @@ pub fn okx_timeframe_as_bar_spec(timeframe: &str) -> anyhow::Result<BarSpecifica
 
 /// Constructs a properly formatted BarType from OKX instrument ID and timeframe string.
 /// This ensures the BarType uses canonical Nautilus format instead of raw OKX strings.
+///
+/// # Errors
+///
+/// Returns an error if the timeframe cannot be converted into a
+/// `BarSpecification`.
 pub fn okx_bar_type_from_timeframe(
     instrument_id: InstrumentId,
     timeframe: &str,
@@ -755,6 +837,10 @@ pub fn okx_channel_to_bar_spec(channel: &OKXWsChannel) -> Option<BarSpecificatio
 }
 
 /// Parses an OKX instrument definition into a Nautilus instrument.
+///
+/// # Errors
+///
+/// Returns an error if the instrument definition cannot be parsed.
 pub fn parse_instrument_any(
     instrument: &OKXInstrument,
     ts_init: UnixNanos,
@@ -919,6 +1005,10 @@ impl InstrumentParser for SpotInstrumentParser {
 }
 
 /// Parses an OKX spot instrument definition into a Nautilus currency pair.
+///
+/// # Errors
+///
+/// Returns an error if the instrument definition cannot be parsed.
 pub fn parse_spot_instrument(
     definition: &OKXInstrument,
     margin_init: Option<Decimal>,
@@ -939,6 +1029,10 @@ pub fn parse_spot_instrument(
 }
 
 /// Parses an OKX swap instrument definition into a Nautilus crypto perpetual.
+///
+/// # Errors
+///
+/// Returns an error if the instrument definition cannot be parsed.
 pub fn parse_swap_instrument(
     definition: &OKXInstrument,
     margin_init: Option<Decimal>,
@@ -1029,6 +1123,10 @@ pub fn parse_swap_instrument(
 }
 
 /// Parses an OKX futures instrument definition into a Nautilus crypto future.
+///
+/// # Errors
+///
+/// Returns an error if the instrument definition cannot be parsed.
 pub fn parse_futures_instrument(
     definition: &OKXInstrument,
     margin_init: Option<Decimal>,
@@ -1105,6 +1203,10 @@ pub fn parse_futures_instrument(
 }
 
 /// Parses an OKX option instrument definition into a Nautilus option contract.
+///
+/// # Errors
+///
+/// Returns an error if the instrument definition cannot be parsed.
 pub fn parse_option_instrument(
     definition: &OKXInstrument,
     margin_init: Option<Decimal>,
@@ -1177,6 +1279,10 @@ pub fn parse_option_instrument(
 }
 
 /// Parses an OKX account into a Nautilus account state.
+///
+/// # Errors
+///
+/// Returns an error if the data cannot be parsed.
 pub fn parse_account_state(
     okx_account: &OKXAccount,
     account_id: AccountId,
@@ -1259,9 +1365,7 @@ pub fn parse_account_state(
 
 #[cfg(test)]
 mod tests {
-    use nautilus_model::{
-        enums::AggregationSource, identifiers::InstrumentId, instruments::Instrument,
-    };
+    use nautilus_model::instruments::Instrument;
     use rstest::rstest;
 
     use super::*;

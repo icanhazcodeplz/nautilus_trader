@@ -31,7 +31,7 @@ use crate::http::client::BitmexHttpClient;
 #[pymethods]
 impl BitmexHttpClient {
     #[new]
-    #[pyo3(signature = (api_key=None, api_secret=None, base_url=None, testnet=false, timeout_secs=None, max_retries=None, retry_delay_ms=None, retry_delay_max_ms=None))]
+    #[pyo3(signature = (api_key=None, api_secret=None, base_url=None, testnet=false, timeout_secs=None, max_retries=None, retry_delay_ms=None, retry_delay_max_ms=None, recv_window_ms=None))]
     #[allow(clippy::too_many_arguments)]
     fn py_new(
         api_key: Option<&str>,
@@ -42,50 +42,38 @@ impl BitmexHttpClient {
         max_retries: Option<u32>,
         retry_delay_ms: Option<u64>,
         retry_delay_max_ms: Option<u64>,
+        recv_window_ms: Option<u64>,
     ) -> PyResult<Self> {
         let timeout = timeout_secs.or(Some(60));
 
-        // Try to use with_credentials if we have any credentials or need env vars
-        if api_key.is_none() && api_secret.is_none() && !testnet && base_url.is_none() {
-            // Try to load from environment
-            match Self::with_credentials(
-                None,
-                None,
-                base_url.map(String::from),
-                timeout,
-                max_retries,
-                retry_delay_ms,
-                retry_delay_max_ms,
-            ) {
-                Ok(client) => Ok(client),
-                Err(_) => {
-                    // Fall back to unauthenticated client
-                    Self::new(
-                        base_url.map(String::from),
-                        None,
-                        None,
-                        testnet,
-                        timeout,
-                        max_retries,
-                        retry_delay_ms,
-                        retry_delay_max_ms,
-                    )
-                    .map_err(to_pyvalue_err)
-                }
-            }
+        // If credentials not provided, try to load from environment
+        let (final_api_key, final_api_secret) = if api_key.is_none() && api_secret.is_none() {
+            // Choose environment variables based on testnet flag
+            let (key_var, secret_var) = if testnet {
+                ("BITMEX_TESTNET_API_KEY", "BITMEX_TESTNET_API_SECRET")
+            } else {
+                ("BITMEX_API_KEY", "BITMEX_API_SECRET")
+            };
+
+            let env_key = std::env::var(key_var).ok();
+            let env_secret = std::env::var(secret_var).ok();
+            (env_key, env_secret)
         } else {
-            Self::new(
-                base_url.map(String::from),
-                api_key.map(String::from),
-                api_secret.map(String::from),
-                testnet,
-                timeout,
-                max_retries,
-                retry_delay_ms,
-                retry_delay_max_ms,
-            )
-            .map_err(to_pyvalue_err)
-        }
+            (api_key.map(String::from), api_secret.map(String::from))
+        };
+
+        Self::new(
+            base_url.map(String::from),
+            final_api_key,
+            final_api_secret,
+            testnet,
+            timeout,
+            max_retries,
+            retry_delay_ms,
+            retry_delay_max_ms,
+            recv_window_ms,
+        )
+        .map_err(to_pyvalue_err)
     }
 
     #[staticmethod]
@@ -523,6 +511,11 @@ impl BitmexHttpClient {
         Ok(())
     }
 
+    #[pyo3(name = "cancel_all_requests")]
+    fn py_cancel_all_requests(&self) {
+        self.cancel_all_requests();
+    }
+
     #[pyo3(name = "http_get_margin")]
     fn py_http_get_margin<'py>(
         &self,
@@ -629,6 +622,20 @@ impl BitmexHttpClient {
                 // }
                 Ok(py_list.into())
             })
+        })
+    }
+
+    #[pyo3(name = "http_get_server_time")]
+    fn py_http_get_server_time<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let client = self.clone();
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let timestamp = client
+                .http_get_server_time()
+                .await
+                .map_err(to_pyvalue_err)?;
+
+            Python::attach(|py| timestamp.into_py_any(py))
         })
     }
 }

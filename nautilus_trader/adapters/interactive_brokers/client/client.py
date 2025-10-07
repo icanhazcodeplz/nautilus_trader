@@ -140,6 +140,7 @@ class InteractiveBrokersClient(
         self._max_connection_attempts: int = int(os.getenv("IB_MAX_CONNECTION_ATTEMPTS", 0))
         self._indefinite_reconnect: bool = False if self._max_connection_attempts else True
         self._reconnect_delay: int = 5  # seconds
+        self._last_disconnection_ns: int | None = None
 
         # MarketDataMixin
         self._bar_type_to_last_bar: dict[str, BarData | None] = {}
@@ -147,6 +148,7 @@ class InteractiveBrokersClient(
             {}
         )  # Track timeout tasks for each bar type
         self._subscription_tick_data: dict[int, dict] = {}  # Store tick data by req_id
+        self._subscription_start_times: dict[int, int] = {}  # Store start_ns for bar filtering
 
         # OrderMixin
         self._exec_id_details: dict[
@@ -389,6 +391,7 @@ class InteractiveBrokersClient(
             self._log.debug("`_is_ib_connected` unset by `_handle_disconnection`", LogColor.BLUE)
             self._is_ib_connected.clear()
 
+        self._last_disconnection_ns = self._clock.timestamp_ns()
         await asyncio.sleep(5)
         await self._handle_reconnect()
 

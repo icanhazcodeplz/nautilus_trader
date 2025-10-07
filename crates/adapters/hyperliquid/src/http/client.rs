@@ -29,6 +29,7 @@ use std::{
 
 use anyhow::Context;
 use nautilus_core::consts::NAUTILUS_USER_AGENT;
+use nautilus_model::instruments::InstrumentAny;
 use nautilus_network::{http::HttpClient, ratelimiter::quota::Quota};
 use reqwest::{Method, header::USER_AGENT};
 use serde_json::Value;
@@ -43,7 +44,12 @@ use crate::{
         error::{Error, Result},
         models::{
             HyperliquidExchangeRequest, HyperliquidExchangeResponse, HyperliquidFills,
-            HyperliquidL2Book, HyperliquidMeta, HyperliquidOrderStatus,
+            HyperliquidL2Book, HyperliquidMeta, HyperliquidOrderStatus, PerpMeta, PerpMetaAndCtxs,
+            SpotMeta, SpotMetaAndCtxs,
+        },
+        parse::{
+            HyperliquidInstrumentDef, instruments_from_defs_owned, parse_perp_instruments,
+            parse_spot_instruments,
         },
         query::{ExchangeAction, InfoRequest},
         rate_limits::{
@@ -65,7 +71,11 @@ pub static HYPERLIQUID_REST_QUOTA: LazyLock<Quota> =
 /// This client wraps the underlying `HttpClient` to handle functionality
 /// specific to Hyperliquid, such as request signing (for authenticated endpoints),
 /// forming request URLs, and deserializing responses into specific data models.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.adapters")
+)]
 pub struct HyperliquidHttpClient {
     client: HttpClient,
     is_testnet: bool,
@@ -170,6 +180,18 @@ impl HyperliquidHttpClient {
         self.is_testnet
     }
 
+    /// Gets the user address derived from the private key (if client has credentials).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Auth`] if the client has no signer configured.
+    pub fn get_user_address(&self) -> Result<String> {
+        self.signer
+            .as_ref()
+            .ok_or_else(|| Error::auth("No signer configured"))?
+            .address()
+    }
+
     /// Builds the default headers to include with each request (e.g., `User-Agent`).
     fn default_headers() -> HashMap<String, String> {
         HashMap::from([
@@ -182,6 +204,76 @@ impl HyperliquidHttpClient {
 
     /// Get metadata about available markets.
     pub async fn info_meta(&self) -> Result<HyperliquidMeta> {
+        let request = InfoRequest::meta();
+        let response = self.send_info_request(&request).await?;
+        serde_json::from_value(response).map_err(Error::Serde)
+    }
+
+    /// Get complete spot metadata (tokens and pairs).
+    pub async fn get_spot_meta(&self) -> Result<SpotMeta> {
+        let request = InfoRequest::spot_meta();
+        let response = self.send_info_request(&request).await?;
+        serde_json::from_value(response).map_err(Error::Serde)
+    }
+
+    /// Get perpetuals metadata with asset contexts (for price precision refinement).
+    pub async fn get_perp_meta_and_ctxs(&self) -> Result<PerpMetaAndCtxs> {
+        let request = InfoRequest::meta_and_asset_ctxs();
+        let response = self.send_info_request(&request).await?;
+        serde_json::from_value(response).map_err(Error::Serde)
+    }
+
+    /// Get spot metadata with asset contexts (for price precision refinement).
+    pub async fn get_spot_meta_and_ctxs(&self) -> Result<SpotMetaAndCtxs> {
+        let request = InfoRequest::spot_meta_and_asset_ctxs();
+        let response = self.send_info_request(&request).await?;
+        serde_json::from_value(response).map_err(Error::Serde)
+    }
+
+    /// Fetch and parse all available instrument definitions from Hyperliquid.
+    pub async fn request_instruments(&self) -> Result<Vec<InstrumentAny>> {
+        let mut defs: Vec<HyperliquidInstrumentDef> = Vec::new();
+
+        match self.load_perp_meta().await {
+            Ok(perp_meta) => match parse_perp_instruments(&perp_meta) {
+                Ok(perp_defs) => {
+                    tracing::debug!(
+                        count = perp_defs.len(),
+                        "Loaded Hyperliquid perp definitions"
+                    );
+                    defs.extend(perp_defs);
+                }
+                Err(err) => {
+                    tracing::warn!(%err, "Failed to parse Hyperliquid perp instruments");
+                }
+            },
+            Err(err) => {
+                tracing::warn!(%err, "Failed to load Hyperliquid perp metadata");
+            }
+        }
+
+        match self.get_spot_meta().await {
+            Ok(spot_meta) => match parse_spot_instruments(&spot_meta) {
+                Ok(spot_defs) => {
+                    tracing::debug!(
+                        count = spot_defs.len(),
+                        "Loaded Hyperliquid spot definitions"
+                    );
+                    defs.extend(spot_defs);
+                }
+                Err(err) => {
+                    tracing::warn!(%err, "Failed to parse Hyperliquid spot instruments");
+                }
+            },
+            Err(err) => {
+                tracing::warn!(%err, "Failed to load Hyperliquid spot metadata");
+            }
+        }
+
+        Ok(instruments_from_defs_owned(defs))
+    }
+
+    pub(crate) async fn load_perp_meta(&self) -> Result<PerpMeta> {
         let request = InfoRequest::meta();
         let response = self.send_info_request(&request).await?;
         serde_json::from_value(response).map_err(Error::Serde)
@@ -204,6 +296,43 @@ impl HyperliquidHttpClient {
     /// Get order status for a user.
     pub async fn info_order_status(&self, user: &str, oid: u64) -> Result<HyperliquidOrderStatus> {
         let request = InfoRequest::order_status(user, oid);
+        let response = self.send_info_request(&request).await?;
+        serde_json::from_value(response).map_err(Error::Serde)
+    }
+
+    /// Get all open orders for a user.
+    pub async fn info_open_orders(&self, user: &str) -> Result<Value> {
+        let request = InfoRequest::open_orders(user);
+        self.send_info_request(&request).await
+    }
+
+    /// Get frontend open orders (includes more detail) for a user.
+    pub async fn info_frontend_open_orders(&self, user: &str) -> Result<Value> {
+        let request = InfoRequest::frontend_open_orders(user);
+        self.send_info_request(&request).await
+    }
+
+    /// Get clearinghouse state (balances, positions, margin) for a user.
+    pub async fn info_clearinghouse_state(&self, user: &str) -> Result<Value> {
+        let request = InfoRequest::clearinghouse_state(user);
+        self.send_info_request(&request).await
+    }
+
+    /// Get candle/bar data for a coin.
+    ///
+    /// # Arguments
+    /// * `coin` - The coin symbol (e.g., "BTC")
+    /// * `interval` - The timeframe (e.g., "1m", "5m", "15m", "1h", "4h", "1d")
+    /// * `start_time` - Start timestamp in milliseconds
+    /// * `end_time` - End timestamp in milliseconds
+    pub async fn info_candle_snapshot(
+        &self,
+        coin: &str,
+        interval: &str,
+        start_time: u64,
+        end_time: u64,
+    ) -> Result<crate::http::models::HyperliquidCandleSnapshot> {
+        let request = InfoRequest::candle_snapshot(coin, interval, start_time, end_time);
         let response = self.send_info_request(&request).await?;
         serde_json::from_value(response).map_err(Error::Serde)
     }

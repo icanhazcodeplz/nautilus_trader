@@ -94,8 +94,8 @@ impl OrderBook {
             sequence: 0,
             ts_last: UnixNanos::default(),
             update_count: 0,
-            bids: BookLadder::new(OrderSideSpecified::Buy),
-            asks: BookLadder::new(OrderSideSpecified::Sell),
+            bids: BookLadder::new(OrderSideSpecified::Buy, book_type),
+            asks: BookLadder::new(OrderSideSpecified::Sell, book_type),
         }
     }
 
@@ -289,12 +289,40 @@ impl OrderBook {
         self.asks.clear();
 
         for order in depth.bids {
-            self.add(order, depth.flags, depth.sequence, depth.ts_event);
+            // Skip padding entries
+            if order.side == OrderSide::NoOrderSide || !order.size.is_positive() {
+                continue;
+            }
+
+            debug_assert_eq!(
+                order.side,
+                OrderSide::Buy,
+                "Bid order must have Buy side, was {:?}",
+                order.side
+            );
+
+            let order = pre_process_order(self.book_type, order, depth.flags);
+            self.bids.add(order);
         }
 
         for order in depth.asks {
-            self.add(order, depth.flags, depth.sequence, depth.ts_event);
+            // Skip padding entries
+            if order.side == OrderSide::NoOrderSide || !order.size.is_positive() {
+                continue;
+            }
+
+            debug_assert_eq!(
+                order.side,
+                OrderSide::Sell,
+                "Ask order must have Sell side, was {:?}",
+                order.side
+            );
+
+            let order = pre_process_order(self.book_type, order, depth.flags);
+            self.asks.add(order);
         }
+
+        self.increment(depth.sequence, depth.ts_event);
     }
 
     /// Returns an iterator over bid price levels.
@@ -558,27 +586,34 @@ impl OrderBook {
     }
 
     fn increment(&mut self, sequence: u64, ts_event: UnixNanos) {
-        debug_assert!(
-            sequence >= self.sequence,
-            "Sequence number should not go backwards: old={}, new={}",
-            self.sequence,
-            sequence
-        );
-        debug_assert!(
-            ts_event >= self.ts_last,
-            "Timestamp should not go backwards: old={}, new={}",
-            self.ts_last,
-            ts_event
-        );
-        debug_assert!(
-            self.update_count < u64::MAX,
-            "Update count approaching overflow: {}",
-            self.update_count
-        );
+        // Critical invariant checks: panic in debug, warn in release
+        if sequence < self.sequence {
+            let msg = format!(
+                "Sequence number should not go backwards: old={}, new={}",
+                self.sequence, sequence
+            );
+            debug_assert!(sequence >= self.sequence, "{}", msg);
+            log::warn!("{}", msg);
+        }
+
+        if ts_event < self.ts_last {
+            let msg = format!(
+                "Timestamp should not go backwards: old={}, new={}",
+                self.ts_last, ts_event
+            );
+            debug_assert!(ts_event >= self.ts_last, "{}", msg);
+            log::warn!("{}", msg);
+        }
+
+        if self.update_count == u64::MAX {
+            let msg = format!("Update count approaching overflow: {}", self.update_count);
+            debug_assert!(self.update_count < u64::MAX, "{}", msg);
+            log::warn!("{}", msg);
+        }
 
         self.sequence = sequence;
         self.ts_last = ts_event;
-        self.update_count += 1;
+        self.update_count = self.update_count.saturating_add(1);
     }
 
     /// Updates L1 book state from a quote tick. Only valid for L1_MBP book type.
@@ -625,6 +660,8 @@ impl OrderBook {
         self.update_book_bid(bid, quote.ts_event);
         self.update_book_ask(ask, quote.ts_event);
 
+        self.increment(self.sequence.saturating_add(1), quote.ts_event);
+
         Ok(())
     }
 
@@ -666,6 +703,8 @@ impl OrderBook {
 
         self.update_book_bid(bid, trade.ts_event);
         self.update_book_ask(ask, trade.ts_event);
+
+        self.increment(self.sequence.saturating_add(1), trade.ts_event);
 
         Ok(())
     }
@@ -710,6 +749,11 @@ fn group_levels<'a>(
     depth: Option<usize>,
     is_bid: bool,
 ) -> IndexMap<Decimal, Decimal> {
+    if group_size <= Decimal::ZERO {
+        log::error!("Invalid group_size: {group_size}, must be positive; returning empty map");
+        return IndexMap::new();
+    }
+
     let mut levels = IndexMap::new();
     let depth = depth.unwrap_or(usize::MAX);
 

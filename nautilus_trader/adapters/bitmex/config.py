@@ -26,10 +26,12 @@ class BitmexDataClientConfig(LiveDataClientConfig, frozen=True):
     ----------
     api_key : str, [default=None]
         The BitMEX API public key.
-        If ``None`` then will source the `BITMEX_API_KEY` environment variable.
+        If ``None`` then will source the `BITMEX_API_KEY` or `BITMEX_TESTNET_API_KEY`
+        environment variable (depending on the `testnet` setting).
     api_secret : str, [default=None]
         The BitMEX API secret key.
-        If ``None`` then will source the `BITMEX_API_SECRET` environment variable.
+        If ``None`` then will source the `BITMEX_API_SECRET` or `BITMEX_TESTNET_API_SECRET`
+        environment variable (depending on the `testnet` setting).
     base_url_http : str, optional
         The base url to BitMEX's HTTP API.
         If ``None`` then will use the default production URL.
@@ -46,6 +48,10 @@ class BitmexDataClientConfig(LiveDataClientConfig, frozen=True):
         The initial delay (milliseconds) for retries.
     retry_delay_max_ms : PositiveInt, default 5_000
         The maximum delay (milliseconds) for exponential backoff.
+    recv_window_ms : PositiveInt, default 10_000
+        The expiration window (milliseconds) for signed requests.
+        Note: Specified in milliseconds for consistency with other adapters,
+        but BitMEX uses seconds-granularity timestamps (converted via integer division).
     update_instruments_interval_mins: PositiveInt or None, default 60
         The interval (minutes) between reloading instruments from the venue.
 
@@ -60,6 +66,7 @@ class BitmexDataClientConfig(LiveDataClientConfig, frozen=True):
     max_retries: PositiveInt | None = None
     retry_delay_initial_ms: PositiveInt | None = 1_000
     retry_delay_max_ms: PositiveInt | None = 5_000
+    recv_window_ms: PositiveInt | None = 10_000
     update_instruments_interval_mins: PositiveInt | None = 60
 
 
@@ -71,10 +78,12 @@ class BitmexExecClientConfig(LiveExecClientConfig, frozen=True):
     ----------
     api_key : str, [default=None]
         The BitMEX API public key.
-        If ``None`` then will source the `BITMEX_API_KEY` environment variable.
+        If ``None`` then will source the `BITMEX_API_KEY` or `BITMEX_TESTNET_API_KEY`
+        environment variable (depending on the `testnet` setting).
     api_secret : str, [default=None]
         The BitMEX API secret key.
-        If ``None`` then will source the `BITMEX_API_SECRET` environment variable.
+        If ``None`` then will source the `BITMEX_API_SECRET` or `BITMEX_TESTNET_API_SECRET`
+        environment variable (depending on the `testnet` setting).
     base_url_http : str, optional
         The base url to BitMEX's HTTP API.
         If ``None`` then will use the default production URL.
@@ -91,6 +100,10 @@ class BitmexExecClientConfig(LiveExecClientConfig, frozen=True):
         The initial delay (milliseconds) for retries.
     retry_delay_max_ms : PositiveInt, default 5_000
         The maximum delay (milliseconds) for exponential backoff.
+    recv_window_ms : PositiveInt, default 10_000
+        The expiration window (milliseconds) for signed requests.
+        Note: Specified in milliseconds for consistency with other adapters,
+        but BitMEX uses seconds-granularity timestamps (converted via integer division).
 
     """
 
@@ -103,3 +116,4 @@ class BitmexExecClientConfig(LiveExecClientConfig, frozen=True):
     max_retries: PositiveInt | None = None
     retry_delay_initial_ms: PositiveInt | None = 1_000
     retry_delay_max_ms: PositiveInt | None = 5_000
+    recv_window_ms: PositiveInt | None = 10_000

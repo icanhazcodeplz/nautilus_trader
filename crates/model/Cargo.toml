@@ -29,10 +29,7 @@ python = ["nautilus-core/python", "pyo3", "pyo3-stub-gen"]
 stubs = ["rstest"]
 high-precision = []
 # DeFi domain model requires 18-decimal wei precision, implying `high-precision`
-defi = [
-    "alloy-primitives",
-    "high-precision",
-]
+defi = ["alloy-primitives", "high-precision"]
 
 [package.metadata.docs.rs]
 all-features = true
@@ -59,6 +56,7 @@ tabled = { workspace = true }
 thiserror = { workspace = true }
 thousands = { workspace = true }
 ustr = { workspace = true }
+tracing = { workspace = true }
 
 alloy-primitives = { workspace = true, optional = true }
 pyo3 = { workspace = true, optional = true }

@@ -15,17 +15,255 @@
 //! WebSocket message types for Bybit public and private channels.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use ustr::Ustr;
 
 use crate::common::enums::{
     BybitCancelType, BybitCreateType, BybitExecType, BybitOrderSide, BybitOrderStatus,
     BybitOrderType, BybitProductType, BybitStopOrderType, BybitTimeInForce, BybitTpSlMode,
-    BybitTriggerDirection, BybitTriggerType,
+    BybitTriggerDirection, BybitTriggerType, BybitWsOrderRequestOp,
 };
+
+/// Bybit WebSocket subscription message.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BybitSubscription {
+    pub op: String,
+    pub args: Vec<String>,
+}
+
+/// Bybit WebSocket authentication message.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BybitAuthRequest {
+    pub op: String,
+    pub args: Vec<serde_json::Value>,
+}
+
+/// High level message emitted by the Bybit WebSocket client.
+#[derive(Debug, Clone)]
+pub enum BybitWebSocketMessage {
+    /// Generic response (subscribe/auth acknowledgement).
+    Response(BybitWsResponse),
+    /// Authentication acknowledgement.
+    Auth(BybitWsAuthResponse),
+    /// Subscription acknowledgement.
+    Subscription(BybitWsSubscriptionMsg),
+    /// Orderbook snapshot or delta.
+    Orderbook(BybitWsOrderbookDepthMsg),
+    /// Trade updates.
+    Trade(BybitWsTradeMsg),
+    /// Kline updates.
+    Kline(BybitWsKlineMsg),
+    /// Linear/inverse ticker update.
+    TickerLinear(BybitWsTickerLinearMsg),
+    /// Option ticker update.
+    TickerOption(BybitWsTickerOptionMsg),
+    /// Order updates from private channel.
+    AccountOrder(BybitWsAccountOrderMsg),
+    /// Execution/fill updates from private channel.
+    AccountExecution(BybitWsAccountExecutionMsg),
+    /// Wallet/balance updates from private channel.
+    AccountWallet(BybitWsAccountWalletMsg),
+    /// Position updates from private channel.
+    AccountPosition(BybitWsAccountPositionMsg),
+    /// Error received from the venue or client lifecycle.
+    Error(BybitWebSocketError),
+    /// Raw message payload that does not yet have a typed representation.
+    Raw(Value),
+    /// Notification that the underlying connection reconnected.
+    Reconnected,
+    /// Explicit pong event (text-based heartbeat acknowledgement).
+    Pong,
+}
+
+/// Represents an error event surfaced by the WebSocket client.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "python", pyo3::pyclass)]
+pub struct BybitWebSocketError {
+    /// Error/return code reported by Bybit.
+    pub code: i64,
+    /// Human readable message.
+    pub message: String,
+    /// Optional connection identifier.
+    #[serde(default)]
+    pub conn_id: Option<String>,
+    /// Optional topic associated with the error (when applicable).
+    #[serde(default)]
+    pub topic: Option<String>,
+    /// Optional request identifier related to the failure.
+    #[serde(default)]
+    pub req_id: Option<String>,
+}
+
+impl BybitWebSocketError {
+    /// Creates a new error with the provided code/message.
+    #[must_use]
+    pub fn new(code: i64, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            conn_id: None,
+            topic: None,
+            req_id: None,
+        }
+    }
+
+    /// Builds an error payload from a generic response frame.
+    #[must_use]
+    pub fn from_response(response: &BybitWsResponse) -> Self {
+        // Build a more informative error message when ret_msg is missing
+        let message = response.ret_msg.clone().unwrap_or_else(|| {
+            let mut parts = vec![];
+
+            if let Some(op) = &response.op {
+                parts.push(format!("op={}", op));
+            }
+            if let Some(topic) = &response.topic {
+                parts.push(format!("topic={}", topic));
+            }
+            if let Some(success) = response.success {
+                parts.push(format!("success={}", success));
+            }
+
+            if parts.is_empty() {
+                "Bybit websocket error (no error message provided)".to_string()
+            } else {
+                format!("Bybit websocket error: {}", parts.join(", "))
+            }
+        });
+
+        Self {
+            code: response.ret_code.unwrap_or_default(),
+            message,
+            conn_id: response.conn_id.clone(),
+            topic: response.topic.clone(),
+            req_id: response.req_id.clone(),
+        }
+    }
+
+    /// Convenience constructor for client-side errors (e.g. parsing failures).
+    #[must_use]
+    pub fn from_message(message: impl Into<String>) -> Self {
+        Self::new(-1, message)
+    }
+}
+
+/// Generic WebSocket request for Bybit trading commands.
+#[derive(Debug, Clone, Serialize)]
+pub struct BybitWsRequest<T> {
+    /// Operation type (order.create, order.amend, order.cancel, etc.).
+    pub op: BybitWsOrderRequestOp,
+    /// Request header containing timestamp and other metadata.
+    pub header: BybitWsHeader,
+    /// Arguments payload for the operation.
+    pub args: Vec<T>,
+}
+
+/// Header for WebSocket trade requests.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "SCREAMING-KEBAB-CASE")]
+pub struct BybitWsHeader {
+    /// Timestamp in milliseconds.
+    pub x_bapi_timestamp: String,
+}
+
+impl BybitWsHeader {
+    /// Creates a new header with the current timestamp.
+    #[must_use]
+    pub fn now() -> Self {
+        use nautilus_core::time::get_atomic_clock_realtime;
+        Self {
+            x_bapi_timestamp: get_atomic_clock_realtime().get_time_ms().to_string(),
+        }
+    }
+}
+
+/// Parameters for placing an order via WebSocket.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BybitWsPlaceOrderParams {
+    pub category: BybitProductType,
+    pub symbol: String,
+    pub side: BybitOrderSide,
+    pub order_type: BybitOrderType,
+    pub qty: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub price: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_in_force: Option<BybitTimeInForce>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_link_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reduce_only: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub close_on_trigger: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trigger_price: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trigger_by: Option<BybitTriggerType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub take_profit: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_loss: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tp_trigger_by: Option<BybitTriggerType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sl_trigger_by: Option<BybitTriggerType>,
+}
+
+/// Parameters for amending an order via WebSocket.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BybitWsAmendOrderParams {
+    pub category: BybitProductType,
+    pub symbol: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_link_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qty: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub price: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trigger_price: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub take_profit: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_loss: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tp_trigger_by: Option<BybitTriggerType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sl_trigger_by: Option<BybitTriggerType>,
+}
+
+/// Parameters for canceling an order via WebSocket.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BybitWsCancelOrderParams {
+    pub category: BybitProductType,
+    pub symbol: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_link_id: Option<String>,
+}
+
+/// Subscription acknowledgement returned by Bybit.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BybitWsSubscriptionMsg {
+    pub success: bool,
+    pub op: String,
+    #[serde(default)]
+    pub conn_id: Option<String>,
+    #[serde(default)]
+    pub req_id: Option<String>,
+    #[serde(default)]
+    pub ret_msg: Option<String>,
+}
 
 /// Generic response returned by the endpoint when subscribing or authenticating.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct BybitWsResponse {
     #[serde(default)]
     pub op: Option<String>,
@@ -170,6 +408,50 @@ pub struct BybitWsTickerLinearMsg {
     #[serde(default)]
     pub cs: Option<i64>,
     pub data: BybitWsTickerLinear,
+}
+
+/// Option ticker event payload.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BybitWsTickerOption {
+    pub symbol: String,
+    pub bid_price: String,
+    pub bid_size: String,
+    pub bid_iv: String,
+    pub ask_price: String,
+    pub ask_size: String,
+    pub ask_iv: String,
+    pub last_price: String,
+    pub high_price24h: String,
+    pub low_price24h: String,
+    pub mark_price: String,
+    pub index_price: String,
+    pub mark_price_iv: String,
+    pub underlying_price: String,
+    pub open_interest: String,
+    pub turnover24h: String,
+    pub volume24h: String,
+    pub total_volume: String,
+    pub total_turnover: String,
+    pub delta: String,
+    pub gamma: String,
+    pub vega: String,
+    pub theta: String,
+    pub predicted_delivery_price: String,
+    pub change24h: String,
+}
+
+/// Envelope for option ticker updates.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BybitWsTickerOptionMsg {
+    #[serde(default)]
+    pub id: Option<String>,
+    pub topic: String,
+    #[serde(rename = "type")]
+    pub msg_type: String,
+    pub ts: i64,
+    pub data: BybitWsTickerOption,
 }
 
 /// Trade event payload containing trade executions on public feeds.
@@ -366,16 +648,65 @@ pub struct BybitWsAccountWalletMsg {
     pub data: Vec<BybitWsAccountWallet>,
 }
 
+/// Position data from private position stream.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BybitWsAccountPosition {
+    pub position_idx: i32,
+    pub risk_id: i64,
+    pub risk_limit_value: String,
+    pub symbol: Ustr,
+    pub side: String,
+    pub size: String,
+    pub avg_price: String,
+    pub position_value: String,
+    pub trade_mode: i32,
+    pub position_status: String,
+    pub auto_add_margin: i32,
+    pub adl_rank_indicator: i32,
+    pub leverage: String,
+    pub position_balance: String,
+    pub mark_price: String,
+    pub liq_price: String,
+    pub bust_price: String,
+    pub position_mm: String,
+    pub position_im: String,
+    pub tpsl_mode: String,
+    pub take_profit: String,
+    pub stop_loss: String,
+    pub trailing_stop: String,
+    pub unrealised_pnl: String,
+    pub cur_realised_pnl: String,
+    pub cum_realised_pnl: String,
+    pub seq: i64,
+    #[serde(default)]
+    pub is_reduce_only: bool,
+    pub created_time: String,
+    pub updated_time: String,
+}
+
+/// Envelope for position updates on private streams.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BybitWsAccountPositionMsg {
+    pub topic: String,
+    pub id: String,
+    pub creation_time: i64,
+    pub data: Vec<BybitWsAccountPosition>,
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // Tests
 ////////////////////////////////////////////////////////////////////////////////
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
     use crate::common::testing::load_test_json;
 
-    #[test]
+    #[rstest]
     fn deserialize_account_order_frame_uses_enums() {
         let json = load_test_json("ws_account_order.json");
         let frame: BybitWsAccountOrderMsg = serde_json::from_str(&json).unwrap();

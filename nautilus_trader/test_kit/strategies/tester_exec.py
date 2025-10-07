@@ -86,7 +86,7 @@ class ExecTesterConfig(StrategyConfig, frozen=True):
     modify_stop_orders_to_maintain_offset: bool = False
     cancel_replace_orders_to_maintain_tob_offset: bool = False
     cancel_replace_stop_orders_to_maintain_offset: bool = False
-    use_post_only: bool = True
+    use_post_only: bool = False
     use_quote_quantity: bool = False
     emulation_trigger: TriggerType | str | None = None
     cancel_orders_on_stop: bool = True
@@ -167,6 +167,13 @@ class ExecTester(Strategy):
                 f"\n{book.instrument_id}\n{book.pprint(num_levels)}",
                 LogColor.CYAN,
             )
+
+            own_book = self.cache.own_order_book(book.instrument_id)
+            if own_book:
+                self.log.info(
+                    f"\n{own_book.instrument_id}\n{own_book.pprint(num_levels)}",
+                    LogColor.MAGENTA,
+                )
 
         best_bid = book.best_bid_price()
         best_ask = book.best_ask_price()

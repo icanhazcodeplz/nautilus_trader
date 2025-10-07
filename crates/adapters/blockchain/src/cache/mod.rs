@@ -28,7 +28,7 @@ use alloy::primitives::Address;
 use nautilus_core::UnixNanos;
 use nautilus_model::defi::{
     Block, DexType, Pool, PoolLiquidityUpdate, PoolSwap, SharedChain, SharedDex, SharedPool, Token,
-    data::PoolFeeCollect,
+    data::PoolFeeCollect, pool_analysis::position::PoolPosition,
 };
 use sqlx::postgres::PgConnectOptions;
 
@@ -41,6 +41,7 @@ pub mod consistency;
 pub mod copy;
 pub mod database;
 pub mod rows;
+pub mod types;
 
 /// Provides caching functionality for various blockchain domain objects.
 #[derive(Debug)]
@@ -58,7 +59,7 @@ pub struct BlockchainCache {
     /// Map of pool addresses to their corresponding `Pool` objects.
     pools: HashMap<Address, SharedPool>,
     /// Optional database connection for persistent storage.
-    database: Option<BlockchainCacheDatabase>,
+    pub database: Option<BlockchainCacheDatabase>,
 }
 
 impl BlockchainCache {
@@ -203,10 +204,14 @@ impl BlockchainCache {
 
     /// Loads DEX exchange pools from the database into the in-memory cache.
     ///
+    /// Returns the loaded pools.
+    ///
     /// # Errors
     ///
     /// Returns an error if the DEX has not been registered or if database operations fail.
-    pub async fn load_pools(&mut self, dex_id: &DexType) -> anyhow::Result<()> {
+    pub async fn load_pools(&mut self, dex_id: &DexType) -> anyhow::Result<Vec<Pool>> {
+        let mut loaded_pools = Vec::new();
+
         if let Some(database) = &self.database {
             let dex = self
                 .get_dex(dex_id)
@@ -248,7 +253,7 @@ impl BlockchainCache {
                 };
 
                 // Construct pool from row data and cached tokens
-                let pool = Pool::new(
+                let mut pool = Pool::new(
                     self.chain.clone(),
                     dex.clone(),
                     pool_row.address,
@@ -262,11 +267,19 @@ impl BlockchainCache {
                     UnixNanos::default(), // TODO use default for now
                 );
 
-                // Add pool to cache
+                // Initialize pool with initial values if available
+                if let Some(initial_sqrt_price_x96_str) = &pool_row.initial_sqrt_price_x96 {
+                    if let Ok(initial_sqrt_price_x96) = initial_sqrt_price_x96_str.parse() {
+                        pool.initialize(initial_sqrt_price_x96);
+                    }
+                }
+
+                // Add pool to cache and loaded pools list
+                loaded_pools.push(pool.clone());
                 self.pools.insert(pool.address, Arc::new(pool));
             }
         }
-        Ok(())
+        Ok(loaded_pools)
     }
 
     /// Loads block timestamps from the database starting `from_block` number
@@ -541,14 +554,41 @@ impl BlockchainCache {
         Ok(())
     }
 
-    pub async fn update_pool_initialize_price_tick(
+    /// Adds multiple pool positions to the cache database in a single batch operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if adding the positions to the database fails.
+    pub async fn add_pool_positions_batch(
         &self,
+        positions: &[(Address, PoolPosition)],
+    ) -> anyhow::Result<()> {
+        if let Some(database) = &self.database {
+            database
+                .add_pool_positions_batch(self.chain.chain_id, positions)
+                .await?;
+        }
+
+        Ok(())
+    }
+
+    pub async fn update_pool_initialize_price_tick(
+        &mut self,
         initialize_event: &InitializeEvent,
     ) -> anyhow::Result<()> {
         if let Some(database) = &self.database {
             database
                 .update_pool_initial_price_tick(self.chain.chain_id, initialize_event)
                 .await?;
+        }
+
+        // Update the cached pool if it exists
+        if let Some(cached_pool) = self.pools.get(&initialize_event.pool_address) {
+            let mut updated_pool = (**cached_pool).clone();
+            updated_pool.initialize(initialize_event.sqrt_price_x96);
+
+            self.pools
+                .insert(initialize_event.pool_address, Arc::new(updated_pool));
         }
 
         Ok(())

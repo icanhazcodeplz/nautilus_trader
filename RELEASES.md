@@ -2,70 +2,134 @@
 
 Released on TBD (UTC).
 
+This will be the final release with support for Python 3.11.
+
 ### Enhancements
 - Added support for `OrderBookDepth10` requests (#2955), thanks @faysou
 - Added support for quotes from book depths (#2977), thanks @faysou
+- Added execution engine rate limiting for single-order reconciliation queries
 - Added Renko bar aggregator (#2941), thanks @faysou
 - Added `time_range_generator` for on the fly data data subscriptions (#2952), thanks @faysou
 - Added `__repr__` to `NewsEvent` (#2958), thanks @MK27MK
+- Added `convert_quote_qty_to_base` config option to `ExecEngineConfig` (default `True` to retain current behavior) allows adapters to keep quote-denominated sizes when needed
 - Added contingent order fields `parent_order_id` and `linked_order_ids` for `OrderStatusReport` and reconciliation
+- Added `fs_rust_storage_options` to Python catalog (#3008), thanks @faysou and @Johnkhk
+- Added matching engine fallback to default order book for custom fill models (#3039), thanks @Hamish-Leahy
+- Added Binance BBO `price_match` parameter support for order submission
 - Added BitMEX conditional orders support
 - Added BitMEX batch cancel support
 - Added BitMEX contingent orders support (OCO, OTO, brackets)
 - Added BitMEX historical data requests (trades and bars)
+- Added BitMEX configurable `recv_window_ms` for signed HTTP request expiration
 - Added Bybit SPOT position reports with opt-in `use_spot_position_reports` config option for `BybitExecClientConfig`
 - Added Bybit `ignore_uncached_instrument_executions` config option for `BybitExecClientConfig` (default `False` to retain current behavior)
+- Added Databento CME sandbox example
 - Added Interactive Brokers cache config support for historical provider (#2942), thanks @ms32035
 - Added Interactive Brokers support for fetching orders from all clients (#2948), thanks @dinana
 - Added Interactive Brokers order conditions (#2988), thanks @faysou
 - Added Interactive Brokers `generate_fill_reports` implementation (#2989), thanks @faysou
-- Added OKX conditional orders support
+- Added OKX conditional trigger orders support
 - Added OKX trade mode per order via `params` using `td_mode` key
+- Added Polymarket native market orders support
 
 ### Breaking Changes
-None
+- Removed `nautilus_trader.analysis.statistics` subpackage - all statistics are now implemented in Rust and must be imported from `nautilus_trader.analysis` (e.g., `from nautilus_trader.analysis import WinRate`)
+- Removed partial bar functionality from bar aggregators and subscription APIs (#3020), thanks @faysou
+- Polymarket execution client no longer accepts market BUY orders unless `quote_quantity=True`
 
 ### Internal Improvements
+- Added ARM64 support to Docker builds
 - Added BitMEX adapter integration tests
 - Added OKX adapter integration tests
+- Ported `PortfolioAnalyzer` and all portfolio statistics to Rust
+- Introduced AMM Pool profiler with tickmaps and Uniswapv3 support (#3000, #3010, #3019, #3036), thanks @filipmacek
+- Implemented consistency checking for AMM pool profiler with RPC state (#3030), thanks @filipmacek
+- Implemented BitMEX robust ping/pong handling
 - Implemented Hyperliquid adapter HTTP client (#2939), thanks @nicolad
 - Implemented Hyperliquid adapter scaffolding and examples (#2957), thanks @nicolad
 - Implemented Hyperliquid weighted rate limiter for REST API (#2960), thanks @nicolad
 - Implemented Hyperliquid L2 order book with tick-based pricing (#2967), thanks @nicolad
 - Implemented Hyperliquid data client and fix dependencies (#2975), thanks @nicolad
 - Implemented Hyperliquid REST API models for execution (#2983), thanks @nicolad
+- Implemented Hyperliquid `InstrumentProvider` / definitions parsing (#2992), thanks @nicolad
+- Implemented Hyperliquid DataClient in Python (#2996), thanks @nicolad
+- Implemented Hyperliquid DataClient in Rust (#2999), thanks @nicolad
+- Implemented Hyperliquid ExecutionClient in Python (#3003), thanks @nicolad
+- Implemented Hyperliquid ExecutionClient in Rust (#3013), thanks @nicolad
+- Implemented Hyperliquid websocket tester for streaming market data (#3018), thanks @nicolad
+- Implemented Hyperliquid basic market and limit orders (#3022), thanks @nicolad
+- Implemented Hyperliquid conditional / advanced orders (#3035), thanks @nicolad
+- Standardized Binance order validations with proper order denied events to avoid "hanging" orders
+- Improved clock and timer thread safety and validations
+- Improved live timer lifecycle management by canceling existing timers with the same name
+- Improved websocket reconnection sequence protections in stream mode
+- Improved socket reconnect sequence and tighten client setup and testing
+- Improved socket client URL parsing
 - Improved Hyperliquid adapter patterns (#2972), thanks @nicolad
 - Improved BitMEX spot instruments quantity handling by scaling to correct fractional units
+- Improved Binance, Bybit, OKX, BitMEX, and Coinbase International HTTP rate limiting to enforce documented per-endpoint quotas
+- Improved Binance fill handling when instrument not cached with clearer error log
 - Refined Renko bar aggregator and add tests (#2961), thanks @faysou
 - Refined Bybit balance parsing to use `Money.from_str` to ensure no rounding errors
+- Refined Interactive Brokers execution flows (#2993), thanks @faysou
+- Refined Interactive Brokers filtering of bars in IB adapter after disconnection (#3011), thanks @faysou and @Johnkhk
+- Optimized rate limiter quota keys with string interning to avoid repeated allocations
 - Upgraded Rust (MSRV) to 1.90.0
 - Upgraded Cython to v3.1.4
-- Upgraded `databento` crate to v0.34.0
-- Upgraded `datafusion` crate to v0.50.0
+- Upgraded `databento` crate to v0.34.1
+- Upgraded `datafusion` crate to v50.1.0
 - Upgraded `pyo3` and `pyo3-async-runtimes` crates to v0.26.0
+- Upgraded `redis` crate to v0.32.7
 
 ### Fixes
 - Fixed reduce-only order panic when quantity exceeds position
+- Fixed position purge logic to prevent purging re-opened position
+- Fixed order average price calculation that was double-counting current fill in weighted average
+- Fixed own order book cleanup for terminal orders and inflight handling
+- Fixed order book depth snapshot processing to avoid padding levels and metadata tracking for L1 top-of-book ticks
+- Fixed crypto instruments PyO3 -> Cython conversion for `lot_size` where it was not being passed through
+- Fixed `serialization` crate bugs and improve error handling
+- Fixed `RiskEngine` reduce-only cash exits (#2986), thanks for reporting @dennisnissle
+- Fixed overflow in `NautilusKernel` build time calculation due to negative duration (#2998), thanks for reporting @HaakonFlaaronning
+- Fixed edge case where rejected orders can remain in own order book
+- Fixed Currency registration to synchronize between Cython and PyO3 runtimes via new `register_currency()` helper
 - Fixed Databento CMBP-1/CBBO/TBBO symbology resolution
 - Fixed `on_load` called before strategy added bug (#2953), thanks @lisiyuan656
 - Fixed filesystem usage in catalog for `isfile` and `isdir` (#2954), thanks @limx0
+- Fixed `SandboxExecutionClient` instrument data handling
+- Fixed `AccountState` Arrow serialization (#3005), thanks for reporting @nikzasel
+- Fixed safe encoded symbols (#2964), thanks @ms32035
+- Fixed nautilus CLI macOS compatibility with regex unicode-perl feature (#2969), thanks @learnerLj
+- Fixed fuzzy candlesticks indicator bugs (#3021), thanks @benhaben
+- Fixed Binance duplicate `OrderSubmitted` event generation for order lists (#2994), thanks @sunlei
+- Fixed Binance websocket fill message parsing for Binance US with extra fields (#3006), thanks for reporting @bmlquant
+- Fixed Binance order status parsing for external orders (#3006), thanks for reporting @bmlquant
+- Fixed BitMEX testnet support
+- Fixed BitMEX instrument parsing of lot size
+- Fixed BitMEX order rejection handling and response parsing
 - Fixed Bybit currency parsing from venue resulting in incorrectly low precision (e.g., USDT precision 4 rather than 8)
+- Fixed Bybit handling of `OrderModifyRejected` events from pending updates
+- Fixed Interactive Brokers tick level historical data downloading (#2956), thanks @DracheShiki
+- Fixed Interactive Brokers instrument provider `TypeError` when load_ids/contracts are `None`, thanks for reporting @FGU1
+- Fixed Interactive Brokers modify bracket order (#2979), thanks @faysou
+- Fixed Interactive Brokers historical bars resubscription failure after connection loss (#3002), thanks @Johnkhk
+- Fixed Interactive Brokers flat position reconciliation and instrument loading (#3023), thanks @idobz
+- Fixed Interactive Brokers bars response handling by removing partial bar (#3040), thanks @sunlei
 - Fixed Polymarket handling of one-sided quotes (#2950), thanks for reporting @thefabus
 - Fixed Polymarket websocket message handling (#2963, #2968), thanks @thefabus
 - Fixed Polymarket tick size change handling for quotes (#2980), thanks for reporting @santivazq
-- Fixed Interactive Brokers tick level historical data downloading (#2956), thanks @DracheShiki
-- Fixed Interactive Brokers instrument provider `TypeError` when load_ids/contracts are `None`, thanks for reporting @FGU1
-- Fix Interactive Brokers modify bracket order (#2979), thanks @faysou
-- Fixed safe encoded symbols (#2964), thanks @ms32035
-- Fixed nautilus CLI macOS compatibility with regex unicode-perl feature (#2969)
+- Fixed Polymarket market order submission to use native CLOB market orders (#2984), thanks for reporting @njkds
+- Fixed Tardis instruments `lot_size` mapping
 
 ### Documentation Updates
+- Added quick-reference rate limit tables with links to official docs for Binance, Bybit, OKX, BitMEX, and Coinbase International
 - Improved dark and light themes for readability
 - Improved clarity of implemented bar aggregations
+- Standardized consistent styling per docs style guide
 - Fixed some broken links
 
 ### Deprecations
-None
+- Deprecated `convert_quote_qty_to_base`; disable (`False`) to maintain consistent behaviour going forwards. Automatic conversion will be removed in a future version.
 
 ---
 
@@ -1023,7 +1087,7 @@ For an explanation on compiling with or without high-precision mode, see the [pr
 - Changed `TradeTick` Arrow schema to use `FixedSizeBinary` fields to support the new precision modes
 - Changed `Bar` Arrow schema to use `FixedSizeBinary` fields to support the new precision modes
 - Changed `BettingInstrument` default `min_notional` to `None`
-- Changed meaning of `ws_connection_delay_secs` for [PolymarketDataClientConfig](https://github.com/nautechsystems/nautilus_trader/blob/develop/nautilus_trader/adapters/polymarket/config.py) to be **non-initial** delay (#2271)
+- Changed meaning of `ws_connection_delay_secs` for [PolymarketDataClientConfig](https://github.com/nautechsystems/nautilus_trader/blob/develop/nautilus_trader/adapters/polymarket/config.py) to be **non-initial** delay (#2271), thanks @ryantam626
 - Changed `GATEIO` Tardis venue to `GATE_IO` for consistency with `CRYPTO_COM` and `BLOCKCHAIN_COM`
 - Removed `max_ws_reconnection_tries` for dYdX configs (no longer applicable with infinite retries and exponential backoff)
 - Removed `max_ws_reconnection_tries` for Bybit configs (no longer applicable with infinite retries and exponential backoff)
@@ -3745,7 +3809,7 @@ Released on 12th September 2021.
 ### Fixes
 - Fixed Redis loss of precision for `int64_t` nanosecond timestamps (#363)
 - Fixed behavior of `reduce_only` orders for both submission and filling (#437)
-- Fixed PnL calculation for `CASH` accounts when commission negative (#436)
+- Fixed PnL calculation for `CASH` accounts when commission negative (#436), thanks for reporting @imcu
 
 ---
 

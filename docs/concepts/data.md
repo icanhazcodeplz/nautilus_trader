@@ -33,6 +33,34 @@ A high-performance order book implemented in Rust is available to maintain order
 Top-of-book data, such as `QuoteTick`, `TradeTick` and `Bar`, can also be used for backtesting, with markets operating on `L1_MBP` book types.
 :::
 
+## Own order books
+
+Own order books are L3 order books that track only your own (user) orders organized by price level, maintained separately from the venue's public order books.
+
+### Purpose
+
+Own order books serve several critical functions:
+
+- Monitor the state of your orders within the venue's book in real-time.
+- Validate order placement by checking available liquidity at price levels before submission.
+- Help prevent self-trading by identifying price levels where your own orders already exist.
+- Support advanced order management strategies that depend on queue position.
+- Enable reconciliation between internal state and venue state during live trading.
+
+### Lifecycle
+
+Own order books are maintained per instrument and automatically updated as orders transition through their lifecycle.
+Orders are added when submitted or accepted, updated when modified, and removed when filled, canceled, rejected, or expired.
+
+Only orders with prices can be represented in own order books. Market orders and other order types without explicit prices are excluded since they cannot be positioned at specific price levels.
+
+### Auditing
+
+During live trading, own order books can be periodically audited against the cache's order indexes to ensure consistency.
+The audit mechanism verifies that closed orders are properly removed and that inflight orders (submitted but not yet accepted) remain tracked during venue latency windows.
+
+The audit interval can be configured using the `own_books_audit_interval_secs` parameter in live trading configurations.
+
 ## Instruments
 
 The following instrument definitions are available:
@@ -529,7 +557,7 @@ The NautilusTrader data catalog is built on a dual-backend architecture that com
 - **PyArrow backend**: Flexible fallback for custom data types and advanced filtering.
 - **fsspec integration**: Support for local and cloud storage (S3, GCS, Azure, etc.).
 
-**Key benefits:**
+**Key benefits**:
 
 - **Performance**: Rust backend provides optimized query performance for core market data types.
 - **Flexibility**: PyArrow backend handles custom data types and complex filtering scenarios.
@@ -1240,14 +1268,14 @@ greeks_data = catalog.query(
 
 The NautilusTrader data catalog provides comprehensive market data management:
 
-**Core features:**
+**Core features**:
 
 - **Dual Backend**: Rust performance + Python flexibility.
 - **Multi-Protocol**: Local, S3, GCS, Azure storage.
 - **Streaming**: Feather → Parquet conversion pipeline.
 - **Operations**: Reset file names, consolidate data, period-based organization.
 
-**Key use cases:**
+**Key use cases**:
 
 - **Backtesting**: Pre-configured data loading via BacktestDataConfig.
 - **Live Trading**: On-demand data access via DataCatalogConfig.

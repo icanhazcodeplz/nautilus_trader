@@ -138,6 +138,10 @@ pub enum OKXWebSocketEvent {
         arg: OKXWebSocketArg,
         #[serde(rename = "connId")]
         conn_id: String,
+        #[serde(default)]
+        code: Option<String>,
+        #[serde(default)]
+        msg: Option<String>,
     },
     ChannelConnCount {
         event: String,
@@ -168,6 +172,8 @@ pub enum OKXWebSocketEvent {
         msg: String,
     },
     #[serde(skip)]
+    Ping,
+    #[serde(skip)]
     Reconnected,
 }
 
@@ -180,6 +186,8 @@ pub struct OKXWebSocketArg {
     pub inst_id: Option<Ustr>,
     #[serde(default)]
     pub inst_type: Option<OKXInstrumentType>,
+    #[serde(default)]
+    pub inst_family: Option<Ustr>,
     #[serde(default)]
     pub bar: Option<Ustr>,
 }
@@ -485,6 +493,9 @@ pub struct OKXOrderMsg {
     pub ccy: Ustr,
     /// Client order ID.
     pub cl_ord_id: String,
+    /// Parent algo client order ID if present.
+    #[serde(default, deserialize_with = "deserialize_empty_string_as_none")]
+    pub algo_cl_ord_id: Option<String>,
     /// Fee.
     #[serde(default, deserialize_with = "deserialize_empty_string_as_none")]
     pub fee: Option<String>,
@@ -754,6 +765,7 @@ pub struct WsCancelAlgoOrderParams {
 ////////////////////////////////////////////////////////////////////////////////
 // Tests
 ////////////////////////////////////////////////////////////////////////////////
+
 #[cfg(test)]
 mod tests {
     use nautilus_core::time::get_atomic_clock_realtime;
@@ -814,6 +826,7 @@ mod tests {
                     event,
                     arg,
                     conn_id,
+                    ..
                 } = msg
                 {
                     assert_eq!(event, OKXSubscriptionEvent::Subscribe);
@@ -840,6 +853,7 @@ mod tests {
                     event,
                     arg,
                     conn_id,
+                    ..
                 } = msg
                 {
                     assert_eq!(event, OKXSubscriptionEvent::Subscribe);
@@ -1030,6 +1044,7 @@ mod tests {
                 event,
                 arg,
                 conn_id,
+                ..
             } => {
                 assert_eq!(
                     event,

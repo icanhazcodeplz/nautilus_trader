@@ -25,7 +25,7 @@ use nautilus_model::{
 };
 
 use super::{messages::BitmexQuoteMsg, parse::parse_quote_msg};
-use crate::common::parse::{parse_contracts_quantity, parse_instrument_id};
+use crate::common::parse::parse_contracts_quantity;
 
 /// Maintains quote state for each instrument to handle partial quote updates.
 ///
@@ -56,11 +56,18 @@ impl QuoteCache {
         instrument: &InstrumentAny,
         ts_init: UnixNanos,
     ) -> Option<QuoteTick> {
-        let instrument_id = parse_instrument_id(msg.symbol);
+        let instrument_id = instrument.id();
         let price_precision = instrument.price_precision();
 
         let quote = if let Some(last_quote) = self.last_quotes.get(&instrument_id) {
-            Some(parse_quote_msg(msg, last_quote, instrument, ts_init))
+            Some(parse_quote_msg(
+                msg,
+                last_quote,
+                instrument,
+                instrument_id,
+                price_precision,
+                ts_init,
+            ))
         } else {
             match (msg.bid_price, msg.ask_price, msg.bid_size, msg.ask_size) {
                 (Some(bid_price), Some(ask_price), Some(bid_size), Some(ask_size)) => {
@@ -87,17 +94,22 @@ impl QuoteCache {
     }
 }
 
+////////////////////////////////////////////////////////////////////////////////
+// Tests
+////////////////////////////////////////////////////////////////////////////////
+
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
     use nautilus_model::{
-        identifiers::{InstrumentId, Symbol},
-        instruments::{InstrumentAny, currency_pair::CurrencyPair},
-        types::{Currency, Price, Quantity},
+        identifiers::Symbol,
+        instruments::currency_pair::CurrencyPair,
+        types::{Currency, Quantity},
     };
     use rstest::rstest;
 
     use super::*;
+    use crate::common::parse::parse_instrument_id;
 
     fn make_test_instrument(price_precision: u8, size_precision: u8) -> InstrumentAny {
         let instrument_id = InstrumentId::from("XBTUSD.BITMEX");

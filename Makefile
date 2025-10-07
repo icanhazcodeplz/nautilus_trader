@@ -42,12 +42,12 @@ RESET  := $(shell tput -Txterm sgr0)
 
 .PHONY: install
 install:  #-- Install in release mode with all dependencies and extras
-	$(info $(M) Installing Nautilus Trader in release mode with all dependencies and extras...)
+	$(info $(M) Installing NautilusTrader in release mode with all dependencies and extras...)
 	$Q BUILD_MODE=release uv sync --active --all-groups --all-extras --verbose
 
 .PHONY: install-debug
 install-debug:  #-- Install in debug mode for development
-	$(info $(M) Installing Nautilus Trader in debug mode for development...)
+	$(info $(M) Installing NautilusTrader in debug mode for development...)
 	$Q BUILD_MODE=debug uv sync --active --all-groups --all-extras --verbose
 
 .PHONY: install-just-deps
@@ -150,7 +150,7 @@ clippy:  #-- Run Rust clippy linter with fixes
 
 .PHONY: clippy-nightly
 clippy-nightly:  #-- Run Rust clippy linter with nightly toolchain
-	cargo +nightly clippy --fix --all-targets --all-features --allow-dirty --allow-staged -- -D warnings -W clippy::pedantic -W clippy::nursery -W clippy::unwrap_used -W clippy::expect_used
+	cargo +nightly clippy --fix --all-targets --all-features --allow-dirty --allow-staged -- -D warnings -W clippy::unwrap_used -W clippy::expect_used
 
 .PHONY: clippy-crate-%
 clippy-crate-%:  #-- Run clippy for a specific Rust crate (usage: make clippy-crate-<crate_name>)
@@ -159,8 +159,9 @@ clippy-crate-%:  #-- Run clippy for a specific Rust crate (usage: make clippy-cr
 #== Dependencies
 
 .PHONY: outdated
-outdated:  #-- Check for outdated Rust dependencies
-	cargo outdated
+outdated: check-outdated-installed  #-- Check for outdated dependencies
+	cargo outdated --workspace --root-deps-only
+	uv tree --outdated --depth 1 --all-groups
 
 .PHONY: update cargo-update
 update: cargo-update  #-- Update all dependencies (uv and cargo)
@@ -218,6 +219,13 @@ check-llvm-cov-installed:  #-- Verify cargo-llvm-cov is installed
 check-hack-installed:  #-- Verify cargo-hack is installed
 	@if ! cargo hack --version >/dev/null 2>&1; then \
 		echo "cargo-hack is not installed. You can install it using 'cargo install cargo-hack'"; \
+		exit 1; \
+	fi
+
+.PHONY: check-outdated-installed
+check-outdated-installed:  #-- Verify cargo-outdated is installed
+	@if ! cargo outdated --version >/dev/null 2>&1; then \
+		echo "cargo-outdated is not installed. You can install it using 'cargo install cargo-outdated'"; \
 		exit 1; \
 	fi
 
@@ -385,7 +393,7 @@ init-db:  #-- Initialize PostgreSQL database schema
 .PHONY: pytest
 pytest:  #-- Run Python tests with pytest in parallel with immediate failure reporting
 	$(info $(M) Running Python tests in parallel with immediate failure reporting...)
-	uv run --active --no-sync pytest --new-first --failed-first --tb=line -n logical --dist=loadgroup --maxfail=50 --durations=0 --durations-min=10.0 $(if $(filter true,$(VERBOSE)),-v,)
+	uv run --active --no-sync pytest --new-first --failed-first --tb=line -n logical --dist=loadgroup --maxfail=50 --durations=0 --durations-min=10.0
 
 .PHONY: pytest-memory-tracking
 pytest-memory-tracking:  #-- Run Python tests with memory tracking enabled
@@ -400,17 +408,16 @@ test-performance:  #-- Run performance tests with codspeed benchmarking
 
 .PHONY: install-cli
 install-cli:  #-- Install Nautilus CLI tool from source
-	cargo install --path crates/cli --bin nautilus --force
+	cargo install --path crates/cli --bin nautilus --locked --force
 
 #== Internal
 
 .PHONY: help
 help:  #-- Show this help message and exit
-	@printf "Nautilus Trader Makefile\n\n"
+	@printf "NautilusTrader Makefile\n\n"
 	@printf "$(GREEN)Usage:$(RESET) make $(CYAN)<target>$(RESET)\n\n"
 	@printf "$(GRAY)Tips: Use $(CYAN)make <target> V=1$(GRAY) for verbose output$(RESET)\n"
-	@printf "$(GRAY)      Use $(CYAN)make <target> VERBOSE=false$(GRAY) to disable verbose output for build-debug, cargo-test, and pytest$(RESET)\n"
-	@printf "$(GRAY)      Use $(CYAN)make pytest VERBOSE=true$(GRAY) to run tests with verbose output$(RESET)\n\n"
+	@printf "$(GRAY)      Use $(CYAN)make <target> VERBOSE=false$(GRAY) to disable verbose output for build-debug and cargo-test$(RESET)\n\n"
 
 	@printf "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⣴⣶⡟⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n"
 	@printf "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣰⣾⣿⣿⣿⠀⢸⣿⣿⣿⣿⣶⣶⣤⣀⠀⠀⠀⠀⠀\n"

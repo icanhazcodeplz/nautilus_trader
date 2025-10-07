@@ -30,7 +30,9 @@ use nautilus_core::{
     python::{IntoPyObjectNautilusExt, to_pyruntime_err, to_pyvalue_err},
 };
 #[cfg(feature = "defi")]
-use nautilus_model::defi::{Block, Blockchain, Pool, PoolLiquidityUpdate, PoolSwap};
+use nautilus_model::defi::{
+    Block, Blockchain, Pool, PoolFeeCollect, PoolLiquidityUpdate, PoolSwap,
+};
 use nautilus_model::{
     data::{
         Bar, BarType, DataType, FundingRateUpdate, IndexPriceUpdate, InstrumentStatus,
@@ -54,7 +56,7 @@ use crate::{
     clock::Clock,
     component::Component,
     enums::ComponentState,
-    python::{clock::PyClock, logging::PyLogger},
+    python::{cache::PyCache, clock::PyClock, logging::PyLogger},
     signal::Signal,
     timer::{TimeEvent, TimeEventCallback},
 };
@@ -214,8 +216,7 @@ impl PyDataActor {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the actor is already registered
-    /// or if the registration process fails.
+    /// Returns an error if the actor is already registered or if the registration process fails.
     pub fn register(
         &mut self,
         trader_id: TraderId,
@@ -228,7 +229,7 @@ impl PyDataActor {
 
         // Register default time event handler for this actor
         let actor_id = self.actor_id().inner();
-        let callback = TimeEventCallback::Rust(Rc::new(move |event: TimeEvent| {
+        let callback = TimeEventCallback::from(move |event: TimeEvent| {
             if let Some(actor) = try_get_actor_unchecked::<Self>(&actor_id) {
                 if let Err(e) = actor.on_time_event(&event) {
                     log::error!("Python time event handler failed for actor {actor_id}: {e}");
@@ -236,7 +237,7 @@ impl PyDataActor {
             } else {
                 log::error!("Actor {actor_id} not found for time event handling");
             }
-        }));
+        });
 
         self.clock.inner_mut().register_default_handler(callback);
 
@@ -385,6 +386,12 @@ impl DataActor for PyDataActor {
             .map_err(|e| anyhow::anyhow!("Python on_pool_liquidity_update failed: {e}"))
     }
 
+    #[cfg(feature = "defi")]
+    fn on_pool_fee_collect(&mut self, collect: &PoolFeeCollect) -> anyhow::Result<()> {
+        self.py_on_pool_fee_collect(collect.clone())
+            .map_err(|e| anyhow::anyhow!("Python on_pool_fee_collect failed: {e}"))
+    }
+
     fn on_historical_data(&mut self, _data: &dyn Any) -> anyhow::Result<()> {
         Python::attach(|py| {
             let py_data = py.None();
@@ -439,6 +446,18 @@ impl PyDataActor {
             ))
         } else {
             Ok(self.clock.clone())
+        }
+    }
+
+    #[getter]
+    #[pyo3(name = "cache")]
+    fn py_cache(&self) -> PyResult<PyCache> {
+        if !self.core.is_registered() {
+            Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                "Actor must be registered with a trader before accessing cache",
+            ))
+        } else {
+            Ok(PyCache::from_rc(self.core.cache_rc()))
         }
     }
 
@@ -820,6 +839,19 @@ impl PyDataActor {
         Ok(())
     }
 
+    #[cfg(feature = "defi")]
+    #[allow(unused_variables)]
+    #[pyo3(name = "on_pool_fee_collect")]
+    fn py_on_pool_fee_collect(&mut self, update: PoolFeeCollect) -> PyResult<()> {
+        // Dispatch to Python instance's on_pool_fee_collect method if available
+        if let Some(ref py_self) = self.py_self {
+            Python::attach(|py| {
+                py_self.call_method1(py, "on_pool_fee_collect", (update.into_py_any_unwrap(py),))
+            })?;
+        }
+        Ok(())
+    }
+
     #[pyo3(name = "subscribe_data")]
     #[pyo3(signature = (data_type, client_id=None, params=None))]
     fn py_subscribe_data(
@@ -923,15 +955,14 @@ impl PyDataActor {
     }
 
     #[pyo3(name = "subscribe_bars")]
-    #[pyo3(signature = (bar_type, client_id=None, await_partial=false, params=None))]
+    #[pyo3(signature = (bar_type, client_id=None, params=None))]
     fn py_subscribe_bars(
         &mut self,
         bar_type: BarType,
         client_id: Option<ClientId>,
-        await_partial: bool,
         params: Option<IndexMap<String, String>>,
     ) -> PyResult<()> {
-        self.subscribe_bars(bar_type, client_id, await_partial, params);
+        self.subscribe_bars(bar_type, client_id, params);
         Ok(())
     }
 
@@ -1032,6 +1063,19 @@ impl PyDataActor {
         params: Option<IndexMap<String, String>>,
     ) -> PyResult<()> {
         self.subscribe_pool_liquidity_updates(instrument_id, client_id, params);
+        Ok(())
+    }
+
+    #[cfg(feature = "defi")]
+    #[pyo3(name = "subscribe_pool_fee_collects")]
+    #[pyo3(signature = (instrument_id, client_id=None, params=None))]
+    fn py_subscribe_pool_fee_collects(
+        &mut self,
+        instrument_id: InstrumentId,
+        client_id: Option<ClientId>,
+        params: Option<IndexMap<String, String>>,
+    ) -> PyResult<()> {
+        self.subscribe_pool_fee_collects(instrument_id, client_id, params);
         Ok(())
     }
 
@@ -1374,6 +1418,19 @@ impl PyDataActor {
         Ok(())
     }
 
+    #[cfg(feature = "defi")]
+    #[pyo3(name = "unsubscribe_pool_fee_collects")]
+    #[pyo3(signature = (instrument_id, client_id=None, params=None))]
+    fn py_unsubscribe_pool_fee_collects(
+        &mut self,
+        instrument_id: InstrumentId,
+        client_id: Option<ClientId>,
+        params: Option<IndexMap<String, String>>,
+    ) -> PyResult<()> {
+        self.unsubscribe_pool_fee_collects(instrument_id, client_id, params);
+        Ok(())
+    }
+
     #[allow(unused_variables)]
     #[pyo3(name = "on_historical_data")]
     fn py_on_historical_data(&mut self, data: Py<PyAny>) -> PyResult<()> {
@@ -1435,6 +1492,7 @@ mod tests {
         sync::{Arc, Mutex},
     };
 
+    use alloy_primitives::{I256, U160};
     use nautilus_core::{UUID4, UnixNanos};
     #[cfg(feature = "defi")]
     use nautilus_model::defi::{
@@ -2214,7 +2272,6 @@ mod tests {
         let swap = PoolSwap::new(
             chain.clone(),
             dex.clone(),
-            pool.instrument_id,
             pool.address,
             12345,
             "0xabc123".to_string(),
@@ -2224,9 +2281,17 @@ mod tests {
             "0x742E4422b21FB8B4dF463F28689AC98bD56c39e0"
                 .parse()
                 .unwrap(),
-            nautilus_model::enums::OrderSide::Buy,
-            Quantity::from("1000"),
-            Price::from("1.0"),
+            "0x742E4422b21FB8B4dF463F28689AC98bD56c39e0"
+                .parse()
+                .unwrap(),
+            I256::from_str("1000000000000000000").unwrap(),
+            I256::from_str("400000000000000").unwrap(),
+            U160::from(59000000000000u128),
+            1000000,
+            100,
+            Some(nautilus_model::enums::OrderSide::Buy),
+            Some(Quantity::from("1000")),
+            Some(Price::from("1.0")),
         );
 
         assert!(rust_actor.on_pool_swap(&swap).is_ok());

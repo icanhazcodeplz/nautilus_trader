@@ -38,6 +38,7 @@ from nautilus_trader.test_kit.strategies.tester_data import DataTesterConfig
 # Futures: XBTH25 (Bitcoin futures expiring March 2025)
 # Alt perpetuals: ETHUSD, SOLUSD, etc.
 
+testnet = False  # If client uses the testnet API
 symbol = "XBTUSD"  # Bitcoin perpetual swap
 # symbol = "SOLUSDT"  # Solana spot
 # symbol = "ETHUSDT"  # Ethereum spot
@@ -57,12 +58,12 @@ config_node = TradingNodeConfig(
             base_url_http=None,  # Override with custom endpoint
             base_url_ws=None,  # Override with custom endpoint
             instrument_provider=InstrumentProviderConfig(load_all=True),
-            testnet=False,  # If client uses the testnet API
+            testnet=testnet,  # If client uses the testnet API
         ),
     },
-    timeout_connection=30.0,
+    timeout_connection=10.0,
     timeout_reconciliation=10.0,
-    timeout_disconnection=10.0,
+    timeout_disconnection=2.0,
     timeout_post_stop=1.0,
 )
 
@@ -76,10 +77,10 @@ config_tester = DataTesterConfig(
     # subscribe_mark_prices=True,
     # subscribe_index_prices=True,
     # subscribe_funding_rates=True,
-    subscribe_bars=True,
+    # subscribe_bars=True,
     # subscribe_book_deltas=True,
     # subscribe_book_depth=True,
-    # subscribe_book_at_interval=True,
+    subscribe_book_at_interval=True,
     book_type=BookType.L2_MBP,
     book_depth=25,
     book_interval_ms=10,

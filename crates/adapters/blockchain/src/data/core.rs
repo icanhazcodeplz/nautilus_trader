@@ -15,13 +15,14 @@
 
 use std::{cmp::max, collections::HashSet, sync::Arc};
 
-use alloy::primitives::{Address, U256};
+use alloy::primitives::Address;
 use futures_util::StreamExt;
 use nautilus_common::messages::DataEvent;
 use nautilus_core::UnixNanos;
 use nautilus_model::defi::{
     Block, Blockchain, DexType, Pool, PoolLiquidityUpdate, PoolSwap, SharedChain, SharedDex,
-    SharedPool, Token, data::PoolFeeCollect,
+    SharedPool, Token,
+    data::{DefiData, DexPoolData, PoolFeeCollect},
 };
 
 use crate::{
@@ -29,7 +30,6 @@ use crate::{
     config::BlockchainDataClientConfig,
     contracts::erc20::{Erc20Contract, TokenInfoError},
     data::subscription::DefiDataSubscriptionManager,
-    decode::u256_to_quantity,
     events::{
         burn::BurnEvent, collect::CollectEvent, mint::MintEvent, pool_created::PoolCreatedEvent,
         swap::SwapEvent,
@@ -542,7 +542,7 @@ impl BlockchainDataClientCore {
                     &mut swap_batch,
                     &mut liquidity_batch,
                     &mut collect_batch,
-                    beyond_stale_data,
+                    false, // TODO temporary dont use copy command
                     false,
                 )
                 .await?;
@@ -565,7 +565,7 @@ impl BlockchainDataClientCore {
             &mut swap_batch,
             &mut liquidity_batch,
             &mut collect_batch,
-            beyond_stale_data,
+            false,
             true,
         )
         .await?;
@@ -635,17 +635,14 @@ impl BlockchainDataClientCore {
             .cache
             .get_block_timestamp(swap_event.block_number)
             .copied();
-
-        let (side, size, price) = dex_extended
-            .convert_to_trade_data(&pool.token0, &pool.token1, swap_event)
-            .expect("Failed to convert swap event to trade data");
+        let (side, size, price) =
+            dex_extended.convert_to_trade_data(&pool.token0, &pool.token1, swap_event)?;
         let swap = swap_event.to_pool_swap(
             self.chain.clone(),
-            pool.instrument_id,
             pool.address,
-            side,
-            size,
-            price,
+            Some(side),
+            Some(size),
+            Some(price),
             timestamp,
         );
 
@@ -670,21 +667,11 @@ impl BlockchainDataClientCore {
             .cache
             .get_block_timestamp(mint_event.block_number)
             .copied();
-        let liquidity = u256_to_quantity(
-            U256::from(mint_event.amount),
-            self.chain.native_currency_decimals,
-        )?;
-        let amount0 = u256_to_quantity(mint_event.amount0, pool.token0.decimals)?;
-        let amount1 = u256_to_quantity(mint_event.amount1, pool.token1.decimals)?;
 
         let liquidity_update = mint_event.to_pool_liquidity_update(
             self.chain.clone(),
             dex_extended.dex.clone(),
-            pool.instrument_id,
             pool.address,
-            liquidity,
-            amount0,
-            amount1,
             timestamp,
         );
 
@@ -709,21 +696,11 @@ impl BlockchainDataClientCore {
             .cache
             .get_block_timestamp(burn_event.block_number)
             .copied();
-        let liquidity = u256_to_quantity(
-            U256::from(burn_event.amount),
-            self.chain.native_currency_decimals,
-        )?;
-        let amount0 = u256_to_quantity(burn_event.amount0, pool.token0.decimals)?;
-        let amount1 = u256_to_quantity(burn_event.amount1, pool.token1.decimals)?;
 
         let liquidity_update = burn_event.to_pool_liquidity_update(
             self.chain.clone(),
             dex_extended.dex.clone(),
-            pool.instrument_id,
             pool.address,
-            liquidity,
-            amount0,
-            amount1,
             timestamp,
         );
 
@@ -747,16 +724,11 @@ impl BlockchainDataClientCore {
             .cache
             .get_block_timestamp(collect_event.block_number)
             .copied();
-        let fee0 = u256_to_quantity(collect_event.amount0, pool.token0.decimals)?;
-        let fee1 = u256_to_quantity(collect_event.amount1, pool.token1.decimals)?;
 
         let fee_collect = collect_event.to_pool_fee_collect(
             self.chain.clone(),
             dex_extended.dex.clone(),
-            pool.instrument_id,
             pool.address,
-            fee0,
-            fee1,
             timestamp,
         );
 
@@ -998,6 +970,7 @@ impl BlockchainDataClientCore {
 
         self.cache.add_pools_batch(pools).await?;
         pool_buffer.clear();
+
         Ok(())
     }
 
@@ -1055,18 +1028,77 @@ impl BlockchainDataClientCore {
             tracing::info!("Registering DEX {dex_id} on chain {}", self.chain.name);
 
             self.cache.add_dex(dex_extended.dex.clone()).await?;
-            self.cache.load_pools(&dex_id).await?;
+            let _ = self.cache.load_pools(&dex_id).await?;
 
             self.subscription_manager.register_dex_for_subscriptions(
                 dex_id,
                 dex_extended.swap_created_event.as_ref(),
                 dex_extended.mint_created_event.as_ref(),
                 dex_extended.burn_created_event.as_ref(),
+                dex_extended.collect_created_event.as_ref(),
             );
             Ok(())
         } else {
             anyhow::bail!("Unknown DEX {dex_id} on chain {}", self.chain.name)
         }
+    }
+
+    /// Replays historical events for a pool to hydrate its profiler state.
+    ///
+    /// Streams all historical swap, liquidity, and fee collect events from the database
+    /// and sends them through the normal data event pipeline to build up pool profiler state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if database streaming fails or event processing fails.
+    #[allow(dead_code)]
+    async fn replay_pool_events(&self, pool: &Pool, dex: &SharedDex) -> anyhow::Result<()> {
+        if let Some(database) = &self.cache.database {
+            tracing::info!(
+                "Replaying historical events for pool {} to hydrate profiler",
+                pool.instrument_id
+            );
+
+            let mut event_stream =
+                database.stream_pool_events(self.chain.clone(), dex.clone(), &pool.address);
+            let mut event_count = 0;
+
+            while let Some(event_result) = event_stream.next().await {
+                match event_result {
+                    Ok(event) => {
+                        let data_event = match event {
+                            DexPoolData::Swap(swap) => DataEvent::DeFi(DefiData::PoolSwap(swap)),
+                            DexPoolData::LiquidityUpdate(update) => {
+                                DataEvent::DeFi(DefiData::PoolLiquidityUpdate(update))
+                            }
+                            DexPoolData::FeeCollect(collect) => {
+                                DataEvent::DeFi(DefiData::PoolFeeCollect(collect))
+                            }
+                        };
+                        self.send_data(data_event);
+                        event_count += 1;
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "Error streaming event for pool {}: {e}",
+                            pool.instrument_id
+                        );
+                    }
+                }
+            }
+
+            tracing::info!(
+                "Replayed {event_count} historical events for pool {}",
+                pool.instrument_id
+            );
+        } else {
+            tracing::debug!(
+                "No database available, skipping event replay for pool {}",
+                pool.instrument_id
+            );
+        }
+
+        Ok(())
     }
 
     /// Determines the starting block for syncing operations.

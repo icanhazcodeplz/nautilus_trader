@@ -410,6 +410,10 @@ class PolymarketDataClient(LiveMarketDataClient):
         now_ns = self._clock.timestamp_ns()
         deltas = ws_message.parse_to_snapshot(instrument=instrument, ts_init=now_ns)
 
+        if deltas is None:
+            # Skip empty snapshots (can occur near market resolution)
+            return
+
         self._handle_deltas(instrument, deltas)
 
         if instrument.id in self.subscribed_quote_ticks():
@@ -565,11 +569,17 @@ class PolymarketDataClient(LiveMarketDataClient):
         ws_message: PolymarketTickSizeChange,
     ) -> None:
         now_ns = self._clock.timestamp_ns()
+
         old_book = self._local_books.pop(instrument.id, None)
         if old_book is not None:
             self._last_quotes.pop(instrument.id, None)
 
         instrument = update_instrument(instrument, change=ws_message, ts_init=now_ns)
+
+        # Update local sources immediately so subsequent quotes use the correct precision
+        self._instrument_provider.add(instrument)
+        self._cache.add_instrument(instrument)
+
         self._log.warning(f"Instrument tick size changed: {instrument}")
         self._handle_data(instrument)
 
@@ -595,6 +605,10 @@ class PolymarketDataClient(LiveMarketDataClient):
         )
 
         deltas = snapshot.parse_to_snapshot(instrument=instrument, ts_init=ts_init)
+
+        if deltas is None:
+            # Skip empty snapshots (can occur near market resolution)
+            return
 
         new_book = OrderBook(instrument.id, book_type=BookType.L2_MBP)
         new_book.apply_deltas(deltas)

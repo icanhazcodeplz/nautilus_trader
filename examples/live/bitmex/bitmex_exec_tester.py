@@ -38,9 +38,10 @@ from nautilus_trader.test_kit.strategies.tester_exec import ExecTesterConfig
 
 # Example symbols for different BitMEX products
 # Perpetual swap: XBTUSD (Bitcoin perpetual)
-# Futures: XBTH25 (Bitcoin futures expiring March 2025)
+# Futures: XBTZ25 (Bitcoin futures expiring December 2025)
 # Alt perpetuals: ETHUSD, SOLUSD, etc.
 
+testnet = True  # If clients use the testnet API
 symbol = "XBTUSD"  # Bitcoin perpetual swap
 order_qty = Decimal("100")  # Contract size in USD
 
@@ -61,6 +62,8 @@ config_node = TradingNodeConfig(
         reconciliation_instrument_ids=[instrument_id],  # Only reconcile this instrument
         open_check_interval_secs=5.0,
         open_check_open_only=False,
+        manage_own_order_books=True,
+        own_books_audit_interval_secs=1.0,
         # snapshot_orders=True,
         # snapshot_positions=True,
         # snapshot_positions_interval_secs=5.0,
@@ -72,7 +75,7 @@ config_node = TradingNodeConfig(
             base_url_http=None,  # Override with custom endpoint
             base_url_ws=None,  # Override with custom endpoint
             instrument_provider=InstrumentProviderConfig(load_all=True),
-            testnet=False,  # If client uses the testnet API
+            testnet=testnet,  # If client uses the testnet API
         ),
     },
     exec_clients={
@@ -82,10 +85,10 @@ config_node = TradingNodeConfig(
             base_url_http=None,  # Override with custom endpoint
             base_url_ws=None,  # Override with custom endpoint
             instrument_provider=InstrumentProviderConfig(load_all=True),
-            testnet=False,  # If client uses the testnet API
+            testnet=testnet,  # If client uses the testnet API
         ),
     },
-    timeout_connection=30.0,
+    timeout_connection=10.0,
     timeout_reconciliation=10.0,
     timeout_disconnection=10.0,
     timeout_post_stop=5.0,
@@ -98,14 +101,15 @@ config_tester = ExecTesterConfig(
     external_order_claims=[instrument_id],
     order_qty=order_qty,
     # order_display_qty=Decimal(0),  # Must be zero (hidden) or a positive multiple of lot size 100
+    # subscribe_book=True,
     enable_buys=True,
     enable_sells=True,
     use_post_only=True,
     tob_offset_ticks=0,
     # modify_orders_to_maintain_tob_offset=True,
-    # open_position_on_start_qty=order_qty,
-    # open_position_time_in_force=TimeInForce.IOC,
-    close_positions_time_in_force=TimeInForce.IOC,
+    open_position_on_start_qty=order_qty,
+    open_position_time_in_force=TimeInForce.IOC,  # Market orders must be IOC
+    close_positions_time_in_force=TimeInForce.IOC,  # Market orders must be IOC
     # enable_stop_buys=True,
     # enable_stop_sells=True,
     # stop_order_type=OrderType.STOP_MARKET,

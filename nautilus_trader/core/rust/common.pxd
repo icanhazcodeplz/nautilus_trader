@@ -106,6 +106,10 @@ cdef extern from "../includes/common.h":
     # A real-time clock which uses system time.
     #
     # Timestamps are guaranteed to be unique and monotonically increasing.
+    #
+    # # Threading
+    #
+    # The clock holds thread-local runtime state and must remain on its originating thread.
     cdef struct LiveClock:
         pass
 
@@ -124,6 +128,14 @@ cdef extern from "../includes/common.h":
     # - All log messages are properly flushed when intermediate guards are dropped.
     # - The logging thread is cleanly terminated and joined when the last guard is dropped.
     #
+    # # Shutdown Behavior
+    #
+    # When the last guard is dropped, the logging thread is signaled to close, drains pending
+    # messages, and is joined to ensure all logs are written before process termination.
+    #
+    # **Python on Windows:** Non-deterministic GC order during interpreter shutdown can
+    # occasionally prevent proper thread join, resulting in truncated logs.
+    #
     # # Limits
     #
     # The system supports a maximum of 255 concurrent `LogGuard` instances.
@@ -133,6 +145,10 @@ cdef extern from "../includes/common.h":
     # A static test clock.
     #
     # Stores the current timestamp internally which can be advanced.
+    #
+    # # Threading
+    #
+    # This clock is thread-affine; use it only from the thread that created it.
     cdef struct TestClock:
         pass
 
@@ -257,6 +273,11 @@ cdef extern from "../includes/common.h":
     # - `name_ptr` is a valid C string pointer.
     # - `callback_ptr` is a valid `PyCallable` pointer.
     #
+    # # Parameters
+    #
+    # - `start_time_ns`: UNIX timestamp in nanoseconds. Use `0` to indicate "use current time".
+    # - `stop_time_ns`: UNIX timestamp in nanoseconds. Use `0` to indicate "no stop time".
+    #
     # # Panics
     #
     # Panics if `callback_ptr` is null or represents the Python `None` object.
@@ -335,6 +356,11 @@ cdef extern from "../includes/common.h":
     # This function assumes:
     # - `name_ptr` is a valid C string pointer.
     # - `callback_ptr` is a valid `PyCallable` pointer.
+    #
+    # # Parameters
+    #
+    # - `start_time_ns`: UNIX timestamp in nanoseconds. Use `0` to indicate "use current time".
+    # - `stop_time_ns`: UNIX timestamp in nanoseconds. Use `0` to indicate "no stop time".
     #
     # # Panics
     #

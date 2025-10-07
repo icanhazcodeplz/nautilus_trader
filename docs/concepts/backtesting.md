@@ -1,4 +1,5 @@
 # Backtesting
+
 Backtesting with NautilusTrader is a methodical simulation process that replicates trading
 activities using a specific system implementation. This system is composed of various components
 including the built-in engines, `Cache`, [MessageBus](message_bus.md), `Portfolio`, [Actors](actors.md), [Strategies](strategies.md), [Execution Algorithms](execution.md),
@@ -446,7 +447,7 @@ The engine locks only the stake required by the venue; leverage and margin are n
 
 ## Margin models
 
-Nautilus Trader provides flexible margin calculation models to accommodate different venue types and trading scenarios.
+NautilusTrader provides flexible margin calculation models to accommodate different venue types and trading scenarios.
 
 ### Overview
 

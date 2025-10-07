@@ -23,6 +23,10 @@ pub mod websocket;
 use pyo3::prelude::*;
 
 /// Loaded as `nautilus_pyo3.okx`.
+///
+/// # Errors
+///
+/// Returns an error if any bindings fail to register with the Python module.
 #[pymodule]
 pub fn okx(_: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<super::websocket::OKXWebSocketClient>()?;
@@ -32,6 +36,7 @@ pub fn okx(_: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<crate::common::enums::OKXContractType>()?;
     m.add_class::<crate::common::enums::OKXMarginMode>()?;
     m.add_class::<crate::common::enums::OKXTradeMode>()?;
+    m.add_class::<crate::common::enums::OKXOrderStatus>()?;
     m.add_class::<crate::common::enums::OKXPositionMode>()?;
     m.add_class::<crate::common::enums::OKXVipLevel>()?;
     m.add_class::<crate::common::urls::OKXEndpointType>()?;

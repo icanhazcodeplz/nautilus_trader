@@ -507,6 +507,7 @@ class NautilusKernel:
                     path=catalog_config.path,
                     fs_protocol=catalog_config.fs_protocol,
                     fs_storage_options=catalog_config.fs_storage_options,
+                    fs_rust_storage_options=catalog_config.fs_rust_storage_options,
                 )
                 used_catalog_name = catalog_config.name
 
@@ -539,7 +540,8 @@ class NautilusKernel:
         self._is_running = False
         self._is_stopping = False
 
-        build_time_ms = nanos_to_millis(time.time_ns() - ts_build)
+        build_time_ns = time.time_ns() - ts_build
+        build_time_ms = nanos_to_millis(build_time_ns) if build_time_ns > 0 else 0
         self._log.info(f"Initialized in {build_time_ms}ms")
 
     def __del__(self) -> None:
@@ -1100,6 +1102,11 @@ class NautilusKernel:
         Calling this method multiple times has the same effect as calling it once (it is
         idempotent). Once called, it cannot be reversed, and no other methods should be
         called on this instance.
+
+        Notes
+        -----
+        The log guard is intentionally not disposed to support running multiple engines
+        sequentially without re-initializing logging.
 
         """
         self._stop_engines()

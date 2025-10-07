@@ -21,13 +21,15 @@ use std::sync::Arc;
 use bytes::Bytes;
 use nautilus_core::UnixNanos;
 #[cfg(feature = "defi")]
-use nautilus_model::defi::{AmmType, Dex, DexType, Pool, Token, chain::chains};
+use nautilus_model::defi::{AmmType, Dex, DexType, Pool, PoolProfiler, Token, chain::chains};
 use nautilus_model::{
     accounts::AccountAny,
     data::{Bar, FundingRateUpdate, MarkPriceUpdate, QuoteTick, TradeTick},
     enums::{BookType, OmsType, OrderSide, OrderStatus, OrderType, PositionSide, PriceType},
     events::{OrderAccepted, OrderEventAny, OrderRejected, OrderSubmitted},
-    identifiers::{AccountId, ClientOrderId, InstrumentId, PositionId, Symbol, Venue},
+    identifiers::{
+        AccountId, ClientOrderId, InstrumentId, PositionId, Symbol, TradeId, Venue, VenueOrderId,
+    },
     instruments::{CurrencyPair, Instrument, InstrumentAny, SyntheticInstrument, stubs::*},
     orderbook::OrderBook,
     orders::{
@@ -838,6 +840,133 @@ fn test_add_pool(mut cache: Cache, test_pool: Pool) {
     assert_eq!(cached_pool.unwrap(), &test_pool);
 }
 
+#[cfg(feature = "defi")]
+#[rstest]
+fn test_pool_ids_when_empty(cache: Cache, test_pool: Pool) {
+    let result = cache.pool_ids(Some(&test_pool.instrument_id.venue));
+    assert!(result.is_empty());
+}
+
+#[cfg(feature = "defi")]
+#[rstest]
+fn test_pool_ids_when_some(mut cache: Cache, test_pool: Pool) {
+    let venue = test_pool.instrument_id.venue;
+    cache.add_pool(test_pool.clone()).unwrap();
+
+    let result1 = cache.pool_ids(None);
+    let result2 = cache.pool_ids(Some(&venue));
+    assert_eq!(result1, vec![test_pool.instrument_id]);
+    assert_eq!(result2, vec![test_pool.instrument_id]);
+}
+
+#[cfg(feature = "defi")]
+#[rstest]
+fn test_pools_when_empty(cache: Cache, test_pool: Pool) {
+    let result = cache.pools(Some(&test_pool.instrument_id.venue));
+    assert!(result.is_empty());
+}
+
+#[cfg(feature = "defi")]
+#[rstest]
+fn test_pools_when_some(mut cache: Cache, test_pool: Pool) {
+    let venue = test_pool.instrument_id.venue;
+    cache.add_pool(test_pool.clone()).unwrap();
+
+    let result1 = cache.pools(None);
+    let result2 = cache.pools(Some(&venue));
+    assert_eq!(result1, vec![&test_pool]);
+    assert_eq!(result2, vec![&test_pool]);
+}
+
+#[cfg(feature = "defi")]
+#[fixture]
+fn test_pool_profiler(test_pool: Pool) -> PoolProfiler {
+    PoolProfiler::new(Arc::new(test_pool))
+}
+
+#[cfg(feature = "defi")]
+#[rstest]
+fn test_pool_profiler_when_empty(cache: Cache, test_pool_profiler: PoolProfiler) {
+    let instrument_id = test_pool_profiler.pool.instrument_id;
+    let result = cache.pool_profiler(&instrument_id);
+    assert!(result.is_none());
+}
+
+#[cfg(feature = "defi")]
+#[rstest]
+fn test_pool_profiler_when_some(mut cache: Cache, test_pool_profiler: PoolProfiler) {
+    let instrument_id = test_pool_profiler.pool.instrument_id;
+    cache.add_pool_profiler(test_pool_profiler.clone()).unwrap();
+    let result = cache.pool_profiler(&instrument_id);
+    assert!(result.is_some());
+}
+
+#[cfg(feature = "defi")]
+#[rstest]
+fn test_pool_profiler_mut_when_empty(mut cache: Cache, test_pool_profiler: PoolProfiler) {
+    let instrument_id = test_pool_profiler.pool.instrument_id;
+    let result = cache.pool_profiler_mut(&instrument_id);
+    assert!(result.is_none());
+}
+
+#[cfg(feature = "defi")]
+#[rstest]
+fn test_pool_profiler_mut_when_some(mut cache: Cache, test_pool_profiler: PoolProfiler) {
+    let instrument_id = test_pool_profiler.pool.instrument_id;
+    cache.add_pool_profiler(test_pool_profiler.clone()).unwrap();
+    let result = cache.pool_profiler_mut(&instrument_id);
+    assert!(result.is_some());
+}
+
+#[cfg(feature = "defi")]
+#[rstest]
+fn test_add_pool_profiler(mut cache: Cache, test_pool_profiler: PoolProfiler) {
+    let instrument_id = test_pool_profiler.pool.instrument_id;
+
+    cache.add_pool_profiler(test_pool_profiler.clone()).unwrap();
+
+    let cached_profiler = cache.pool_profiler(&instrument_id);
+    assert!(cached_profiler.is_some());
+}
+
+#[cfg(feature = "defi")]
+#[rstest]
+fn test_pool_profiler_ids_when_empty(cache: Cache, test_pool_profiler: PoolProfiler) {
+    let result = cache.pool_profiler_ids(Some(&test_pool_profiler.pool.instrument_id.venue));
+    assert!(result.is_empty());
+}
+
+#[cfg(feature = "defi")]
+#[rstest]
+fn test_pool_profiler_ids_when_some(mut cache: Cache, test_pool_profiler: PoolProfiler) {
+    let venue = test_pool_profiler.pool.instrument_id.venue;
+    cache.add_pool_profiler(test_pool_profiler.clone()).unwrap();
+
+    let result1 = cache.pool_profiler_ids(None);
+    let result2 = cache.pool_profiler_ids(Some(&venue));
+    assert_eq!(result1, vec![test_pool_profiler.pool.instrument_id]);
+    assert_eq!(result2, vec![test_pool_profiler.pool.instrument_id]);
+}
+
+#[cfg(feature = "defi")]
+#[rstest]
+fn test_pool_profilers_when_empty(cache: Cache, test_pool_profiler: PoolProfiler) {
+    let result = cache.pool_profilers(Some(&test_pool_profiler.pool.instrument_id.venue));
+    assert!(result.is_empty());
+}
+
+#[cfg(feature = "defi")]
+#[rstest]
+fn test_pool_profilers_when_some(mut cache: Cache, test_pool_profiler: PoolProfiler) {
+    let venue = test_pool_profiler.pool.instrument_id.venue;
+    cache.add_pool_profiler(test_pool_profiler.clone()).unwrap();
+
+    let result1 = cache.pool_profilers(None);
+    let result2 = cache.pool_profilers(Some(&venue));
+    assert_eq!(result1.len(), 1);
+    assert_eq!(result2.len(), 1);
+}
+
 #[rstest]
 #[case(PriceType::Bid)]
 #[case(PriceType::Ask)]
@@ -1240,4 +1369,344 @@ fn test_purge_position() {
     // Verify the position is gone
     assert!(!cache.position_exists(&position_id));
     assert_eq!(cache.positions_total_count(None, None, None, None), 0);
+}
+
+#[rstest]
+fn test_purge_closed_positions_does_not_purge_reopened_position() {
+    // Arrange: Create a position that goes FLAT then reopens
+    // This test verifies the fix for the race condition where positions that were
+    // previously closed but later reopened were incorrectly purged
+
+    let mut cache = Cache::default();
+    let audusd_sim = audusd_sim();
+    let audusd_sim = InstrumentAny::CurrencyPair(audusd_sim);
+
+    // Create initial buy order to open position
+    let order1 = OrderTestBuilder::new(OrderType::Market)
+        .instrument_id(audusd_sim.id())
+        .side(OrderSide::Buy)
+        .quantity(Quantity::from(100_000))
+        .build();
+
+    // Fill the buy order to open LONG position
+    let fill1 = TestOrderEventStubs::filled(
+        &order1,
+        &audusd_sim,
+        Some(TradeId::new("T-1")),            // trade_id
+        Some(PositionId::new("P-1")),         // position_id
+        Some(Price::from("1.00000")),         // last_px
+        None,                                 // last_qty
+        None,                                 // liquidity_side
+        None,                                 // commission
+        Some(UnixNanos::from(1_000_000_000)), // ts_filled_ns
+        None,                                 // account_id
+    );
+
+    let mut position = Position::new(&audusd_sim, fill1.into());
+    let position_id = position.id;
+
+    // Add position to cache
+    cache
+        .add_position(position.clone(), OmsType::Netting)
+        .unwrap();
+    cache.update_position(&position).unwrap();
+
+    // Verify position is LONG
+    assert!(position.is_long());
+    assert!(!position.is_closed());
+    assert!(cache.is_position_open(&position_id));
+
+    // Create sell order to close position (make it FLAT)
+    let order2 = OrderTestBuilder::new(OrderType::Market)
+        .instrument_id(audusd_sim.id())
+        .side(OrderSide::Sell)
+        .quantity(Quantity::from(100_000))
+        .build();
+
+    // Fill the sell order to close position (FLAT)
+    let fill2 = TestOrderEventStubs::filled(
+        &order2,
+        &audusd_sim,
+        Some(TradeId::new("T-2")),            // trade_id
+        Some(position_id),                    // position_id
+        Some(Price::from("1.00010")),         // last_px
+        None,                                 // last_qty
+        None,                                 // liquidity_side
+        None,                                 // commission
+        Some(UnixNanos::from(2_000_000_000)), // ts_filled_ns
+        None,                                 // account_id
+    );
+
+    position.apply(&fill2.into());
+    cache.update_position(&position).unwrap();
+
+    // Verify position is now FLAT (closed)
+    assert_eq!(position.side, PositionSide::Flat);
+    assert!(position.is_closed());
+    assert!(position.ts_closed.is_some());
+    let ts_closed_original = position.ts_closed.unwrap();
+    assert!(cache.is_position_closed(&position_id));
+
+    // Create another buy order to REOPEN the position
+    let order3 = OrderTestBuilder::new(OrderType::Market)
+        .instrument_id(audusd_sim.id())
+        .side(OrderSide::Buy)
+        .quantity(Quantity::from(50_000))
+        .build();
+
+    // Fill the buy order to reopen position (LONG again)
+    let fill3 = TestOrderEventStubs::filled(
+        &order3,
+        &audusd_sim,
+        Some(TradeId::new("T-3")),            // trade_id
+        Some(position_id),                    // position_id
+        Some(Price::from("1.00020")),         // last_px
+        None,                                 // last_qty
+        None,                                 // liquidity_side
+        None,                                 // commission
+        Some(UnixNanos::from(3_000_000_000)), // ts_filled_ns
+        None,                                 // account_id
+    );
+
+    position.apply(&fill3.into());
+    cache.update_position(&position).unwrap();
+
+    // Verify position is LONG again (reopened)
+    assert!(position.is_long());
+    assert!(!position.is_closed());
+    assert_eq!(position.ts_closed, None); // Close timestamp should be reset
+    assert!(cache.is_position_open(&position_id));
+
+    // Act: Attempt to purge closed positions
+    // This should NOT purge our position even though it was closed before,
+    // because it's currently OPEN
+    // Use a timestamp far in the future to ensure any old ts_closed would trigger purge
+    cache.purge_closed_positions(
+        UnixNanos::from(ts_closed_original.as_u64() + 1_000_000_000_000),
+        0, // No buffer
+    );
+
+    // Assert: Position should still exist because it's currently OPEN
+    assert!(cache.position_exists(&position_id));
+    assert!(cache.position(&position_id).is_some());
+    assert!(cache.is_position_open(&position_id));
+    assert!(!cache.is_position_closed(&position_id));
+    assert_eq!(cache.positions_total_count(None, None, None, None), 1);
+    assert_eq!(cache.positions_open_count(None, None, None, None), 1);
+    assert_eq!(cache.positions_closed_count(None, None, None, None), 0);
+}
+
+#[rstest]
+fn test_update_own_order_book_with_market_order_does_not_panic(mut cache: Cache) {
+    let audusd_sim = audusd_sim();
+    cache
+        .add_instrument(InstrumentAny::CurrencyPair(audusd_sim))
+        .unwrap();
+
+    // Create a LIMIT order to establish an own book for the instrument
+    let limit_order = OrderTestBuilder::new(OrderType::Limit)
+        .instrument_id(audusd_sim.id())
+        .side(OrderSide::Buy)
+        .quantity(Quantity::from(100_000))
+        .price(Price::from("1.00000"))
+        .build();
+
+    cache
+        .add_order(limit_order.clone(), None, None, false)
+        .unwrap();
+    cache.update_own_order_book(&limit_order);
+    assert!(cache.own_order_book(&audusd_sim.id()).is_some());
+
+    // Create a MARKET order (no price) and transition it to FILLED
+    let market_order = OrderTestBuilder::new(OrderType::Market)
+        .instrument_id(audusd_sim.id())
+        .side(OrderSide::Buy)
+        .quantity(Quantity::from(50_000))
+        .client_order_id(ClientOrderId::new("O-19700101-000000-001-001-2"))
+        .build();
+
+    cache
+        .add_order(market_order.clone(), None, None, false)
+        .unwrap();
+
+    let submitted = TestOrderEventStubs::submitted(&market_order, AccountId::new("SIM-001"));
+    let mut market_order_mut = market_order;
+    market_order_mut.apply(submitted).unwrap();
+
+    let accepted = TestOrderEventStubs::accepted(
+        &market_order_mut,
+        AccountId::new("SIM-001"),
+        VenueOrderId::new("V-001"),
+    );
+    market_order_mut.apply(accepted).unwrap();
+
+    let filled = TestOrderEventStubs::filled(
+        &market_order_mut,
+        &InstrumentAny::CurrencyPair(audusd_sim),
+        Some(TradeId::new("T-001")),
+        None,
+        Some(Price::from("1.00010")),
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+    market_order_mut.apply(filled).unwrap();
+
+    // Should not panic - previously would panic at `.expect("OwnBookOrder must have a price")`
+    cache.update_own_order_book(&market_order_mut);
+
+    assert!(cache.own_order_book(&audusd_sim.id()).is_some());
+}
+
+#[rstest]
+fn test_force_remove_from_own_order_book(mut cache: Cache) {
+    let audusd_sim = audusd_sim();
+    cache
+        .add_instrument(InstrumentAny::CurrencyPair(audusd_sim))
+        .unwrap();
+
+    let limit_order = OrderTestBuilder::new(OrderType::Limit)
+        .instrument_id(audusd_sim.id())
+        .side(OrderSide::Buy)
+        .quantity(Quantity::from(100_000))
+        .price(Price::from("1.00000"))
+        .build();
+
+    cache
+        .add_order(limit_order.clone(), None, None, false)
+        .unwrap();
+    cache.update_own_order_book(&limit_order);
+
+    let submitted = TestOrderEventStubs::submitted(&limit_order, AccountId::new("SIM-001"));
+    let mut limit_order_mut = limit_order;
+    limit_order_mut.apply(submitted).unwrap();
+    cache.update_order(&limit_order_mut).unwrap();
+
+    assert!(cache.order_exists(&limit_order_mut.client_order_id()));
+    assert!(
+        cache
+            .index
+            .orders_inflight
+            .contains(&limit_order_mut.client_order_id())
+    );
+    assert!(cache.own_order_book(&audusd_sim.id()).is_some());
+
+    cache.force_remove_from_own_order_book(&limit_order_mut.client_order_id());
+
+    assert!(
+        !cache
+            .index
+            .orders_open
+            .contains(&limit_order_mut.client_order_id())
+    );
+    assert!(
+        !cache
+            .index
+            .orders_inflight
+            .contains(&limit_order_mut.client_order_id())
+    );
+    assert!(
+        !cache
+            .index
+            .orders_emulated
+            .contains(&limit_order_mut.client_order_id())
+    );
+    assert!(
+        !cache
+            .index
+            .orders_pending_cancel
+            .contains(&limit_order_mut.client_order_id())
+    );
+    assert!(
+        cache
+            .index
+            .orders_closed
+            .contains(&limit_order_mut.client_order_id())
+    );
+}
+
+#[rstest]
+fn test_audit_own_order_books_with_inflight_orders(mut cache: Cache) {
+    let audusd_sim = audusd_sim();
+    cache
+        .add_instrument(InstrumentAny::CurrencyPair(audusd_sim))
+        .unwrap();
+
+    let limit_order = OrderTestBuilder::new(OrderType::Limit)
+        .instrument_id(audusd_sim.id())
+        .side(OrderSide::Buy)
+        .quantity(Quantity::from(100_000))
+        .price(Price::from("1.00000"))
+        .build();
+
+    cache
+        .add_order(limit_order.clone(), None, None, false)
+        .unwrap();
+    cache.update_own_order_book(&limit_order);
+
+    let submitted = TestOrderEventStubs::submitted(&limit_order, AccountId::new("SIM-001"));
+    let mut limit_order_mut = limit_order;
+    limit_order_mut.apply(submitted).unwrap();
+    cache.update_order(&limit_order_mut).unwrap();
+
+    let own_book = cache.own_order_book(&audusd_sim.id()).unwrap();
+    assert!(own_book.bids().count() > 0);
+
+    cache.audit_own_order_books();
+
+    let own_book = cache.own_order_book(&audusd_sim.id()).unwrap();
+    assert!(own_book.bids().count() > 0);
+}
+
+#[rstest]
+fn test_audit_own_order_books_removes_closed(mut cache: Cache) {
+    let audusd_sim = audusd_sim();
+    cache
+        .add_instrument(InstrumentAny::CurrencyPair(audusd_sim))
+        .unwrap();
+
+    let limit_order = OrderTestBuilder::new(OrderType::Limit)
+        .instrument_id(audusd_sim.id())
+        .side(OrderSide::Buy)
+        .quantity(Quantity::from(100_000))
+        .price(Price::from("1.00000"))
+        .build();
+
+    cache
+        .add_order(limit_order.clone(), None, None, false)
+        .unwrap();
+    cache.update_own_order_book(&limit_order);
+
+    let submitted = TestOrderEventStubs::submitted(&limit_order, AccountId::new("SIM-001"));
+    let mut limit_order_mut = limit_order;
+    limit_order_mut.apply(submitted).unwrap();
+    cache.update_order(&limit_order_mut).unwrap();
+
+    let accepted = TestOrderEventStubs::accepted(
+        &limit_order_mut,
+        AccountId::new("SIM-001"),
+        VenueOrderId::new("V-001"),
+    );
+    limit_order_mut.apply(accepted).unwrap();
+    cache.update_order(&limit_order_mut).unwrap();
+
+    let own_book = cache.own_order_book(&audusd_sim.id()).unwrap();
+    assert!(own_book.bids().count() > 0);
+
+    let canceled = TestOrderEventStubs::canceled(
+        &limit_order_mut,
+        AccountId::new("SIM-001"),
+        Some(VenueOrderId::new("V-001")),
+    );
+    limit_order_mut.apply(canceled).unwrap();
+    cache.update_order(&limit_order_mut).unwrap();
+
+    cache.update_own_order_book(&limit_order_mut);
+
+    cache.audit_own_order_books();
+
+    let own_book = cache.own_order_book(&audusd_sim.id()).unwrap();
+    assert_eq!(own_book.bids().count(), 0);
 }

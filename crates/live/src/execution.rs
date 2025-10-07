@@ -19,16 +19,27 @@
 //! coordinating between the core execution engine and venue-specific clients
 //! while managing state reconciliation.
 
-use std::{cell::RefCell, fmt::Debug, rc::Rc, time::Duration};
+use std::{
+    cell::{Ref, RefCell},
+    collections::HashSet,
+    fmt::{Debug, Display},
+    rc::Rc,
+    time::Duration,
+};
 
 use nautilus_common::{
     cache::Cache,
     clock::Clock,
     logging::{CMD, EVT, RECV},
-    messages::execution::TradingCommand,
+    messages::{ExecutionEvent, ExecutionReport as ExecReportEnum, execution::TradingCommand},
     msgbus::{self, MessageBus, switchboard},
 };
-use nautilus_model::{events::OrderEventAny, reports::ExecutionMassStatus};
+use nautilus_execution::client::ExecutionClient;
+use nautilus_model::{
+    events::OrderEventAny,
+    identifiers::{ClientId, ClientOrderId, InstrumentId},
+    reports::{ExecutionMassStatus, FillReport, OrderStatusReport, PositionStatusReport},
+};
 
 use crate::{
     config::LiveExecEngineConfig,
@@ -78,12 +89,35 @@ impl LiveExecutionEngine {
         msgbus: Rc<RefCell<MessageBus>>,
         config: LiveExecEngineConfig,
     ) -> Self {
+        let filtered_client_order_ids: HashSet<ClientOrderId> = config
+            .filtered_client_order_ids
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|value| ClientOrderId::from(value.as_str()))
+            .collect();
+
+        let reconciliation_instrument_ids: HashSet<InstrumentId> = config
+            .reconciliation_instrument_ids
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|value| InstrumentId::from(value.as_str()))
+            .collect();
+
         let reconciliation_config = ReconciliationConfig {
             lookback_mins: config.reconciliation_lookback_mins.map(|m| m as u64),
             inflight_threshold_ms: config.inflight_check_threshold_ms as u64,
-            inflight_max_retries: config.inflight_check_retries as u8,
+            inflight_max_retries: config.inflight_check_retries,
             filter_unclaimed_external: config.filter_unclaimed_external_orders,
             generate_missing_orders: config.generate_missing_orders,
+            filtered_client_order_ids,
+            open_check_threshold_ns: (config.open_check_threshold_ms as u64) * 1_000_000,
+            open_check_missing_retries: config.open_check_missing_retries,
+            open_check_open_only: config.open_check_open_only,
+            open_check_lookback_mins: config.open_check_lookback_mins.map(|m| m as u64),
+            filter_position_reports: config.filter_position_reports,
+            reconciliation_instrument_ids,
         };
 
         let reconciliation =
@@ -175,7 +209,8 @@ impl LiveExecutionEngine {
         log::info!("Running startup reconciliation");
 
         // Add startup delay to let connections stabilize
-        if let Some(delay_secs) = self.config.reconciliation_startup_delay_secs {
+        if self.config.reconciliation_startup_delay_secs > 0.0 {
+            let delay_secs = self.config.reconciliation_startup_delay_secs;
             log::info!("Waiting {}s before reconciliation", delay_secs);
             tokio::time::sleep(Duration::from_secs_f64(delay_secs)).await;
         }
@@ -248,6 +283,27 @@ impl LiveExecutionEngine {
         msgbus::publish(topic, &event);
     }
 
+    /// Records local order activity for reconciliation tracking.
+    pub fn record_local_activity(&mut self, event: &OrderEventAny) {
+        let client_order_id = event.client_order_id();
+        let mut ts_event = event.ts_event();
+        if ts_event.is_zero() {
+            ts_event = self.clock.borrow().timestamp_ns();
+        }
+        self.reconciliation
+            .record_local_activity(client_order_id, ts_event);
+    }
+
+    /// Clears reconciliation tracking for an order.
+    pub fn clear_reconciliation_tracking(
+        &mut self,
+        client_order_id: &ClientOrderId,
+        drop_last_query: bool,
+    ) {
+        self.reconciliation
+            .clear_recon_tracking(client_order_id, drop_last_query);
+    }
+
     /// Starts continuous reconciliation tasks.
     fn start_continuous_tasks(&mut self) {
         if self.config.inflight_check_interval_ms > 0 {
@@ -279,4 +335,72 @@ impl LiveExecutionEngine {
     pub fn is_running(&self) -> bool {
         self.is_running
     }
+}
+
+/// Extension trait for live execution clients with message channel support.
+pub trait LiveExecutionClientExt: ExecutionClient {
+    /// Gets the message channel for sending execution events.
+    fn get_message_channel(&self) -> tokio::sync::mpsc::UnboundedSender<ExecutionEvent>;
+
+    /// Gets the clock for timestamp generation.
+    fn get_clock(&self) -> Ref<'_, dyn Clock>;
+
+    /// Sends an order event to the execution engine.
+    fn send_order_event(&self, event: OrderEventAny) {
+        if let Err(e) = self
+            .get_message_channel()
+            .send(ExecutionEvent::Order(event))
+        {
+            log_send_error(&self.client_id(), &e);
+        }
+    }
+
+    /// Sends an order status report to the execution engine.
+    fn send_order_status_report(&self, report: OrderStatusReport) {
+        let exec_report = ExecReportEnum::OrderStatus(Box::new(report));
+        if let Err(e) = self
+            .get_message_channel()
+            .send(ExecutionEvent::Report(exec_report))
+        {
+            log_send_error(&self.client_id(), &e);
+        }
+    }
+
+    /// Sends a fill report to the execution engine.
+    fn send_fill_report(&self, report: FillReport) {
+        let exec_report = ExecReportEnum::Fill(Box::new(report));
+        if let Err(e) = self
+            .get_message_channel()
+            .send(ExecutionEvent::Report(exec_report))
+        {
+            log_send_error(&self.client_id(), &e);
+        }
+    }
+
+    /// Sends a position status report to the execution engine.
+    fn send_position_status_report(&self, report: PositionStatusReport) {
+        let exec_report = ExecReportEnum::Position(Box::new(report));
+        if let Err(e) = self
+            .get_message_channel()
+            .send(ExecutionEvent::Report(exec_report))
+        {
+            log_send_error(&self.client_id(), &e);
+        }
+    }
+
+    /// Sends a mass status report to the execution engine.
+    fn send_mass_status(&self, mass_status: ExecutionMassStatus) {
+        let exec_report = ExecReportEnum::Mass(Box::new(mass_status));
+        if let Err(e) = self
+            .get_message_channel()
+            .send(ExecutionEvent::Report(exec_report))
+        {
+            log_send_error(&self.client_id(), &e);
+        }
+    }
+}
+
+#[inline(always)]
+fn log_send_error<E: Display>(client_id: &ClientId, e: &E) {
+    log::error!("ExecutionClient-{client_id} failed to send message: {e}");
 }

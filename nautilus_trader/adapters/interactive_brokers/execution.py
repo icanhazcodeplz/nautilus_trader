@@ -105,6 +105,24 @@ from nautilus_trader.model.orders.trailing_stop_market import TrailingStopMarket
 
 # fmt: on
 
+
+# Monkey patch to fix IB API bug where PriceCondition.__str__ is a property instead of a method
+# This prevents TypeError: 'str' object is not callable when IB API tries to log orders
+def _price_condition_str(self):
+    """
+    Fix __str__ method for PriceCondition.
+    """
+    try:
+        return f"price {'>=' if self.isMore else '<='} {self.price}"
+    except Exception:
+        return "PriceCondition"
+
+
+# Apply the monkey patch
+if hasattr(PriceCondition, "__str__") and not callable(getattr(PriceCondition, "__str__")):
+    PriceCondition.__str__ = _price_condition_str
+
+
 ib_to_nautilus_trigger_method = dict(
     zip(MAP_TRIGGER_METHOD.values(), MAP_TRIGGER_METHOD.keys(), strict=False),
 )
@@ -142,6 +160,10 @@ class InteractiveBrokersExecutionClient(LiveExecutionClient):
         The configuration for the instance.
     name : str, optional
         The custom client ID.
+    connection_timeout: int, default 300
+        The connection timeout.
+    track_option_exercise_from_position_update: bool, default False
+        If True, subscribes to real-time position updates to track option exercises.
 
     """
 
@@ -157,6 +179,7 @@ class InteractiveBrokersExecutionClient(LiveExecutionClient):
         config: InteractiveBrokersExecClientConfig,
         name: str | None = None,
         connection_timeout: int = 300,
+        track_option_exercise_from_position_update: bool = False,
     ) -> None:
         super().__init__(
             loop=loop,
@@ -175,6 +198,9 @@ class InteractiveBrokersExecutionClient(LiveExecutionClient):
         # Track known positions to detect external changes (like option exercises)
         self._known_positions: dict[int, Decimal] = {}  # conId -> quantity
         self._connection_timeout = connection_timeout
+        self._track_option_exercise_from_position_update = (
+            track_option_exercise_from_position_update
+        )
         self._client: InteractiveBrokersClient = client
         self._set_account_id(account_id)
         self._account_summary_tags = {
@@ -226,7 +252,9 @@ class InteractiveBrokersExecutionClient(LiveExecutionClient):
         self._client.subscribe_event(f"openOrder-{account}", self._on_open_order)
         self._client.subscribe_event(f"orderStatus-{account}", self._on_order_status)
         self._client.subscribe_event(f"execDetails-{account}", self._on_exec_details)
-        self._client.subscribe_event(f"positionUpdate-{account}", self._on_position_update)
+
+        if self._track_option_exercise_from_position_update:
+            self._client.subscribe_event(f"positionUpdate-{account}", self._on_position_update)
 
         # Load account balance
         self._client.subscribe_account_summary()
@@ -236,15 +264,15 @@ class InteractiveBrokersExecutionClient(LiveExecutionClient):
         await self._initialize_position_tracking()
 
         # Subscribe to real-time position updates for external changes (option exercises)
-        self._client.subscribe_positions()
+        if self._track_option_exercise_from_position_update:
+            self._client.subscribe_positions()
 
         self._set_connected(True)
 
     async def _disconnect(self):
         self._client.registered_nautilus_clients.discard(self.id)
 
-        # Unsubscribe from position updates when disconnecting
-        if self._client.is_running:
+        if self._client.is_running and self._track_option_exercise_from_position_update:
             self._client.unsubscribe_positions()
 
         if self._client.is_running and self._client.registered_nautilus_clients == set():
@@ -451,7 +479,7 @@ class InteractiveBrokersExecutionClient(LiveExecutionClient):
 
         return report
 
-    async def generate_fill_reports(
+    async def generate_fill_reports(  # noqa: C901
         self,
         command: GenerateFillReports,
     ) -> list[FillReport]:
@@ -471,7 +499,26 @@ class InteractiveBrokersExecutionClient(LiveExecutionClient):
 
             # Apply instrument filter if specified
             if command.instrument_id is not None:
-                execution_filter.symbol = command.instrument_id.symbol.value
+                # Convert Nautilus instrument ID to IB contract to get the proper root symbol
+                # IB execution filters expect the root contract symbol (e.g., "ES" for "ESM4", "EUR" for "EUR/USD")
+                ib_contract = await self.instrument_provider.instrument_id_to_ib_contract(
+                    command.instrument_id,
+                )
+
+                if ib_contract is not None:
+                    # Use the IB contract's symbol for the filter
+                    execution_filter.symbol = ib_contract.symbol
+
+                    # Also set secType if available to make the filter more specific
+                    if hasattr(ib_contract, "secType") and ib_contract.secType:
+                        execution_filter.secType = ib_contract.secType
+                else:
+                    # Fallback to the original symbol if conversion fails
+                    self._log.warning(
+                        f"Could not convert instrument ID {command.instrument_id} to IB contract, "
+                        f"using original symbol {command.instrument_id.symbol.value}",
+                    )
+                    execution_filter.symbol = command.instrument_id.symbol.value
 
             # Apply time filter if specified
             if command.start is not None:
@@ -612,18 +659,26 @@ class InteractiveBrokersExecutionClient(LiveExecutionClient):
             self.account_id.get_id(),
         )
 
+        # Handle case when specific instrument requested but no positions found
+        if command.instrument_id and not positions:
+            now = self._clock.timestamp_ns()
+            flat_report = PositionStatusReport(
+                account_id=self.account_id,
+                instrument_id=command.instrument_id,
+                position_side=PositionSide.FLAT,
+                quantity=Quantity.zero(),
+                report_id=UUID4(),
+                ts_last=now,
+                ts_init=now,
+            )
+            self._log.debug(f"Generated FLAT report for {command.instrument_id}")
+            return [flat_report]
+
         if not positions:
             return []
 
         for position in positions:
             self._log.debug(f"Trying PositionStatusReport for {position.contract.conId}")
-
-            if position.quantity > 0:
-                side = PositionSide.LONG
-            elif position.quantity < 0:
-                side = PositionSide.SHORT
-            else:
-                continue  # Skip, IB may continue to display closed positions
 
             instrument = await self.instrument_provider.get_instrument(position.contract)
 
@@ -634,7 +689,16 @@ class InteractiveBrokersExecutionClient(LiveExecutionClient):
                 continue
 
             if not self._cache.instrument(instrument.id):
-                self._handle_data(instrument)
+                self._msgbus.send(endpoint="DataEngine.process", msg=instrument)
+
+            # Determine position side
+            if position.quantity > 0:
+                side = PositionSide.LONG
+            elif position.quantity < 0:
+                side = PositionSide.SHORT
+            else:
+                # Generate FLAT report for zero quantity positions
+                side = PositionSide.FLAT
 
             # Convert avg_cost to Price if available
             avg_px_open = None
@@ -778,6 +842,10 @@ class InteractiveBrokersExecutionClient(LiveExecutionClient):
         if order.is_post_only:
             raise ValueError("`post_only` not supported by Interactive Brokers")
 
+        is_inverse = self.instrument_provider.find(order.instrument_id).is_inverse
+        if order.is_quote_quantity and not is_inverse:
+            raise ValueError("UNSUPPORTED_QUOTE_QUANTITY")
+
         ib_order = IBOrder()
         time_in_force = order.time_in_force
         price_magnifier = self.instrument_provider.get_price_magnifier(order.instrument_id)
@@ -894,7 +962,7 @@ class InteractiveBrokersExecutionClient(LiveExecutionClient):
 
         return ib_order
 
-    def _create_ib_conditions(  # noqa: C901
+    def _create_ib_conditions(
         self,
         conditions_data: list[dict],
     ) -> list[OrderCondition]:
@@ -939,20 +1007,6 @@ class InteractiveBrokersExecutionClient(LiveExecutionClient):
                 condition.isConjunctionConnection = (
                     condition_dict.get("conjunction", "and").lower() == "and"
                 )
-
-                # Debug logging (handle PriceCondition.__str__ bug in ibapi without monkey patching)
-                condition_name = type(condition).__name__
-                try:
-                    # Try to get string representation, but handle ibapi PriceCondition bug
-                    if hasattr(condition, "__str__") and callable(condition.__str__):
-                        condition_str = str(condition)
-                    else:
-                        # Workaround for ibapi PriceCondition bug where __str__ is a @property
-                        condition_str = f"{condition_name} object"
-                    self._log.debug(f"Created condition: {condition_name} - {condition_str}")
-                except Exception:
-                    # Fallback if string conversion fails
-                    self._log.debug(f"Created condition: {condition_name}")
                 conditions.append(condition)
 
         return conditions
@@ -1700,7 +1754,7 @@ class InteractiveBrokersExecutionClient(LiveExecutionClient):
 
             # Ensure instrument is in cache
             if not self._cache.instrument(instrument.id):
-                self._handle_data(instrument)
+                self._msgbus.send(endpoint="DataEngine.process", msg=instrument)
 
             # Determine position side
             side = PositionSide.LONG if new_quantity > 0 else PositionSide.SHORT

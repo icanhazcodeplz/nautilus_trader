@@ -15,7 +15,11 @@
 
 //! Python bindings for the [`Cache`] component.
 
+use std::{cell::RefCell, rc::Rc};
+
 use nautilus_core::python::to_pyvalue_err;
+#[cfg(feature = "defi")]
+use nautilus_model::defi::{Pool, PoolProfiler};
 use nautilus_model::{
     data::{
         Bar, BarType, FundingRateUpdate, QuoteTick, TradeTick,
@@ -38,6 +42,71 @@ use crate::{
     cache::{Cache, CacheConfig},
     enums::SerializationEncoding,
 };
+
+/// Wrapper providing shared access to [`Cache`] from Python.
+///
+/// This wrapper holds an `Rc<RefCell<Cache>>` allowing actors to share
+/// the same cache instance. All methods delegate to the underlying cache.
+#[allow(non_camel_case_types)]
+#[pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.common", unsendable)]
+#[derive(Debug, Clone)]
+pub struct PyCache(Rc<RefCell<Cache>>);
+
+impl PyCache {
+    /// Creates a `PyCache` from an `Rc<RefCell<Cache>>`.
+    #[must_use]
+    pub fn from_rc(rc: Rc<RefCell<Cache>>) -> Self {
+        Self(rc)
+    }
+}
+
+#[pymethods]
+impl PyCache {
+    #[pyo3(name = "instrument")]
+    fn py_instrument(
+        &self,
+        py: Python,
+        instrument_id: InstrumentId,
+    ) -> PyResult<Option<Py<PyAny>>> {
+        let cache = self.0.borrow();
+        match cache.instrument(&instrument_id) {
+            Some(instrument) => Ok(Some(instrument_any_to_pyobject(py, instrument.clone())?)),
+            None => Ok(None),
+        }
+    }
+
+    #[pyo3(name = "quote")]
+    fn py_quote(&self, instrument_id: InstrumentId) -> Option<QuoteTick> {
+        self.0.borrow().quote(&instrument_id).cloned()
+    }
+
+    #[pyo3(name = "trade")]
+    fn py_trade(&self, instrument_id: InstrumentId) -> Option<TradeTick> {
+        self.0.borrow().trade(&instrument_id).cloned()
+    }
+
+    #[pyo3(name = "bar")]
+    fn py_bar(&self, bar_type: BarType) -> Option<Bar> {
+        self.0.borrow().bar(&bar_type).cloned()
+    }
+
+    #[pyo3(name = "order_book")]
+    fn py_order_book(&self, instrument_id: InstrumentId) -> Option<OrderBook> {
+        self.0.borrow().order_book(&instrument_id).cloned()
+    }
+
+    #[cfg(feature = "defi")]
+    #[pyo3(name = "pool")]
+    fn py_pool(&self, instrument_id: InstrumentId) -> Option<Pool> {
+        self.0.borrow().pool(&instrument_id).cloned()
+    }
+
+    #[cfg(feature = "defi")]
+    #[pyo3(name = "pool_profiler")]
+    fn py_pool_profiler(&self, instrument_id: InstrumentId) -> Option<PoolProfiler> {
+        self.0.borrow().pool_profiler(&instrument_id).cloned()
+    }
+}
 
 #[pymethods]
 impl CacheConfig {
@@ -502,5 +571,57 @@ impl Cache {
     #[pyo3(name = "synthetic_ids")]
     fn py_synthetic_ids(&self) -> Vec<InstrumentId> {
         self.synthetic_ids().into_iter().copied().collect()
+    }
+
+    #[cfg(feature = "defi")]
+    #[pyo3(name = "add_pool")]
+    fn py_add_pool(&mut self, pool: Pool) -> PyResult<()> {
+        self.add_pool(pool).map_err(to_pyvalue_err)
+    }
+
+    #[cfg(feature = "defi")]
+    #[pyo3(name = "pool")]
+    fn py_pool(&self, instrument_id: InstrumentId) -> Option<Pool> {
+        self.pool(&instrument_id).cloned()
+    }
+
+    #[cfg(feature = "defi")]
+    #[pyo3(name = "pool_ids")]
+    fn py_pool_ids(&self, venue: Option<Venue>) -> Vec<InstrumentId> {
+        self.pool_ids(venue.as_ref())
+    }
+
+    #[cfg(feature = "defi")]
+    #[pyo3(name = "pools")]
+    fn py_pools(&self, venue: Option<Venue>) -> Vec<Pool> {
+        self.pools(venue.as_ref()).into_iter().cloned().collect()
+    }
+
+    #[cfg(feature = "defi")]
+    #[pyo3(name = "add_pool_profiler")]
+    fn py_add_pool_profiler(&mut self, pool_profiler: PoolProfiler) -> PyResult<()> {
+        self.add_pool_profiler(pool_profiler)
+            .map_err(to_pyvalue_err)
+    }
+
+    #[cfg(feature = "defi")]
+    #[pyo3(name = "pool_profiler")]
+    fn py_pool_profiler(&self, instrument_id: InstrumentId) -> Option<PoolProfiler> {
+        self.pool_profiler(&instrument_id).cloned()
+    }
+
+    #[cfg(feature = "defi")]
+    #[pyo3(name = "pool_profiler_ids")]
+    fn py_pool_profiler_ids(&self, venue: Option<Venue>) -> Vec<InstrumentId> {
+        self.pool_profiler_ids(venue.as_ref())
+    }
+
+    #[cfg(feature = "defi")]
+    #[pyo3(name = "pool_profilers")]
+    fn py_pool_profilers(&self, venue: Option<Venue>) -> Vec<PoolProfiler> {
+        self.pool_profilers(venue.as_ref())
+            .into_iter()
+            .cloned()
+            .collect()
     }
 }
