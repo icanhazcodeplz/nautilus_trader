@@ -72,6 +72,3 @@ cargo test --package nautilus-bitmex --lib http::parse::tests::test_parse_order_
 cd nautilus_trader
 cargo nextest run -p <insert_package_name_here>
 ```
-
-
-copy the contents of ~/code/nautilus_trader/adapters/okx into a new folder ~/code/nautilus_trader/adapters/alpaca, and change the code to use the alpaca api instead of the okx api.
