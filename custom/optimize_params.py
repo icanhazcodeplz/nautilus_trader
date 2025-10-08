@@ -4,7 +4,6 @@ import sys
 from datetime import datetime
 
 import numpy as np
-from optuna.samplers import GridSampler
 
 from custom.process_manager import ProcessManager
 
@@ -12,8 +11,8 @@ sys.path.append(os.getcwd())
 
 import optuna
 import logging
-from custom.runner import run_single_backtest, run_multiple_backtests
-from nautilus_trader.analysis.statistics.trade_avg_scaled import TotalBought
+from custom.runner import run_multiple_backtests
+from custom.statistics.trade_avg_scaled import TotalBought
 
 DATABASE_STR = "sqlite:///optuna.db"
 # mysql_optuna = "mysql://root@localhost/optuna"

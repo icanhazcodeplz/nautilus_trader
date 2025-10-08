@@ -13,27 +13,16 @@ from custom.app_utils.viz import create_and_save_markers
 from custom.strategies.random import RandomConfig, Random
 from nautilus_trader.backtest.engine import BacktestEngine
 from nautilus_trader.backtest.engine import BacktestEngineConfig
-from nautilus_trader.analysis.statistics.expectancy import Expectancy
-from nautilus_trader.analysis.statistics.long_ratio import LongRatio
-from nautilus_trader.analysis.statistics.loser_min import MinLoser
-from nautilus_trader.analysis.statistics.profit_factor import ProfitFactor
-from nautilus_trader.analysis.statistics.returns_avg import ReturnsAverage
-from nautilus_trader.analysis.statistics.returns_avg_loss import ReturnsAverageLoss
-from nautilus_trader.analysis.statistics.returns_avg_win import ReturnsAverageWin
-from nautilus_trader.analysis.statistics.returns_volatility import ReturnsVolatility
-from nautilus_trader.analysis.statistics.risk_return_ratio import RiskReturnRatio
-from nautilus_trader.analysis.statistics.sharpe_ratio import SharpeRatio
-from nautilus_trader.analysis.statistics.sortino_ratio import SortinoRatio
-from nautilus_trader.analysis.statistics.trade_avg import AvgTrade
-from nautilus_trader.analysis.statistics.trade_avg_scaled import PnlPer100, TotalBought
-from nautilus_trader.analysis.statistics.trade_counts import Winners, Losers, NumTrades
-from nautilus_trader.analysis.statistics.win_loss_ratio import WinLossRatio
-from nautilus_trader.analysis.statistics.winner_min import MinWinner
+from custom.statistics.trade_avg import AvgTrade
+from custom.statistics.trade_avg_scaled import PnlPer100, TotalBought
+from custom.statistics.trade_counts import Winners, Losers, NumTrades
+from custom.statistics.win_loss_ratio import WinLossRatio
 from nautilus_trader.backtest.models import LatencyModel
 from nautilus_trader.cache.config import CacheConfig
 from nautilus_trader.config import LoggingConfig
+from nautilus_trader.core.nautilus_pyo3 import Expectancy, LongRatio, MinLoser, ProfitFactor, ReturnsAverage, ReturnsAverageLoss, ReturnsAverageWin, ReturnsVolatility, RiskReturnRatio, SharpeRatio, SortinoRatio, MinWinner
 from nautilus_trader.model.currencies import USD
-from nautilus_trader.model.data import BarType, QuoteTick, TradeTick
+from nautilus_trader.model.data import QuoteTick, TradeTick
 from nautilus_trader.model.enums import AccountType, BookType
 from nautilus_trader.model.enums import OmsType
 from nautilus_trader.model.identifiers import TraderId

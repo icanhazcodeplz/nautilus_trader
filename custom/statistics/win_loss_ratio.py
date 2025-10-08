@@ -18,8 +18,7 @@ from typing import Any
 import pandas as pd
 
 from nautilus_trader.analysis.statistic import PortfolioStatistic
-from nautilus_trader.analysis.statistics.loser_avg import AvgLoser
-from nautilus_trader.analysis.statistics.winner_avg import AvgWinner
+from nautilus_trader.core.nautilus_pyo3 import AvgWinner, AvgLoser
 
 
 class WinLossRatio(PortfolioStatistic):
