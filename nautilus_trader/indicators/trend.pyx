@@ -14,8 +14,7 @@
 # -------------------------------------------------------------------------------------------------
 
 from collections import deque
-from statistics import mean
-
+# FIXME: BRENT
 import numpy as np
 import pandas as pd
 
@@ -551,7 +550,7 @@ cdef class LinearRegression(Indicator):
 
         # Compute R2 with handling for zero variance in y_arr
         cdef double ssr = sum(residuals * residuals)
-        cdef double sst = sum((y_arr - mean(y_arr)) * (y_arr - mean(y_arr)))
+        cdef double sst = sum((y_arr - np.mean(y_arr)) * (y_arr - np.mean(y_arr)))
         if sst == 0.0:
             self.R2 = -np.inf
         else:
