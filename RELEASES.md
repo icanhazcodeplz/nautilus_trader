@@ -8,6 +8,8 @@ This will be the final release with support for Python 3.11.
 - Added support for `OrderBookDepth10` requests (#2955), thanks @faysou
 - Added support for quotes from book depths (#2977), thanks @faysou
 - Added execution engine rate limiting for single-order reconciliation queries
+- Added `subscribe_order_fills(...)` and `unsubscribe_order_fills(...)` for `Actor` allowing to subscribe to all fills for an instrument ID
+- Added `on_order_filled(...)` for `Actor`
 - Added Renko bar aggregator (#2941), thanks @faysou
 - Added `time_range_generator` for on the fly data data subscriptions (#2952), thanks @faysou
 - Added `__repr__` to `NewsEvent` (#2958), thanks @MK27MK
@@ -59,6 +61,7 @@ This will be the final release with support for Python 3.11.
 - Implemented Hyperliquid websocket tester for streaming market data (#3018), thanks @nicolad
 - Implemented Hyperliquid basic market and limit orders (#3022), thanks @nicolad
 - Implemented Hyperliquid conditional / advanced orders (#3035), thanks @nicolad
+- Implemented Hyperliquid execution reconciliation (#3041), thanks @nicolad
 - Standardized Binance order validations with proper order denied events to avoid "hanging" orders
 - Improved clock and timer thread safety and validations
 - Improved live timer lifecycle management by canceling existing timers with the same name
@@ -120,6 +123,7 @@ This will be the final release with support for Python 3.11.
 - Fixed Polymarket tick size change handling for quotes (#2980), thanks for reporting @santivazq
 - Fixed Polymarket market order submission to use native CLOB market orders (#2984), thanks for reporting @njkds
 - Fixed Tardis instruments `lot_size` mapping
+- Fixed Tardis adapter error handling and connection robustness
 
 ### Documentation Updates
 - Added quick-reference rate limit tables with links to official docs for Binance, Bybit, OKX, BitMEX, and Coinbase International
