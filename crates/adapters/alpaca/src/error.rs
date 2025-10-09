@@ -15,8 +15,6 @@
 
 //! Error types for the Alpaca adapter.
 
-use std::fmt;
-
 use thiserror::Error;
 
 /// Represents errors that can occur when using the Alpaca adapter.

@@ -14,3 +14,9 @@
 // -------------------------------------------------------------------------------------------------
 
 //! WebSocket client for the Alpaca adapter.
+
+pub mod client;
+pub mod messages;
+
+pub use client::AlpacaWebSocketClient;
+pub use messages::AlpacaWebSocketMessage;
