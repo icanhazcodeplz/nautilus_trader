@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
   "crates",
+  "crates/adapters/alpaca",
   "crates/adapters/bitmex",
   "crates/adapters/blockchain",
   "crates/adapters/bybit",
@@ -79,6 +80,7 @@ nautilus-trading = { path = "crates/trading", version = "0.51.0" }
 # -----------------------------------------------------------------------------
 # Adapters
 # -----------------------------------------------------------------------------
+nautilus-alpaca = { path = "crates/adapters/alpaca", version = "0.51.0" }
 nautilus-blockchain = { path = "crates/adapters/blockchain", version = "0.51.0" }
 nautilus-bybit = { path = "crates/adapters/bybit", version = "0.51.0" }
 nautilus-coinbase-intx = { path = "crates/adapters/coinbase_intx", version = "0.51.0" }
