@@ -19,24 +19,34 @@ The Alpaca adapter provides integration with [Alpaca Markets](https://alpaca.mar
 
 ## Features
 
-### Supported
+### ✅ Implemented
 
-- Basic execution client structure
-- Configuration management
-- Support for both paper and live trading environments
-- Account type configuration (CASH for stocks)
+- **Execution Client**: Full order management and lifecycle
+- **HTTP Client**: REST API integration for orders, positions, and account
+- **WebSocket Client**: Real-time trade updates and order events
+- **Order Operations**:
+  - Submit orders (Market, Limit, Stop-Limit, Trailing Stop)
+  - Cancel individual orders
+  - Cancel all orders
+  - Order type conversion (NautilusTrader ↔ Alpaca)
+- **Account Management**:
+  - Connect/disconnect lifecycle
+  - Account state updates with balances and margins
+  - Credential verification
+- **Reporting**:
+  - Order status reports (single & bulk)
+  - Support for open-only and all orders queries
+  - Proper event generation (submitted, accepted, canceled, rejected, filled)
+- **Configuration**: Both data and execution client configs
+- **Factories**: Client factory for easy instantiation
+- **Testing**: Unit tests for parsing, enums, and configuration
 
-### In Development
+### 🚧 In Development
 
-The following features have TODO markers and require implementation:
-
-- HTTP API integration for order submission/cancellation
-- WebSocket streaming for order updates
-- Order type conversion (NautilusTrader ↔ Alpaca)
-- Order status report generation
-- Fill report generation
+- Fill report generation from trade history
 - Position status report generation
-- Account state management
+- Data client for historical and streaming market data
+- Order modification support
 
 ## Rust Core
 

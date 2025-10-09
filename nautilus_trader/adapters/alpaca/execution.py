@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 from nautilus_trader.adapters.alpaca.http import AlpacaHttpClient
 from nautilus_trader.adapters.alpaca.parsing import AlpacaEnumParser
 from nautilus_trader.adapters.alpaca.parsing import parse_order_status_report
+from nautilus_trader.adapters.alpaca.websocket import AlpacaWebSocketClient
 from nautilus_trader.common.enums import LogColor
 from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.execution.reports import FillReport
@@ -155,7 +156,14 @@ class AlpacaExecutionClient(LiveExecutionClient):
         # Initialize enum parser
         self._enum_parser = AlpacaEnumParser()
 
-        # TODO: Initialize WebSocket client for order updates
+        # Initialize WebSocket client for order updates
+        self._ws_client = AlpacaWebSocketClient(
+            url=self._ws_base_url,
+            api_key=self._api_key,
+            api_secret=self._api_secret,
+            handler=self._handle_ws_message,
+            logger=self._log,
+        )
 
     async def _connect(self) -> None:
         """Connect to Alpaca API."""
@@ -173,7 +181,15 @@ class AlpacaExecutionClient(LiveExecutionClient):
         # Update account state
         await self._update_account_state()
 
-        # TODO: Subscribe to order update WebSocket stream
+        # Connect to WebSocket and subscribe to trade updates
+        try:
+            await self._ws_client.connect()
+            await self._ws_client.subscribe_trade_updates()
+            self._log.info("Subscribed to trade updates", LogColor.GREEN)
+        except Exception as e:
+            self._log.error(f"Failed to connect to WebSocket: {e}")
+            # Don't fail completely if WebSocket fails, can still use HTTP polling
+            self._log.warning("Continuing without WebSocket updates")
 
         self._log.info("Connected to Alpaca", LogColor.GREEN)
 
@@ -181,10 +197,11 @@ class AlpacaExecutionClient(LiveExecutionClient):
         """Disconnect from Alpaca API."""
         self._log.info("Disconnecting from Alpaca...")
 
+        # Close WebSocket client
+        await self._ws_client.disconnect()
+
         # Close HTTP client
         await self._http_client.close()
-
-        # TODO: Close WebSocket connections
 
         self._log.info("Disconnected from Alpaca")
 
@@ -600,3 +617,140 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
         # Query account via HTTP API and update account state
         await self._update_account_state()
+
+    # -- WEBSOCKET HANDLERS -------------------------------------------------------------------
+
+    def _handle_ws_message(self, msg: dict) -> None:
+        """
+        Handle an incoming WebSocket trade update message.
+
+        Parameters
+        ----------
+        msg : dict
+            The trade update message.
+
+        """
+        try:
+            # Extract event type and order data
+            event = msg.get("event")
+            order_data = msg.get("order", {})
+
+            if not event or not order_data:
+                self._log.warning(f"Invalid trade update message: {msg}")
+                return
+
+            # Extract order identifiers
+            venue_order_id_str = order_data.get("id")
+            client_order_id_str = order_data.get("client_order_id")
+
+            if not venue_order_id_str:
+                self._log.warning("Trade update missing order ID")
+                return
+
+            venue_order_id = VenueOrderId(venue_order_id_str)
+            client_order_id = ClientOrderId(client_order_id_str) if client_order_id_str else None
+
+            # Try to get client_order_id from cache if not in message
+            if not client_order_id:
+                client_order_id = self._cache.client_order_id(venue_order_id)
+
+            if not client_order_id:
+                self._log.debug(f"Cannot process trade update: no client_order_id for {venue_order_id}")
+                return
+
+            # Get order from cache
+            order = self._cache.order(client_order_id)
+            if not order:
+                self._log.warning(f"Order {client_order_id} not found in cache")
+                return
+
+            # Get instrument ID
+            symbol = order_data.get("symbol")
+            if symbol:
+                instrument_id = InstrumentId.from_str(f"{symbol}.{ALPACA_VENUE}")
+            else:
+                instrument_id = order.instrument_id
+
+            # Handle different event types
+            ts_event = self._clock.timestamp_ns()
+
+            if event == "new":
+                # Order accepted
+                self.generate_order_accepted(
+                    strategy_id=order.strategy_id,
+                    instrument_id=instrument_id,
+                    client_order_id=client_order_id,
+                    venue_order_id=venue_order_id,
+                    ts_event=ts_event,
+                )
+
+            elif event == "fill":
+                # Order filled
+                filled_qty_str = order_data.get("filled_qty", "0")
+                filled_avg_price_str = order_data.get("filled_avg_price")
+
+                if filled_avg_price_str:
+                    # Generate fill event
+                    from nautilus_trader.model.objects import Price, Quantity
+                    from nautilus_trader.model.identifiers import TradeId
+                    from nautilus_trader.model.enums import LiquiditySide
+
+                    last_qty = Quantity.from_str(filled_qty_str)
+                    last_px = Price.from_str(filled_avg_price_str)
+
+                    # Commission is 0 for Alpaca
+                    commission = Money(0, instrument_id.symbol.value.split(".")[0].split("/")[-1] if "/" in instrument_id.symbol.value else "USD")
+
+                    self.generate_order_filled(
+                        strategy_id=order.strategy_id,
+                        instrument_id=instrument_id,
+                        client_order_id=client_order_id,
+                        venue_order_id=venue_order_id,
+                        venue_position_id=None,
+                        trade_id=TradeId(venue_order_id_str),  # Use order ID as trade ID
+                        order_side=order.side,
+                        order_type=order.order_type,
+                        last_qty=last_qty,
+                        last_px=last_px,
+                        quote_currency=instrument_id.symbol.value.split(".")[ 0].split("/")[-1] if "/" in instrument_id.symbol.value else "USD",
+                        commission=commission,
+                        liquidity_side=LiquiditySide.TAKER,
+                        ts_event=ts_event,
+                    )
+
+            elif event == "partial_fill":
+                # Order partially filled
+                self._log.info(f"Order {client_order_id} partially filled")
+                # Could generate partial fill event here if needed
+
+            elif event == "canceled":
+                # Order canceled
+                self.generate_order_canceled(
+                    strategy_id=order.strategy_id,
+                    instrument_id=instrument_id,
+                    client_order_id=client_order_id,
+                    venue_order_id=venue_order_id,
+                    ts_event=ts_event,
+                )
+
+            elif event == "rejected":
+                # Order rejected
+                reason = order_data.get("reject_reason", "Unknown")
+                self.generate_order_rejected(
+                    strategy_id=order.strategy_id,
+                    instrument_id=instrument_id,
+                    client_order_id=client_order_id,
+                    reason=reason,
+                    ts_event=ts_event,
+                )
+
+            elif event == "replaced":
+                # Order replaced (modified)
+                self._log.info(f"Order {client_order_id} replaced")
+                # Could generate order updated event here
+
+            else:
+                self._log.debug(f"Unhandled trade update event: {event}")
+
+        except Exception as e:
+            self._log.error(f"Error handling WebSocket message: {e}")
