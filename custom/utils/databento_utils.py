@@ -104,6 +104,20 @@ DatabentoClient = _DatabentoClient()
 if __name__ == "__main__":
     """
     Candidates
+    10/9 - BJDX
+    10/9 - TTRX (ipo 10/8)
+    10/9 - BAOS
+    10/8 - AMBO (after hours)
+    10/8 - XBIO
+    10/8 - ACXB
+    10/8 - XTLB
+    10/8 - BIAF
+    10/7 - BJDX
+    10/7 - CISS
+    10/7 - GLTO
+    10/6 - SPRB
+    10/6 - CRML
+    10/6 - SOPA
     10/2 - IVDA
     10/2 - CIGL
     10/1 - AKAN

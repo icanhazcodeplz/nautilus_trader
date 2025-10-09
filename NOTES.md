@@ -15,7 +15,7 @@ git merge develop
 ```
 3. Merge conflicts using pycharm
 4. commit and push local `dev` branch
-5. 
+5.
 
 From root repo:
 `make build`
@@ -44,7 +44,7 @@ python build.py
 - `python build.py` from root dir
 
 # TODO
-- FIXME: Fills do not consider other fills in same interval. 
+- FIXME: Fills do not consider other fills in same interval.
   - Forcibly combine orders if price the same?
   - Adjust core logic?
 - Add integration tests
@@ -72,3 +72,5 @@ cargo test --package nautilus-bitmex --lib http::parse::tests::test_parse_order_
 cd nautilus_trader
 cargo nextest run -p <insert_package_name_here>
 ```
+
+https://stackoverflow.com/questions/1463340/how-can-i-revert-multiple-git-commits
