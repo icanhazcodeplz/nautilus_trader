@@ -22,10 +22,12 @@ Provides integration with Alpaca Markets for both market data and order executio
 from nautilus_trader.adapters.alpaca.config import AlpacaDataClientConfig
 from nautilus_trader.adapters.alpaca.config import AlpacaExecClientConfig
 from nautilus_trader.adapters.alpaca.execution import AlpacaExecutionClient
+from nautilus_trader.adapters.alpaca.factories import AlpacaLiveExecClientFactory
 
 
 __all__ = [
     "AlpacaDataClientConfig",
     "AlpacaExecClientConfig",
     "AlpacaExecutionClient",
+    "AlpacaLiveExecClientFactory",
 ]

@@ -20,6 +20,9 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
+from nautilus_trader.adapters.alpaca.http import AlpacaHttpClient
+from nautilus_trader.adapters.alpaca.parsing import AlpacaEnumParser
+from nautilus_trader.adapters.alpaca.parsing import parse_order_status_report
 from nautilus_trader.common.enums import LogColor
 from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.execution.reports import FillReport
@@ -28,10 +31,14 @@ from nautilus_trader.execution.reports import PositionStatusReport
 from nautilus_trader.live.execution_client import LiveExecutionClient
 from nautilus_trader.model.enums import AccountType
 from nautilus_trader.model.enums import OmsType
+from nautilus_trader.model.enums import OrderType
 from nautilus_trader.model.identifiers import AccountId
 from nautilus_trader.model.identifiers import ClientId
+from nautilus_trader.model.identifiers import ClientOrderId
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.identifiers import Venue
+from nautilus_trader.model.identifiers import VenueOrderId
+from nautilus_trader.model.objects import Money
 
 
 if TYPE_CHECKING:
@@ -136,16 +143,37 @@ class AlpacaExecutionClient(LiveExecutionClient):
         self._log.info(f"HTTP base URL: {self._http_base_url}", LogColor.BLUE)
         self._log.info(f"WS base URL: {self._ws_base_url}", LogColor.BLUE)
 
-        # TODO: Initialize HTTP client (could use Rust client via PyO3 or Python requests)
+        # Initialize HTTP client
+        self._http_client = AlpacaHttpClient(
+            base_url=self._http_base_url,
+            api_key=self._api_key,
+            api_secret=self._api_secret,
+            timeout=self._http_timeout,
+            logger=self._log,
+        )
+
+        # Initialize enum parser
+        self._enum_parser = AlpacaEnumParser()
+
         # TODO: Initialize WebSocket client for order updates
 
     async def _connect(self) -> None:
         """Connect to Alpaca API."""
         self._log.info("Connecting to Alpaca...")
 
-        # TODO: Verify credentials by making a test API call
+        # Verify credentials by making a test API call
+        try:
+            account_data = await self._http_client.get_account()
+            self._log.info(f"Alpaca account: {account_data.get('account_number')}", LogColor.GREEN)
+            self._log.info(f"Account status: {account_data.get('status')}", LogColor.BLUE)
+        except Exception as e:
+            self._log.error(f"Failed to connect to Alpaca: {e}")
+            raise
+
+        # Update account state
+        await self._update_account_state()
+
         # TODO: Subscribe to order update WebSocket stream
-        # TODO: Update account state
 
         self._log.info("Connected to Alpaca", LogColor.GREEN)
 
@@ -153,10 +181,37 @@ class AlpacaExecutionClient(LiveExecutionClient):
         """Disconnect from Alpaca API."""
         self._log.info("Disconnecting from Alpaca...")
 
+        # Close HTTP client
+        await self._http_client.close()
+
         # TODO: Close WebSocket connections
-        # TODO: Cancel any pending requests
 
         self._log.info("Disconnected from Alpaca")
+
+    async def _update_account_state(self) -> None:
+        """Update account state from Alpaca API."""
+        try:
+            account_data = await self._http_client.get_account()
+
+            # Parse account balances
+            cash = Money.from_str(f"{account_data['cash']} USD")
+            buying_power = Money.from_str(f"{account_data['buying_power']} USD")
+            equity = Money.from_str(f"{account_data['equity']} USD")
+
+            balances = [cash]
+            margins = [buying_power]
+
+            # Generate account state
+            self.generate_account_state(
+                balances=balances,
+                margins=margins,
+                reported=True,
+                ts_event=self._clock.timestamp_ns(),
+            )
+
+            self._log.info(f"Updated account state: Equity=${equity}", LogColor.BLUE)
+        except Exception as e:
+            self._log.error(f"Failed to update account state: {e}")
 
     # -- EXECUTION REPORTS --------------------------------------------------------------------
 
@@ -180,11 +235,33 @@ class AlpacaExecutionClient(LiveExecutionClient):
         """
         self._log.debug(f"Generating OrderStatusReport for {command.client_order_id}")
 
-        # TODO: Query Alpaca API for order status
-        # TODO: Parse response into OrderStatusReport
-        # TODO: Return the report
+        try:
+            # Try to get venue_order_id from cache
+            venue_order_id = command.venue_order_id
+            if not venue_order_id and command.client_order_id:
+                venue_order_id = self._cache.venue_order_id(command.client_order_id)
 
-        return None
+            if not venue_order_id:
+                self._log.warning(f"Cannot find venue_order_id for {command.client_order_id}")
+                return None
+
+            # Query Alpaca API for order status
+            alpaca_order = await self._http_client.get_order(venue_order_id.value)
+
+            # Parse response into OrderStatusReport
+            report = parse_order_status_report(
+                alpaca_order=alpaca_order,
+                account_id=self.account_id,
+                instrument_id=command.instrument_id,
+                ts_init=self._clock.timestamp_ns(),
+            )
+
+            self._log.debug(f"Generated {report}")
+            return report
+
+        except Exception as e:
+            self._log.error(f"Failed to generate OrderStatusReport: {e}")
+            return None
 
     async def generate_order_status_reports(
         self,
@@ -208,9 +285,38 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
         reports: list[OrderStatusReport] = []
 
-        # TODO: Query Alpaca API for orders
-        # TODO: Parse responses into OrderStatusReport objects
-        # TODO: Return the reports
+        try:
+            # Determine status filter
+            status = "open" if command.open_only else "all"
+
+            # Query Alpaca API for orders
+            alpaca_orders = await self._http_client.get_orders(status=status, limit=500)
+
+            # Parse responses into OrderStatusReport objects
+            for alpaca_order in alpaca_orders:
+                try:
+                    # Get instrument ID from symbol
+                    symbol = alpaca_order["symbol"]
+                    instrument_id = InstrumentId.from_str(f"{symbol}.{ALPACA_VENUE}")
+
+                    # Parse order
+                    report = parse_order_status_report(
+                        alpaca_order=alpaca_order,
+                        account_id=self.account_id,
+                        instrument_id=instrument_id,
+                        ts_init=self._clock.timestamp_ns(),
+                    )
+
+                    reports.append(report)
+                    self._log.debug(f"Generated {report}")
+
+                except Exception as e:
+                    self._log.error(f"Failed to parse order {alpaca_order.get('id')}: {e}")
+
+            self._log.info(f"Generated {len(reports)} OrderStatusReports")
+
+        except Exception as e:
+            self._log.error(f"Failed to generate OrderStatusReports: {e}")
 
         return reports
 
@@ -298,10 +404,72 @@ class AlpacaExecutionClient(LiveExecutionClient):
             ts_event=self._clock.timestamp_ns(),
         )
 
-        # TODO: Convert NautilusTrader order to Alpaca order format
-        # TODO: Submit order via HTTP API
-        # TODO: Handle response and generate appropriate events
-        #       (OrderAccepted, OrderRejected, etc.)
+        try:
+            # Convert NautilusTrader order to Alpaca order format
+            order_request = self._build_order_request(order)
+
+            # Submit order via HTTP API
+            alpaca_order = await self._http_client.submit_order(order_request)
+
+            # Generate order accepted event
+            venue_order_id = VenueOrderId(alpaca_order["id"])
+            self.generate_order_accepted(
+                strategy_id=order.strategy_id,
+                instrument_id=order.instrument_id,
+                client_order_id=order.client_order_id,
+                venue_order_id=venue_order_id,
+                ts_event=self._clock.timestamp_ns(),
+            )
+
+            self._log.info(f"Order accepted: {venue_order_id}")
+
+        except Exception as e:
+            self._log.error(f"Failed to submit order: {e}")
+            self.generate_order_rejected(
+                strategy_id=order.strategy_id,
+                instrument_id=order.instrument_id,
+                client_order_id=order.client_order_id,
+                reason=str(e),
+                ts_event=self._clock.timestamp_ns(),
+            )
+
+    def _build_order_request(self, order) -> dict:
+        """Build Alpaca order request from NautilusTrader order."""
+        # Extract symbol (remove venue suffix)
+        symbol = order.instrument_id.symbol.value.split(".")[0]
+
+        # Convert order side
+        side = self._enum_parser.parse_nautilus_order_side(order.side)
+
+        # Convert order type
+        order_type = self._enum_parser.parse_nautilus_order_type(order.order_type)
+
+        # Convert time in force
+        time_in_force = self._enum_parser.parse_nautilus_time_in_force(order.time_in_force)
+
+        # Build base request
+        request = {
+            "symbol": symbol,
+            "qty": str(order.quantity),
+            "side": side,
+            "type": order_type,
+            "time_in_force": time_in_force,
+            "client_order_id": order.client_order_id.value,
+        }
+
+        # Add limit price if applicable
+        if order.order_type in (OrderType.LIMIT, OrderType.STOP_LIMIT):
+            request["limit_price"] = str(order.price)
+
+        # Add stop price if applicable
+        if order.order_type == OrderType.STOP_LIMIT:
+            request["stop_price"] = str(order.trigger_price)
+
+        # Add trail for trailing stop orders
+        if order.order_type == OrderType.TRAILING_STOP_MARKET:
+            request["trail_percent"] = str(order.trailing_offset_pct)
+
+        return request
 
     async def _modify_order(self, command: ModifyOrder) -> None:
         """
@@ -332,10 +500,48 @@ class AlpacaExecutionClient(LiveExecutionClient):
         """
         self._log.info(f"Canceling order: {command.client_order_id}")
 
-        # TODO: Get order from cache
-        # TODO: Cancel order via HTTP API
-        # TODO: Handle response and generate appropriate events
-        #       (OrderCanceled, OrderCancelRejected, etc.)
+        try:
+            # Get order from cache
+            order = self._cache.order(command.client_order_id)
+            if not order:
+                self._log.error(f"Order {command.client_order_id} not found in cache")
+                return
+
+            if order.is_closed:
+                self._log.warning(f"Order {command.client_order_id} is already closed")
+                return
+
+            # Get venue order ID
+            venue_order_id = command.venue_order_id or self._cache.venue_order_id(command.client_order_id)
+            if not venue_order_id:
+                self._log.error(f"No venue_order_id found for {command.client_order_id}")
+                return
+
+            # Cancel order via HTTP API
+            await self._http_client.cancel_order(venue_order_id.value)
+
+            # Generate order canceled event
+            self.generate_order_canceled(
+                strategy_id=order.strategy_id,
+                instrument_id=order.instrument_id,
+                client_order_id=order.client_order_id,
+                venue_order_id=venue_order_id,
+                ts_event=self._clock.timestamp_ns(),
+            )
+
+            self._log.info(f"Order canceled: {venue_order_id}")
+
+        except Exception as e:
+            self._log.error(f"Failed to cancel order: {e}")
+            if order:
+                self.generate_order_cancel_rejected(
+                    strategy_id=order.strategy_id,
+                    instrument_id=order.instrument_id,
+                    client_order_id=order.client_order_id,
+                    venue_order_id=venue_order_id if venue_order_id else None,
+                    reason=str(e),
+                    ts_event=self._clock.timestamp_ns(),
+                )
 
     async def _cancel_all_orders(self, command: CancelAllOrders) -> None:
         """
@@ -349,8 +555,36 @@ class AlpacaExecutionClient(LiveExecutionClient):
         """
         self._log.info(f"Canceling all orders for {command.instrument_id}")
 
-        # TODO: Cancel all orders via HTTP API
-        # TODO: Handle responses and generate appropriate events
+        try:
+            # Cancel all orders via HTTP API
+            # Note: Alpaca cancels ALL orders, not just for a specific instrument
+            results = await self._http_client.cancel_all_orders()
+
+            self._log.info(f"Canceled {len(results)} orders")
+
+            # Generate events for each canceled order
+            for result in results:
+                try:
+                    venue_order_id = VenueOrderId(result["id"])
+                    client_order_id_str = result.get("client_order_id")
+
+                    if client_order_id_str:
+                        client_order_id = ClientOrderId(client_order_id_str)
+                        order = self._cache.order(client_order_id)
+
+                        if order:
+                            self.generate_order_canceled(
+                                strategy_id=order.strategy_id,
+                                instrument_id=order.instrument_id,
+                                client_order_id=client_order_id,
+                                venue_order_id=venue_order_id,
+                                ts_event=self._clock.timestamp_ns(),
+                            )
+                except Exception as e:
+                    self._log.error(f"Failed to generate cancel event for order {result.get('id')}: {e}")
+
+        except Exception as e:
+            self._log.error(f"Failed to cancel all orders: {e}")
 
     async def _query_account(self, command: QueryAccount) -> None:
         """
@@ -364,5 +598,5 @@ class AlpacaExecutionClient(LiveExecutionClient):
         """
         self._log.debug("Querying account...")
 
-        # TODO: Query account via HTTP API
-        # TODO: Update account state
+        # Query account via HTTP API and update account state
+        await self._update_account_state()
