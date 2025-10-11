@@ -26,21 +26,23 @@ from nautilus_trader.adapters.alpaca.parsing import parse_order_status_report
 from nautilus_trader.adapters.alpaca.websocket import AlpacaWebSocketClient
 from nautilus_trader.common.enums import LogColor
 from nautilus_trader.core.uuid import UUID4
+
+from nautilus_trader.common.providers import InstrumentProvider
 from nautilus_trader.execution.reports import FillReport
 from nautilus_trader.execution.reports import OrderStatusReport
 from nautilus_trader.execution.reports import PositionStatusReport
 from nautilus_trader.live.execution_client import LiveExecutionClient
+from nautilus_trader.model.currencies import USD
 from nautilus_trader.model.enums import AccountType
 from nautilus_trader.model.enums import OmsType
 from nautilus_trader.model.enums import OrderType
-from nautilus_trader.model.identifiers import AccountId
+from nautilus_trader.model.identifiers import AccountId, Symbol
 from nautilus_trader.model.identifiers import ClientId
 from nautilus_trader.model.identifiers import ClientOrderId
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.identifiers import Venue
 from nautilus_trader.model.identifiers import VenueOrderId
-from nautilus_trader.model.objects import Money
-
+from nautilus_trader.model.objects import Money, AccountBalance, MarginBalance
 
 if TYPE_CHECKING:
     import asyncio
@@ -91,6 +93,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
         cache: Cache,
         clock: LiveClock,
         config: AlpacaExecClientConfig,
+        instrument_provider: InstrumentProvider | None = None,
         name: str | None = None,
     ) -> None:
         # Determine account type
@@ -102,7 +105,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
             client_id=ClientId(name or ALPACA_VENUE.value),
             venue=ALPACA_VENUE,
             oms_type=OmsType.NETTING,
-            instrument_provider=None,  # Will be set separately if needed
+            instrument_provider=instrument_provider,  # Will be set separately if needed
             account_type=account_type,
             base_currency=None,  # Will be determined from account
             msgbus=msgbus,
@@ -130,6 +133,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
         else:
             self._http_base_url = "https://paper-api.alpaca.markets"
 
+        # FIXME: BRENT: need to adjust for paper trading
         if config.ws_base_url:
             self._ws_base_url = config.ws_base_url
         else:
@@ -165,6 +169,21 @@ class AlpacaExecutionClient(LiveExecutionClient):
             logger=self._log,
         )
 
+        self._instrument_provider.load_all()
+    #     BRENT. Instruments loaded here
+
+    @property
+    def instrument_provider(self):
+        """
+        Return the instrument provider for the client.
+
+        Returns
+        -------
+        BetfairInstrumentProvider
+
+        """
+        return self._instrument_provider
+
     async def _connect(self) -> None:
         """Connect to Alpaca API."""
         self._log.info("Connecting to Alpaca...")
@@ -182,14 +201,14 @@ class AlpacaExecutionClient(LiveExecutionClient):
         await self._update_account_state()
 
         # Connect to WebSocket and subscribe to trade updates
-        try:
-            await self._ws_client.connect()
-            await self._ws_client.subscribe_trade_updates()
-            self._log.info("Subscribed to trade updates", LogColor.GREEN)
-        except Exception as e:
-            self._log.error(f"Failed to connect to WebSocket: {e}")
-            # Don't fail completely if WebSocket fails, can still use HTTP polling
-            self._log.warning("Continuing without WebSocket updates")
+        # try:
+        await self._ws_client.connect()
+        await self._ws_client.subscribe_trade_updates()
+        self._log.info("Subscribed to trade updates", LogColor.GREEN)
+        # except Exception as e:
+        #     self._log.error(f"Failed to connect to WebSocket: {e}")
+        #     # Don't fail completely if WebSocket fails, can still use HTTP polling
+        #     self._log.warning("Continuing without WebSocket updates")
 
         self._log.info("Connected to Alpaca", LogColor.GREEN)
 
@@ -207,28 +226,28 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
     async def _update_account_state(self) -> None:
         """Update account state from Alpaca API."""
-        try:
-            account_data = await self._http_client.get_account()
+        # try:
+        account_data = await self._http_client.get_account()
 
-            # Parse account balances
-            cash = Money.from_str(f"{account_data['cash']} USD")
-            buying_power = Money.from_str(f"{account_data['buying_power']} USD")
-            equity = Money.from_str(f"{account_data['equity']} USD")
+        # Parse account balances
+        cash = Money.from_str(f"{account_data['cash']} USD")
+        # buying_power = Money.from_str(f"{account_data['buying_power']} USD")
+        equity = Money.from_str(f"{account_data['equity']} USD")
+        zero_usd = Money(0.00, USD)
+        balances = [AccountBalance(total=cash, locked=zero_usd, free=cash)]
+        margins = [MarginBalance(zero_usd, zero_usd)]
 
-            balances = [cash]
-            margins = [buying_power]
+        # Generate account state
+        self.generate_account_state(
+            balances=balances,
+            margins=margins,
+            reported=True,
+            ts_event=self._clock.timestamp_ns(),
+        )
 
-            # Generate account state
-            self.generate_account_state(
-                balances=balances,
-                margins=margins,
-                reported=True,
-                ts_event=self._clock.timestamp_ns(),
-            )
-
-            self._log.info(f"Updated account state: Equity=${equity}", LogColor.BLUE)
-        except Exception as e:
-            self._log.error(f"Failed to update account state: {e}")
+        self._log.info(f"Updated account state: Equity=${equity}", LogColor.BLUE)
+        # except Exception as e:
+        #     self._log.error(f"Failed to update account state: {e}")
 
     # -- EXECUTION REPORTS --------------------------------------------------------------------
 

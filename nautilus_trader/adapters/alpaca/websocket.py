@@ -23,9 +23,9 @@ from typing import Any
 from typing import Callable
 
 import websockets
-from websockets.client import WebSocketClientProtocol
 
 from nautilus_trader.common.component import Logger
+from websockets import State
 
 
 class AlpacaWebSocketClient:
@@ -60,7 +60,7 @@ class AlpacaWebSocketClient:
         self._api_secret = api_secret
         self._handler = handler
         self._log = logger
-        self._ws: WebSocketClientProtocol | None = None
+        self._ws = None
         self._task: asyncio.Task | None = None
         self._is_running = False
         self._is_authenticated = False
@@ -68,7 +68,7 @@ class AlpacaWebSocketClient:
     @property
     def is_connected(self) -> bool:
         """Return whether the WebSocket is connected."""
-        return self._ws is not None and self._ws.open
+        return self._ws is not None and self._ws.state == State.OPEN
 
     @property
     def is_authenticated(self) -> bool:

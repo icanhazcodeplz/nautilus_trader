@@ -32,6 +32,7 @@ IS_ARM64 = platform.machine() in ("arm64", "aarch64")
 RUSTUP_TOOLCHAIN = os.getenv("RUSTUP_TOOLCHAIN", "stable")
 # The Cargo build mode
 BUILD_MODE = os.getenv("BUILD_MODE", "release")
+# FIXME: BRENT Be sure to turn on "build_mode" when running in production!
 # If PROFILE_MODE mode is enabled, include traces necessary for coverage and profiling
 PROFILE_MODE = bool(os.getenv("PROFILE_MODE", ""))
 # If ANNOTATION mode is enabled, generate an annotated HTML version of the input source files

@@ -13,6 +13,14 @@ The Alpaca adapter provides integration with [Alpaca Markets](https://alpaca.mar
 - **AlpacaDataClientConfig**: Configuration for market data client
 - **AlpacaExecClientConfig**: Configuration for execution client
 
+### Providers
+
+- **AlpacaInstrumentProvider**: Loads tradeable instruments from Alpaca
+  - Fetches all US equities, crypto, and options
+  - Converts to Nautilus `Equity` instruments
+  - Supports fractionable shares
+  - Handles margin requirements
+
 ### Execution Client
 
 - **AlpacaExecutionClient**: Live execution client for order management
@@ -60,24 +68,40 @@ The adapter includes a Rust core implementation (see `crates/adapters/alpaca/`) 
 
 ## Usage
 
+### Basic Configuration
+
 ```python
-from nautilus_trader.adapters.alpaca import AlpacaExecClientConfig, AlpacaExecutionClient
+from nautilus_trader.adapters.alpaca import ALPACA
+from nautilus_trader.adapters.alpaca import AlpacaExecClientConfig
+from nautilus_trader.adapters.alpaca import AlpacaLiveExecClientFactory
+from nautilus_trader.config import TradingNodeConfig
 
 # Configure the execution client
-config = AlpacaExecClientConfig(
-    api_key="your_api_key",
-    api_secret="your_api_secret",
-    environment="paper",  # or "live"
+config = TradingNodeConfig(
+    exec_clients={
+        ALPACA: AlpacaExecClientConfig(
+            environment="paper",  # or "live"
+            # api_key and api_secret will be sourced from environment variables
+        ),
+    },
 )
+```
 
-# Create the execution client
-client = AlpacaExecutionClient(
-    loop=loop,
-    msgbus=msgbus,
-    cache=cache,
-    clock=clock,
-    config=config,
-)
+### Examples
+
+See the `examples/live/alpaca/` directory for complete examples:
+
+- **`alpaca_exec_tester.py`**: Full execution testing with the ExecTester strategy
+- **`alpaca_simple_order.py`**: Simple order submission and cancellation example
+
+Run an example:
+```bash
+# Set your credentials
+export ALPACA_API_KEY="your_api_key"
+export ALPACA_API_SECRET="your_api_secret"
+
+# Run the execution tester
+python examples/live/alpaca/alpaca_exec_tester.py
 ```
 
 ## Environment Variables

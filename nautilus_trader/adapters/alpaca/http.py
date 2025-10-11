@@ -137,6 +137,83 @@ class AlpacaHttpClient:
         """Get account information."""
         return await self._request("GET", "/v2/account")  # type: ignore
 
+    # Assets API
+
+    def get_assets_non_async(
+        self,
+        status: str | None = None,
+        asset_class: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Get assets.
+
+        Parameters
+        ----------
+        status : str, optional
+            Filter by asset status (active, inactive).
+        asset_class : str, optional
+            Filter by asset class (us_equity, crypto).
+
+        Returns
+        -------
+        list[dict[str, Any]]
+            List of assets.
+
+        """
+        params = {}
+        if status:
+            params["status"] = status
+        if asset_class:
+            params["asset_class"] = asset_class
+
+        return self._request("GET", "/v2/assets", params=params)  # type: ignore
+
+    async def get_assets(
+        self,
+        status: str | None = None,
+        asset_class: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Get assets.
+
+        Parameters
+        ----------
+        status : str, optional
+            Filter by asset status (active, inactive).
+        asset_class : str, optional
+            Filter by asset class (us_equity, crypto).
+
+        Returns
+        -------
+        list[dict[str, Any]]
+            List of assets.
+
+        """
+        params = {}
+        if status:
+            params["status"] = status
+        if asset_class:
+            params["asset_class"] = asset_class
+
+        return await self._request("GET", "/v2/assets", params=params)  # type: ignore
+
+    async def get_asset(self, symbol: str) -> dict[str, Any]:
+        """
+        Get a specific asset.
+
+        Parameters
+        ----------
+        symbol : str
+            The asset symbol.
+
+        Returns
+        -------
+        dict[str, Any]
+            The asset details.
+
+        """
+        return await self._request("GET", f"/v2/assets/{symbol}")  # type: ignore
+
     # Orders API
 
     async def get_orders(

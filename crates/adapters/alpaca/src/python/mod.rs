@@ -15,11 +15,14 @@
 
 //! Python bindings for the Alpaca adapter.
 
+pub mod websocket;
+
 use pyo3::prelude::*;
 
 /// Loaded as nautilus_pyo3.adapters.alpaca
 #[pymodule]
 pub fn alpaca(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<crate::http::AlpacaHttpClient>()?;
+    m.add_class::<websocket::PyAlpacaWebSocketClient>()?;
     Ok(())
 }
