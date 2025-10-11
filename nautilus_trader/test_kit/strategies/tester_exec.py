@@ -18,7 +18,6 @@ from typing import Any
 
 import pandas as pd
 
-from nautilus_trader.adapters.alpaca import AlpacaInstrumentProvider
 from nautilus_trader.common.enums import LogColor
 from nautilus_trader.config import PositiveInt
 from nautilus_trader.config import StrategyConfig
@@ -36,7 +35,7 @@ from nautilus_trader.model.enums import TriggerType
 from nautilus_trader.model.identifiers import ClientId
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.instruments import Instrument
-from nautilus_trader.model.objects import Price, Quantity
+from nautilus_trader.model.objects import Price
 from nautilus_trader.model.orders import LimitIfTouchedOrder
 from nautilus_trader.model.orders import LimitOrder
 from nautilus_trader.model.orders import MarketIfTouchedOrder
@@ -131,17 +130,15 @@ class ExecTester(Strategy):
         """
         Actions to be performed on strategy start.
         """
-        # self.instrument = self.cache.instrument(self.config.instrument_id)
-        # if self.instrument is None:
-        #     self.log.error(f"Could not find instrument for {self.config.instrument_id}")
-        #     self.stop()
-        #     return
+        self.instrument = self.cache.instrument(self.config.instrument_id)
+        if self.instrument is None:
+            self.log.error(f"Could not find instrument for {self.config.instrument_id}")
+            self.stop()
+            return
 
-        self.price_offset = 0.01
-        # self.price_offset = self.get_price_offset(self.instrument)
+        self.price_offset = self.get_price_offset(self.instrument)
 
         # Subscribe to live data
-        self.subscribe_quote_ticks(self.config.instrument_id, client_id=self.client_id)
         if self.config.subscribe_quotes:
             self.subscribe_quote_ticks(self.config.instrument_id, client_id=self.client_id)
 
@@ -310,9 +307,9 @@ class ExecTester(Strategy):
                 self.submit_limit_order(OrderSide.SELL, price)
 
     def open_position(self, net_qty: Decimal) -> None:
-        # if not self.instrument:
-        #     self.log.error("No instrument loaded")
-        #     return
+        if not self.instrument:
+            self.log.error("No instrument loaded")
+            return
 
         if net_qty == Decimal(0):
             self.log.warning(f"Open position with {net_qty}, skipping")
@@ -321,8 +318,7 @@ class ExecTester(Strategy):
         order: MarketOrder = self.order_factory.market(
             instrument_id=self.config.instrument_id,
             order_side=OrderSide.BUY if net_qty > 0 else OrderSide.SELL,
-            # quantity=self.instrument.make_qty(self.config.order_qty),
-            quantity=Quantity(self.config.order_qty, 2),
+            quantity=self.instrument.make_qty(self.config.order_qty),
             time_in_force=self.config.open_position_time_in_force,
             quote_quantity=self.config.use_quote_quantity,
         )

@@ -120,20 +120,6 @@ node.build()
 # Run the node
 if __name__ == "__main__":
     try:
-        print("=" * 80)
-        print("Alpaca Data Tester")
-        print("=" * 80)
-        print(f"Environment: {environment}")
-        print(f"Symbol: {symbol}")
-        print("=" * 80)
-        print()
-        print("NOTE: WebSocket market data streaming is not yet fully implemented.")
-        print("The script will connect and load instruments, but real-time data")
-        print("subscriptions (quotes, trades, order book) are not yet available.")
-        print()
-        print("Press CTRL+C to stop...")
-        print()
-
         node.run()
     except KeyboardInterrupt:
         node.stop()

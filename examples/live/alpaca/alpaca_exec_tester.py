@@ -35,7 +35,8 @@ Requirements:
 
 from decimal import Decimal
 
-from nautilus_trader.adapters.alpaca import ALPACA, AlpacaInstrumentProvider, AlpacaExecutionClient
+from nautilus_trader.adapters.alpaca import ALPACA, AlpacaInstrumentProvider, AlpacaExecutionClient, \
+    AlpacaDataClientConfig, AlpacaLiveDataClientFactory
 from nautilus_trader.adapters.alpaca import AlpacaExecClientConfig
 from nautilus_trader.adapters.alpaca import AlpacaLiveExecClientFactory
 from nautilus_trader.adapters.alpaca.http import AlpacaHttpClient
@@ -95,6 +96,18 @@ config_node = TradingNodeConfig(
         timestamps_as_iso8601=True,
         buffer_interval_ms=100,
     ),
+    data_clients={
+        "ALPACA": AlpacaDataClientConfig(
+            api_key=None,  # 'ALPACA_API_KEY' env var
+            api_secret=None,  # 'ALPACA_API_SECRET' env var
+            environment=environment,
+            feed="iex",  # 'iex' or 'sip' (SIP requires paid subscription)
+            http_base_url=None,  # Override with custom endpoint
+            # ws_base_url=None,  # Override with custom endpoint
+            instrument_provider=InstrumentProviderConfig(load_all=True),
+        ),
+    },
+
     exec_clients={
         "ALPACA": AlpacaExecClientConfig(
             environment=environment,
@@ -139,6 +152,7 @@ strategy = ExecTester(config=config_tester)
 node.trader.add_strategy(strategy)
 
 # Register your client factories with the node
+node.add_data_client_factory("ALPACA", AlpacaLiveDataClientFactory)
 node.add_exec_client_factory("ALPACA", AlpacaLiveExecClientFactory)
 node.build()
 
@@ -149,25 +163,10 @@ node.build()
 
 if __name__ == "__main__":
     try:
-        print("=" * 80)
-        print("Alpaca Execution Tester")
-        print("=" * 80)
-        print(f"Environment: {environment}")
-        print(f"Instrument: {instrument_id}")
-        print(f"Trade Size: {trade_size} shares")
-        print(f"Offset Ticks: {offset_ticks}")
-        print(f"Dry Run: {dry_run}")
-        print("=" * 80)
-        print()
-
         if dry_run:
             print("⚠️  DRY RUN MODE - No actual orders will be placed")
         else:
             print("🔴 LIVE MODE - Real orders will be placed!")
-
-        print()
-        print("Press CTRL+C to stop...")
-        print()
 
         node.run()
     finally:
