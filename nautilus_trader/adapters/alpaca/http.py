@@ -51,8 +51,10 @@ class AlpacaHttpClient:
         api_secret: str,
         timeout: int,
         logger: Logger,
+        data_base_url: str | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
+        self._data_base_url = (data_base_url or "https://data.alpaca.markets").rstrip("/")
         self._api_key = api_key
         self._api_secret = api_secret
         self._timeout = timeout
@@ -414,3 +416,75 @@ class AlpacaHttpClient:
 
         """
         return await self._request("DELETE", "/v2/positions")  # type: ignore
+
+    # Market Data API
+
+    async def get_trades(
+        self,
+        symbol: str,
+        start: str | None = None,
+        end: str | None = None,
+        limit: int | None = None,
+        feed: str | None = None,
+        sort: str | None = None,
+        page_token: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Get historical trades for a symbol.
+
+        Parameters
+        ----------
+        symbol : str
+            The stock symbol.
+        start : str, optional
+            Start time in RFC-3339 format.
+        end : str, optional
+            End time in RFC-3339 format.
+        limit : int, optional
+            Maximum number of trades to return (max 10000).
+        feed : str, optional
+            The data feed: "iex" or "sip".
+        sort : str, optional
+            Sort order: "asc" or "desc".
+        page_token : str, optional
+            Pagination token for next page.
+
+        Returns
+        -------
+        dict[str, Any]
+            Dictionary with "trades" list and optional "next_page_token".
+
+        """
+        params = {}
+        if start:
+            params["start"] = start
+        if end:
+            params["end"] = end
+        if limit:
+            params["limit"] = limit
+        if feed:
+            params["feed"] = feed
+        if sort:
+            params["sort"] = sort
+        if page_token:
+            params["page_token"] = page_token
+
+        # Use data base URL instead of trading API base URL
+        session = await self._ensure_session()
+        url = f"{self._data_base_url}/v2/stocks/{symbol}/trades"
+        headers = self._get_headers()
+
+        self._log.debug(f"GET {url}")
+
+        async with session.request(
+            "GET",
+            url,
+            headers=headers,
+            params=params,
+        ) as response:
+            if response.status >= 400:
+                text = await response.text()
+                self._log.error(f"HTTP {response.status}: {text}")
+                raise Exception(f"HTTP {response.status}: {text}")
+
+            return await response.json()  # type: ignore

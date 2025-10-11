@@ -33,6 +33,7 @@ Requirements:
    python examples/live/alpaca/alpaca_data_tester.py
 
 """
+import pandas as pd
 
 from nautilus_trader.adapters.alpaca import ALPACA
 from nautilus_trader.adapters.alpaca import AlpacaDataClientConfig
@@ -102,6 +103,7 @@ config_tester = DataTesterConfig(
     # book_interval_ms=100,  # Sample book every 100ms
     request_trades=True,  # Historical trade data
     # request_bars=True,  # Historical bar data
+    requests_start_delta=pd.Timedelta("22 hours"),
 )
 
 # Setup the trading node

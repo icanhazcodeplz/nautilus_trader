@@ -46,6 +46,7 @@ def get_alpaca_http_client(
     api_secret: str,
     timeout: int,
     clock: LiveClock,
+    data_base_url: str | None = None,
 ) -> AlpacaHttpClient:
     """
     Cache and return an Alpaca HTTP client with the given parameters.
@@ -62,6 +63,8 @@ def get_alpaca_http_client(
         The timeout for HTTP requests (seconds).
     clock : LiveClock
         The clock instance.
+    data_base_url : str, optional
+        The base URL for market data API requests.
 
     Returns
     -------
@@ -79,6 +82,7 @@ def get_alpaca_http_client(
         api_secret=api_secret,
         timeout=timeout,
         logger=logger,
+        data_base_url=data_base_url,
     )
 
 
@@ -267,6 +271,9 @@ class AlpacaLiveDataClientFactory(LiveDataClientFactory):
             else:
                 ws_base_url = "wss://stream.data.alpaca.markets/v2/iex"
 
+        # Determine market data base URL
+        data_base_url = config.data_base_url or "https://data.alpaca.markets"
+
         # Create HTTP client
         http_client = get_alpaca_http_client(
             base_url=http_base_url,
@@ -274,6 +281,7 @@ class AlpacaLiveDataClientFactory(LiveDataClientFactory):
             api_secret=api_secret,
             timeout=config.http_timeout,
             clock=clock,
+            data_base_url=data_base_url,
         )
 
         # Create instrument provider if configured

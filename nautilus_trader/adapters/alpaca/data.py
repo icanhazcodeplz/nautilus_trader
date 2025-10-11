@@ -18,14 +18,22 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from nautilus_trader.adapters.alpaca.execution import ALPACA_VENUE
 from nautilus_trader.adapters.alpaca.http import AlpacaHttpClient
 from nautilus_trader.adapters.alpaca.providers import AlpacaInstrumentProvider
 from nautilus_trader.common.enums import LogColor
+from nautilus_trader.core.datetime import dt_to_unix_nanos
+from nautilus_trader.core.datetime import ensure_pydatetime_utc
 from nautilus_trader.live.data_client import LiveMarketDataClient
+from nautilus_trader.model.data import TradeTick
+from nautilus_trader.model.enums import AggressorSide
 from nautilus_trader.model.identifiers import ClientId
+from nautilus_trader.model.identifiers import TradeId
+from nautilus_trader.model.objects import Price
+from nautilus_trader.model.objects import Quantity
 
 
 if TYPE_CHECKING:
@@ -239,6 +247,108 @@ class AlpacaDataClient(LiveMarketDataClient):
         self._log.debug(f"Unsubscribe trade ticks {command.instrument_id} requested")
 
     async def _request_trade_ticks(self, request: RequestTradeTicks) -> None:
+        """Request historical trade ticks."""
+        # Extract symbol from instrument_id (format: SYMBOL.ALPACA)
+        symbol = request.instrument_id.symbol.value
 
-        print()
-        self._http_client
+        # Get the instrument for precision
+        instrument = self._cache.instrument(request.instrument_id)
+        if instrument is None:
+            self._log.error(
+                f"Cannot request trades for unknown instrument {request.instrument_id}",
+            )
+            return
+
+        # Prepare request parameters
+        limit = request.limit
+        if limit is not None and limit > 10000:
+            self._log.warning(
+                f"Alpaca limit {limit} exceeds maximum of 10000, clamping",
+            )
+            limit = 10000
+
+        # Convert timestamps to RFC-3339 format
+        start_str = None
+        end_str = None
+        if request.start:
+            start_dt = ensure_pydatetime_utc(request.start)
+            start_str = start_dt.isoformat()
+        if request.end:
+            end_dt = ensure_pydatetime_utc(request.end)
+            end_str = end_dt.isoformat()
+
+        # Request trades from Alpaca API
+        try:
+            response = await self._http_client.get_trades(
+                symbol=symbol,
+                start=start_str,
+                end=end_str,
+                limit=limit,
+                feed=self._config.feed,
+            )
+        except Exception as exc:
+            self._log.exception(
+                f"Failed to request trades for {request.instrument_id}",
+                exc,
+            )
+            return
+
+        # Parse trades from response
+        trades_data = response.get("trades", [])
+        if not trades_data:
+            self._log.info(
+                f"No trades returned for {request.instrument_id}",
+            )
+            # Still call handler with empty list
+            self._handle_trade_ticks(
+                request.instrument_id,
+                [],
+                request.id,
+                request.start,
+                request.end,
+                request.params,
+            )
+            return
+
+        # Convert to TradeTick objects
+        trades = []
+        for trade_data in trades_data:
+            try:
+                # Parse timestamp (RFC-3339 format)
+                timestamp_str = trade_data["t"]
+                timestamp_dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+                ts_event = dt_to_unix_nanos(timestamp_dt)
+                ts_init = self._clock.timestamp_ns()
+
+                # Create TradeTick
+                trade = TradeTick(
+                    instrument_id=request.instrument_id,
+                    price=Price.from_str(str(trade_data["p"])),
+                    size=Quantity.from_str(str(trade_data["s"])),
+                    aggressor_side=AggressorSide.NO_AGGRESSOR,  # Alpaca doesn't provide this
+                    trade_id=TradeId(str(trade_data["i"])),
+                    ts_event=ts_event,
+                    ts_init=ts_init,
+                )
+                trades.append(trade)
+            except Exception as exc:
+                self._log.warning(
+                    f"Failed to parse trade data: {trade_data}",
+                    exc,
+                )
+                continue
+
+        self._log.info(
+            f"Received {len(trades)} trades for {request.instrument_id}",
+        )
+
+        # Send trades to data engine
+        self._handle_trade_ticks(
+            request.instrument_id,
+            trades,
+            request.id,
+            request.start,
+            request.end,
+            request.params,
+        )
+
