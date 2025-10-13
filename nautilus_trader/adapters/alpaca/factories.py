@@ -259,17 +259,11 @@ class AlpacaLiveDataClientFactory(LiveDataClientFactory):
         # Determine WebSocket base URL (for data streaming)
         # if config.ws_base_url:
         #     ws_base_url = config.ws_base_url
-        if config.environment == "live":
-            if config.feed == "sip":
-                ws_base_url = "wss://stream.data.alpaca.markets/v2/sip"
-            else:
-                ws_base_url = "wss://stream.data.alpaca.markets/v2/iex"
+        # Paper trading uses same data feed as live
+        if config.feed == "sip":
+            ws_base_url = "wss://stream.data.alpaca.markets/v2/sip"
         else:
-            # Paper trading uses same data feed as live
-            if config.feed == "sip":
-                ws_base_url = "wss://stream.data.alpaca.markets/v2/sip"
-            else:
-                ws_base_url = "wss://stream.data.alpaca.markets/v2/iex"
+            ws_base_url = "wss://stream.data.alpaca.markets/v2/iex"
 
         # Determine market data base URL
         data_base_url = config.data_base_url or "https://data.alpaca.markets"

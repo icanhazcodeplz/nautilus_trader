@@ -85,7 +85,7 @@ config_node = TradingNodeConfig(
         use_pyo3=True,
     ),
     exec_engine=LiveExecEngineConfig(
-        reconciliation=True,  # Reconcile state with exchange on startup
+        reconciliation=False,  # Closes position if script fails or is stopped.
         # snapshot_orders=True,
         # snapshot_positions=True,
         # snapshot_positions_interval_secs=5.0,
@@ -127,10 +127,6 @@ config_node = TradingNodeConfig(
 node = TradingNode(config=config_node)
 
 
-# =====================================================================================
-# Strategy Configuration
-# =====================================================================================
-
 config_tester = ExecTesterConfig(
     instrument_id=instrument_id,
     external_order_claims=[instrument_id],
@@ -140,6 +136,7 @@ config_tester = ExecTesterConfig(
     subscribe_trades=False,  # Alpaca doesn't require trade subscription for this test
     use_post_only=False,  # Alpaca doesn't have a post-only flag
     close_positions_time_in_force=TimeInForce.DAY,  # Use DAY for Alpaca
+    close_positions_on_stop=False,
     open_position_on_start_qty=trade_size,
     dry_run=dry_run,
     log_data=True,
