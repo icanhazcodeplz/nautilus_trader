@@ -18,19 +18,23 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from nautilus_trader.adapters.alpaca.execution import ALPACA_VENUE
 from nautilus_trader.adapters.alpaca.http import AlpacaHttpClient
 from nautilus_trader.adapters.alpaca.providers import AlpacaInstrumentProvider
+from nautilus_trader.adapters.alpaca.websocket import AlpacaMarketDataWebSocketClient
 from nautilus_trader.common.enums import LogColor
 from nautilus_trader.core.datetime import dt_to_unix_nanos
 from nautilus_trader.core.datetime import ensure_pydatetime_utc
 from nautilus_trader.live.data_client import LiveMarketDataClient
+from nautilus_trader.model.data import QuoteTick
 from nautilus_trader.model.data import TradeTick
 from nautilus_trader.model.enums import AggressorSide
 from nautilus_trader.model.identifiers import ClientId
+from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.identifiers import TradeId
 from nautilus_trader.model.objects import Price
 from nautilus_trader.model.objects import Quantity
@@ -41,7 +45,8 @@ if TYPE_CHECKING:
     from nautilus_trader.cache.cache import Cache
     from nautilus_trader.common.component import LiveClock
     from nautilus_trader.common.component import MessageBus
-    from nautilus_trader.data.messages import SubscribeInstrument, RequestTradeTicks
+    from nautilus_trader.data.messages import RequestTradeTicks
+    from nautilus_trader.data.messages import SubscribeInstrument
     from nautilus_trader.data.messages import SubscribeInstruments
     from nautilus_trader.data.messages import SubscribeOrderBook
     from nautilus_trader.data.messages import SubscribeQuoteTicks
@@ -110,15 +115,32 @@ class AlpacaDataClient(LiveMarketDataClient):
 
         # HTTP API
         self._http_client = http_client
-        self._log.info(f"HTTP client initialized", LogColor.BLUE)
+        self._log.info("HTTP client initialized", LogColor.BLUE)
 
         # WebSocket API
         self._ws_base_url = ws_base_url
         self._log.info(f"WebSocket URL: {ws_base_url}", LogColor.BLUE)
 
-        # WebSocket client will be initialized on connect
-        # TODO: Implement WebSocket client for market data streaming
-        self._ws_client = None
+        # Get API credentials from config or environment
+        api_key = config.api_key or os.getenv("ALPACA_API_KEY")
+        api_secret = config.api_secret or os.getenv("ALPACA_API_SECRET")
+
+        if not api_key or not api_secret:
+            self._log.warning(
+                "API credentials not provided, WebSocket streaming will not be available",
+                LogColor.YELLOW,
+            )
+            self._ws_client = None
+        else:
+            # Initialize WebSocket client for market data streaming
+            self._ws_client = AlpacaMarketDataWebSocketClient(
+                url=ws_base_url,
+                api_key=api_key,
+                api_secret=api_secret,
+                handler=self._handle_ws_message,
+                logger=self._log,
+            )
+            self._log.info("Market data WebSocket client initialized", LogColor.BLUE)
 
     @property
     def instrument_provider(self) -> AlpacaInstrumentProvider:
@@ -133,13 +155,22 @@ class AlpacaDataClient(LiveMarketDataClient):
         self._cache_instruments()
         self._send_all_instruments_to_data_engine()
 
-        # TODO: Connect WebSocket client for market data streaming
-        # The WebSocket implementation for market data is not yet complete
-        self._log.warning(
-            "WebSocket market data streaming not yet implemented. "
-            "Only instrument data is available.",
-            LogColor.YELLOW,
-        )
+        # Connect WebSocket client for market data streaming
+        if self._ws_client:
+            try:
+                await self._ws_client.connect()
+                self._log.info("WebSocket market data streaming connected", LogColor.GREEN)
+            except Exception as e:
+                self._log.error(f"Failed to connect WebSocket client: {e}", LogColor.RED)
+                self._log.warning(
+                    "WebSocket streaming unavailable, only historical data requests will work",
+                    LogColor.YELLOW,
+                )
+        else:
+            self._log.warning(
+                "WebSocket client not initialized. Only historical data requests will work.",
+                LogColor.YELLOW,
+            )
 
         self._log.info("Connected to Alpaca data API", LogColor.GREEN)
 
@@ -147,12 +178,16 @@ class AlpacaDataClient(LiveMarketDataClient):
         """Disconnect from Alpaca data streams."""
         self._log.info("Disconnecting from Alpaca data API...")
 
+        # Disconnect WebSocket client
+        if self._ws_client:
+            try:
+                await self._ws_client.disconnect()
+                self._log.info("WebSocket client disconnected", LogColor.GREEN)
+            except Exception as e:
+                self._log.error(f"Error disconnecting WebSocket client: {e}", LogColor.RED)
+
         # Close HTTP client
         await self._http_client.close()
-
-        # TODO: Disconnect WebSocket client when implemented
-        # if self._ws_client:
-        #     await self._ws_client.disconnect()
 
         self._log.info("Disconnected from Alpaca data API", LogColor.GREEN)
 
@@ -176,7 +211,113 @@ class AlpacaDataClient(LiveMarketDataClient):
             LogColor.BLUE,
         )
 
-    # Subscription methods - TODO: Implement with WebSocket client
+    def _handle_ws_message(self, msg: dict[str, Any]) -> None:
+        """
+        Handle an incoming WebSocket message.
+
+        Parameters
+        ----------
+        msg : dict
+            The market data message.
+
+        """
+        msg_type = msg.get("T")
+
+        try:
+            if msg_type == "t":
+                # Trade message
+                self._handle_trade_message(msg)
+            elif msg_type == "q":
+                # Quote message
+                self._handle_quote_message(msg)
+            elif msg_type == "b":
+                # Bar message
+                self._handle_bar_message(msg)
+            else:
+                self._log.warning(f"Unknown market data message type: {msg_type}")
+        except Exception as e:
+            self._log.error(f"Error handling market data message: {e}")
+
+    def _handle_trade_message(self, msg: dict[str, Any]) -> None:
+        """Parse and handle a trade message."""
+        try:
+            # Extract symbol and create instrument ID
+            symbol = msg["S"]
+            instrument_id = InstrumentId.from_str(f"{symbol}.ALPACA")
+
+            # Get instrument for validation
+            instrument = self._cache.instrument(instrument_id)
+            if instrument is None:
+                self._log.warning(f"Received trade for unknown instrument: {instrument_id}")
+                return
+
+            # Parse timestamp (RFC-3339 format)
+            timestamp_str = msg["t"]
+            timestamp_dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+            ts_event = dt_to_unix_nanos(timestamp_dt)
+            ts_init = self._clock.timestamp_ns()
+
+            # Create TradeTick
+            trade = TradeTick(
+                instrument_id=instrument_id,
+                price=Price.from_str(str(msg["p"])),
+                size=Quantity.from_str(str(msg["s"])),
+                aggressor_side=AggressorSide.NO_AGGRESSOR,  # Alpaca doesn't provide this
+                trade_id=TradeId(str(msg["i"])),
+                ts_event=ts_event,
+                ts_init=ts_init,
+            )
+
+            # Send to data engine
+            self._handle_data(trade)
+
+        except Exception as e:
+            self._log.error(f"Error parsing trade message: {e}")
+
+    def _handle_quote_message(self, msg: dict[str, Any]) -> None:
+        """Parse and handle a quote message."""
+        try:
+            # Extract symbol and create instrument ID
+            symbol = msg["S"]
+            instrument_id = InstrumentId.from_str(f"{symbol}.ALPACA")
+
+            # Get instrument for validation
+            instrument = self._cache.instrument(instrument_id)
+            if instrument is None:
+                self._log.warning(f"Received quote for unknown instrument: {instrument_id}")
+                return
+
+            # Parse timestamp (RFC-3339 format)
+            timestamp_str = msg["t"]
+            timestamp_dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+            ts_event = dt_to_unix_nanos(timestamp_dt)
+            ts_init = self._clock.timestamp_ns()
+
+            # Create QuoteTick
+
+            quote = QuoteTick(
+                instrument_id=instrument_id,
+                bid_price=instrument.make_price(msg["bp"]),
+                ask_price=instrument.make_price(msg["ap"]),
+                bid_size=instrument.make_qty(msg["bs"]),
+                ask_size=instrument.make_qty(msg["as"]),
+                ts_event=ts_event,
+                ts_init=ts_init,
+            )
+
+            # Send to data engine
+            self._handle_data(quote)
+
+        except Exception as e:
+            self._log.error(f"Error parsing quote message: {e}")
+
+    def _handle_bar_message(self, msg: dict[str, Any]) -> None:
+        """Parse and handle a bar message."""
+        # TODO: Implement bar parsing when Bar data type is needed
+        self._log.debug(f"Received bar message for {msg.get('S')}")
+        raise NotImplementedError("Bar data type not yet implemented")
+
+    # Subscription methods
 
     async def _subscribe_instruments(self, command: SubscribeInstruments) -> None:
         """Subscribe to instrument updates."""
@@ -208,43 +349,99 @@ class AlpacaDataClient(LiveMarketDataClient):
 
     async def _subscribe_quote_ticks(self, command: SubscribeQuoteTicks) -> None:
         """Subscribe to quote ticks."""
-        self._log.warning(
-            f"Quote tick subscription for {command.instrument_id} not yet implemented",
-            LogColor.YELLOW,
-        )
+        if not self._ws_client or not self._ws_client.is_connected:
+            self._log.error(
+                f"Cannot subscribe to quote ticks for {command.instrument_id}: WebSocket not connected",
+                LogColor.RED,
+            )
+            return
+
+        # Extract symbol from instrument_id (format: SYMBOL.ALPACA)
+        symbol = command.instrument_id.symbol.value
+
+        try:
+            await self._ws_client.subscribe(quotes=[symbol])
+            self._log.info(
+                f"Subscribed to quote ticks for {command.instrument_id}",
+                LogColor.GREEN,
+            )
+        except Exception as e:
+            self._log.error(
+                f"Failed to subscribe to quote ticks for {command.instrument_id}: {e}",
+                LogColor.RED,
+            )
 
     async def _subscribe_trade_ticks(self, command: SubscribeTradeTicks) -> None:
         """Subscribe to trade ticks."""
-        self._log.warning(
-            f"Trade tick subscription for {command.instrument_id} not yet implemented",
-            LogColor.YELLOW,
-        )
+        if not self._ws_client or not self._ws_client.is_connected:
+            self._log.error(
+                f"Cannot subscribe to trade ticks for {command.instrument_id}: WebSocket not connected",
+                LogColor.RED,
+            )
+            return
 
-    # Unsubscription methods - TODO: Implement with WebSocket client
+        # Extract symbol from instrument_id (format: SYMBOL.ALPACA)
+        symbol = command.instrument_id.symbol.value
+
+        try:
+            await self._ws_client.subscribe(trades=[symbol])
+            self._log.info(
+                f"Subscribed to trade ticks for {command.instrument_id}",
+                LogColor.GREEN,
+            )
+        except Exception as e:
+            self._log.error(
+                f"Failed to subscribe to trade ticks for {command.instrument_id}: {e}",
+                LogColor.RED,
+            )
+
+    # Unsubscription methods
 
     async def _unsubscribe_instruments(self, command: UnsubscribeInstruments) -> None:
         """Unsubscribe from instrument updates."""
-        self._log.debug("Unsubscribe instruments requested")
+        self._log.debug("Unsubscribe instruments requested (not implemented)")
 
     async def _unsubscribe_instrument(self, command: UnsubscribeInstrument) -> None:
         """Unsubscribe from a specific instrument update."""
-        self._log.debug(f"Unsubscribe instrument {command.instrument_id} requested")
+        self._log.debug(f"Unsubscribe instrument {command.instrument_id} requested (not implemented)")
 
     async def _unsubscribe_order_book_deltas(self, command: UnsubscribeOrderBook) -> None:
         """Unsubscribe from order book deltas."""
-        self._log.debug(f"Unsubscribe order book deltas {command.instrument_id} requested")
+        self._log.debug(f"Unsubscribe order book deltas {command.instrument_id} requested (not implemented)")
 
     async def _unsubscribe_order_book_snapshots(self, command: UnsubscribeOrderBook) -> None:
         """Unsubscribe from order book snapshots."""
-        self._log.debug(f"Unsubscribe order book snapshots {command.instrument_id} requested")
+        self._log.debug(f"Unsubscribe order book snapshots {command.instrument_id} requested (not implemented)")
 
     async def _unsubscribe_quote_ticks(self, command: UnsubscribeQuoteTicks) -> None:
         """Unsubscribe from quote ticks."""
-        self._log.debug(f"Unsubscribe quote ticks {command.instrument_id} requested")
+        if not self._ws_client or not self._ws_client.is_connected:
+            self._log.debug(f"Cannot unsubscribe from quote ticks for {command.instrument_id}: WebSocket not connected")
+            return
+
+        # Extract symbol from instrument_id (format: SYMBOL.ALPACA)
+        symbol = command.instrument_id.symbol.value
+
+        try:
+            await self._ws_client.unsubscribe(quotes=[symbol])
+            self._log.info(f"Unsubscribed from quote ticks for {command.instrument_id}")
+        except Exception as e:
+            self._log.error(f"Failed to unsubscribe from quote ticks for {command.instrument_id}: {e}")
 
     async def _unsubscribe_trade_ticks(self, command: UnsubscribeTradeTicks) -> None:
         """Unsubscribe from trade ticks."""
-        self._log.debug(f"Unsubscribe trade ticks {command.instrument_id} requested")
+        if not self._ws_client or not self._ws_client.is_connected:
+            self._log.debug(f"Cannot unsubscribe from trade ticks for {command.instrument_id}: WebSocket not connected")
+            return
+
+        # Extract symbol from instrument_id (format: SYMBOL.ALPACA)
+        symbol = command.instrument_id.symbol.value
+
+        try:
+            await self._ws_client.unsubscribe(trades=[symbol])
+            self._log.info(f"Unsubscribed from trade ticks for {command.instrument_id}")
+        except Exception as e:
+            self._log.error(f"Failed to unsubscribe from trade ticks for {command.instrument_id}: {e}")
 
     async def _request_trade_ticks(self, request: RequestTradeTicks) -> None:
         """Request historical trade ticks."""

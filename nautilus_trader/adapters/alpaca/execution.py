@@ -20,12 +20,12 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
+from nautilus_trader.adapters.alpaca.enums import AlpacaOrderType, AlpacaTimeInForce
 from nautilus_trader.adapters.alpaca.http import AlpacaHttpClient
 from nautilus_trader.adapters.alpaca.parsing import AlpacaEnumParser
 from nautilus_trader.adapters.alpaca.parsing import parse_order_status_report
 from nautilus_trader.adapters.alpaca.websocket import AlpacaWebSocketClient
 from nautilus_trader.common.enums import LogColor
-from nautilus_trader.core.uuid import UUID4
 
 from nautilus_trader.common.providers import InstrumentProvider
 from nautilus_trader.execution.reports import FillReport
@@ -36,7 +36,7 @@ from nautilus_trader.model.currencies import USD
 from nautilus_trader.model.enums import AccountType
 from nautilus_trader.model.enums import OmsType
 from nautilus_trader.model.enums import OrderType
-from nautilus_trader.model.identifiers import AccountId, Symbol
+from nautilus_trader.model.identifiers import AccountId
 from nautilus_trader.model.identifiers import ClientId
 from nautilus_trader.model.identifiers import ClientOrderId
 from nautilus_trader.model.identifiers import InstrumentId
@@ -201,16 +201,8 @@ class AlpacaExecutionClient(LiveExecutionClient):
         await self._update_account_state()
 
         # Connect to WebSocket and subscribe to trade updates
-        # try:
         await self._ws_client.connect()
         await self._ws_client.subscribe_trade_updates()
-        self._log.info("Subscribed to trade updates", LogColor.GREEN)
-        # except Exception as e:
-        #     self._log.error(f"Failed to connect to WebSocket: {e}")
-        #     # Don't fail completely if WebSocket fails, can still use HTTP polling
-        #     self._log.warning("Continuing without WebSocket updates")
-
-        self._log.info("Connected to Alpaca", LogColor.GREEN)
 
     async def _disconnect(self) -> None:
         """Disconnect from Alpaca API."""
@@ -483,6 +475,8 @@ class AlpacaExecutionClient(LiveExecutionClient):
         # Convert time in force
         time_in_force = self._enum_parser.parse_nautilus_time_in_force(order.time_in_force)
 
+        # FIXME: BRENT should we prevent any market orders?
+        extended_hours = (order_type == AlpacaOrderType.LIMIT and time_in_force == AlpacaTimeInForce.DAY)
         # Build base request
         request = {
             "symbol": symbol,
@@ -491,6 +485,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
             "type": order_type,
             "time_in_force": time_in_force,
             "client_order_id": order.client_order_id.value,
+            "extended_hours": extended_hours,
         }
 
         # Add limit price if applicable
@@ -518,7 +513,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
         """
         self._log.info(f"Modifying order: {command.client_order_id}")
-
+        raise RuntimeError("Modify order not yet implemented")
         # TODO: Get order from cache
         # TODO: Modify order via HTTP API
         # TODO: Handle response and generate appropriate events

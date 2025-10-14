@@ -35,13 +35,11 @@ Requirements:
 
 from decimal import Decimal
 
-from nautilus_trader.adapters.alpaca import ALPACA, AlpacaInstrumentProvider, AlpacaExecutionClient, \
-    AlpacaDataClientConfig, AlpacaLiveDataClientFactory
+from custom.strategies.tester_exec import CustomExecTesterConfig, CustomExecTester
+from nautilus_trader.adapters.alpaca import AlpacaDataClientConfig, AlpacaLiveDataClientFactory
 from nautilus_trader.adapters.alpaca import AlpacaExecClientConfig
 from nautilus_trader.adapters.alpaca import AlpacaLiveExecClientFactory
-from nautilus_trader.adapters.alpaca.http import AlpacaHttpClient
 from nautilus_trader.cache.config import CacheConfig
-from nautilus_trader.common.component import LiveClock
 from nautilus_trader.config import InstrumentProviderConfig
 from nautilus_trader.config import LiveExecEngineConfig
 from nautilus_trader.config import LoggingConfig
@@ -58,38 +56,25 @@ from nautilus_trader.test_kit.strategies.tester_exec import ExecTesterConfig
 # Configuration
 # =====================================================================================
 
-# Instrument to trade (must be a valid Alpaca stock symbol)
 instrument_id = InstrumentId.from_str("AAPL.ALPACA")
-
-# Number of ticks to offset limit orders from the market
 offset_ticks = 1
-
-# Trade size in shares
 trade_size = Decimal("1")
-
-# Environment: "paper" or "live" (use paper for testing!)
-environment = "paper"
-
-# Dry run mode - if True, no actual orders will be placed
+environment = "paper"  # "paper" or "live"
 dry_run = False  # Set this to False to enable actual trading
 
 # =====================================================================================
 # Trading Node Configuration
 # =====================================================================================
 
-config = InstrumentProviderConfig(load_all=True)
+instrument_provider_config = InstrumentProviderConfig(
+    load_ids=frozenset([instrument_id]),
+    # FIXME: BRENT - figure out why all instruments are loaded when load_all=False
+    load_all=False,
+)
 config_node = TradingNodeConfig(
     trader_id=TraderId("TESTER-001"),
-    logging=LoggingConfig(
-        log_level="INFO",
-        use_pyo3=True,
-    ),
-    exec_engine=LiveExecEngineConfig(
-        reconciliation=False,  # Closes position if script fails or is stopped.
-        # snapshot_orders=True,
-        # snapshot_positions=True,
-        # snapshot_positions_interval_secs=5.0,
-    ),
+    logging=LoggingConfig(log_level="INFO", use_pyo3=True),
+    exec_engine=LiveExecEngineConfig(reconciliation=False),
     cache=CacheConfig(
         # database=DatabaseConfig(),
         encoding="msgpack",
@@ -98,22 +83,16 @@ config_node = TradingNodeConfig(
     ),
     data_clients={
         "ALPACA": AlpacaDataClientConfig(
-            api_key=None,  # 'ALPACA_API_KEY' env var
-            api_secret=None,  # 'ALPACA_API_SECRET' env var
             environment=environment,
             feed="iex",  # 'iex' or 'sip' (SIP requires paid subscription)
-            http_base_url=None,  # Override with custom endpoint
-            # ws_base_url=None,  # Override with custom endpoint
-            instrument_provider=InstrumentProviderConfig(load_all=True),
+            instrument_provider=instrument_provider_config,
         ),
     },
 
     exec_clients={
         "ALPACA": AlpacaExecClientConfig(
             environment=environment,
-            # api_key and api_secret will be sourced from environment variables:
-            # ALPACA_API_KEY and ALPACA_API_SECRET
-            instrument_provider=InstrumentProviderConfig(load_all=True),
+            instrument_provider=instrument_provider_config,
         ),
     },
     timeout_connection=60.0,
@@ -123,48 +102,34 @@ config_node = TradingNodeConfig(
     timeout_post_stop=5.0,
 )
 
-# Instantiate the node with a configuration
 node = TradingNode(config=config_node)
 
-
-config_tester = ExecTesterConfig(
+config_tester = CustomExecTesterConfig(
     instrument_id=instrument_id,
     external_order_claims=[instrument_id],
     order_qty=trade_size,
     tob_offset_ticks=offset_ticks,
-    subscribe_quotes=False,  # Alpaca doesn't require quote subscription for this test
-    subscribe_trades=False,  # Alpaca doesn't require trade subscription for this test
+    subscribe_quotes=False,
+    subscribe_trades=False,
     use_post_only=False,  # Alpaca doesn't have a post-only flag
     close_positions_time_in_force=TimeInForce.DAY,  # Use DAY for Alpaca
-    close_positions_on_stop=False,
+    close_positions_on_stop=True,
     open_position_on_start_qty=trade_size,
+    open_position_time_in_force=TimeInForce.DAY,
     dry_run=dry_run,
     log_data=True,
 )
+strategy = CustomExecTester(config=config_tester)
 
-# Instantiate your strategy
-strategy = ExecTester(config=config_tester)
-
-# Add your strategies and modules
 node.trader.add_strategy(strategy)
 
-# Register your client factories with the node
 node.add_data_client_factory("ALPACA", AlpacaLiveDataClientFactory)
 node.add_exec_client_factory("ALPACA", AlpacaLiveExecClientFactory)
 node.build()
 
 
-# =====================================================================================
-# Run the trading node
-# =====================================================================================
-
 if __name__ == "__main__":
     try:
-        if dry_run:
-            print("⚠️  DRY RUN MODE - No actual orders will be placed")
-        else:
-            print("🔴 LIVE MODE - Real orders will be placed!")
-
         node.run()
     finally:
         node.dispose()
