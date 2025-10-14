@@ -14,27 +14,9 @@
 #  limitations under the License.
 # -------------------------------------------------------------------------------------------------
 
-"""
-Alpaca execution tester example.
-
-This example demonstrates using the ExecTester strategy for testing
-execution functionality with Alpaca Markets.
-The strategy places limit orders at a specified offset from the market.
-
-Requirements:
-1. Set environment variables:
-   - ALPACA_API_KEY: Your Alpaca API key
-   - ALPACA_API_SECRET: Your Alpaca API secret
-
-2. Make sure you have a funded Alpaca paper trading account.
-
-3. Run the script:
-   python examples/live/alpaca/alpaca_exec_tester.py
-
-"""
-
 from decimal import Decimal
 
+from custom.strategies.momo import Momo, MomoConfig
 from custom.strategies.tester_exec import CustomExecTesterConfig, CustomExecTester
 from nautilus_trader.adapters.alpaca import AlpacaDataClientConfig, AlpacaLiveDataClientFactory, ALPACA
 from nautilus_trader.adapters.alpaca import AlpacaExecClientConfig
@@ -48,23 +30,13 @@ from nautilus_trader.live.node import TradingNode
 from nautilus_trader.model.enums import TimeInForce
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.identifiers import TraderId
-from nautilus_trader.test_kit.strategies.tester_exec import ExecTester
-from nautilus_trader.test_kit.strategies.tester_exec import ExecTesterConfig
 
-
-# =====================================================================================
-# Configuration
-# =====================================================================================
 
 instrument_id = InstrumentId.from_str("AAPL.ALPACA")
 offset_ticks = 1
 trade_size = Decimal("1")
 environment = "paper"  # "paper" or "live"
 dry_run = False  # Set this to False to enable actual trading
-
-# =====================================================================================
-# Trading Node Configuration
-# =====================================================================================
 
 instrument_provider_config = InstrumentProviderConfig(
     load_ids=frozenset([instrument_id]),
@@ -88,7 +60,6 @@ config_node = TradingNodeConfig(
             instrument_provider=instrument_provider_config,
         ),
     },
-
     exec_clients={
         ALPACA: AlpacaExecClientConfig(
             environment=environment,
@@ -104,22 +75,33 @@ config_node = TradingNodeConfig(
 
 node = TradingNode(config=config_node)
 
-config_tester = CustomExecTesterConfig(
+# strategy = CustomExecTester(config=CustomExecTesterConfig(
+#     instrument_id=instrument_id,
+#     external_order_claims=[instrument_id],
+#     order_qty=trade_size,
+#     tob_offset_ticks=offset_ticks,
+#     subscribe_quotes=False,
+#     subscribe_trades=False,
+#     use_post_only=False,  # Alpaca doesn't have a post-only flag
+#     close_positions_time_in_force=TimeInForce.DAY,  # Use DAY for Alpaca
+#     close_positions_on_stop=True,
+#     open_position_on_start_qty=trade_size,
+#     open_position_time_in_force=TimeInForce.DAY,
+#     dry_run=dry_run,
+#     log_data=True,
+# ))
+strategy = Momo(config=MomoConfig(
     instrument_id=instrument_id,
     external_order_claims=[instrument_id],
-    order_qty=trade_size,
-    tob_offset_ticks=offset_ticks,
-    subscribe_quotes=False,
-    subscribe_trades=False,
-    use_post_only=False,  # Alpaca doesn't have a post-only flag
-    close_positions_time_in_force=TimeInForce.DAY,  # Use DAY for Alpaca
-    close_positions_on_stop=True,
-    open_position_on_start_qty=trade_size,
-    open_position_time_in_force=TimeInForce.DAY,
-    dry_run=dry_run,
-    log_data=True,
-)
-strategy = CustomExecTester(config=config_tester)
+    trade_size=10,
+    max_position_multiplier=1,
+    stop_loss=0.30,
+    take_profit=0.30,
+    take_ratio=0.5,
+    vwap_window=50,
+    vwap_buy_threshold=0.20,
+    trailing_stop=True,
+))
 
 node.trader.add_strategy(strategy)
 

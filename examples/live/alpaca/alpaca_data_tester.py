@@ -71,7 +71,7 @@ config_node = TradingNodeConfig(
         reconciliation=False,  # Not applicable for data-only testing
     ),
     data_clients={
-        "ALPACA": AlpacaDataClientConfig(
+        ALPACA: AlpacaDataClientConfig(
             api_key=None,  # 'ALPACA_API_KEY' env var
             api_secret=None,  # 'ALPACA_API_SECRET' env var
             environment=environment,
@@ -114,7 +114,7 @@ node.trader.add_actor(DataTester(config=config_tester))
 
 # Register the data client factory
 from nautilus_trader.adapters.alpaca.factories import AlpacaLiveDataClientFactory
-node.add_data_client_factory("ALPACA", AlpacaLiveDataClientFactory)
+node.add_data_client_factory(ALPACA, AlpacaLiveDataClientFactory)
 node.build()
 
 # Run the node

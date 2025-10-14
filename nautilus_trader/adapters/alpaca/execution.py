@@ -61,9 +61,8 @@ if TYPE_CHECKING:
     from nautilus_trader.execution.messages import QueryAccount
     from nautilus_trader.execution.messages import SubmitOrder
 
-
+ALPACA = "ALPACA"
 ALPACA_VENUE = Venue("ALPACA")
-
 
 class AlpacaExecutionClient(LiveExecutionClient):
     """
