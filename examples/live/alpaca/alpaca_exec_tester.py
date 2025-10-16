@@ -48,15 +48,14 @@ from nautilus_trader.live.node import TradingNode
 from nautilus_trader.model.enums import TimeInForce
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.identifiers import TraderId
-from nautilus_trader.test_kit.strategies.tester_exec import ExecTester
-from nautilus_trader.test_kit.strategies.tester_exec import ExecTesterConfig
 
 
 # =====================================================================================
 # Configuration
 # =====================================================================================
+symbols = ["COOT", "AAPL"]
 
-instrument_id = InstrumentId.from_str("AAPL.ALPACA")
+instrument_ids = [InstrumentId.from_str(f"{symbol}.ALPACA") for symbol in symbols]
 offset_ticks = 1
 trade_size = Decimal("1")
 environment = "paper"  # "paper" or "live"
@@ -67,7 +66,7 @@ dry_run = False  # Set this to False to enable actual trading
 # =====================================================================================
 
 instrument_provider_config = InstrumentProviderConfig(
-    load_ids=frozenset([instrument_id]),
+    load_ids=frozenset(instrument_ids),
     # FIXME: BRENT - figure out why all instruments are loaded when load_all=False
     load_all=False,
 )
@@ -104,24 +103,27 @@ config_node = TradingNodeConfig(
 
 node = TradingNode(config=config_node)
 
-config_tester = CustomExecTesterConfig(
-    instrument_id=instrument_id,
-    external_order_claims=[instrument_id],
-    order_qty=trade_size,
-    tob_offset_ticks=offset_ticks,
-    subscribe_quotes=False,
-    subscribe_trades=False,
-    use_post_only=False,  # Alpaca doesn't have a post-only flag
-    close_positions_time_in_force=TimeInForce.DAY,  # Use DAY for Alpaca
-    close_positions_on_stop=True,
-    open_position_on_start_qty=trade_size,
-    open_position_time_in_force=TimeInForce.DAY,
-    dry_run=dry_run,
-    log_data=True,
-)
-strategy = CustomExecTester(config=config_tester)
+def create_strategy(instrument_id: InstrumentId):
+    config_tester = CustomExecTesterConfig(
+        instrument_id=instrument_id,
+        # external_order_claims=[instrument_id],
+        order_qty=trade_size,
+        tob_offset_ticks=offset_ticks,
+        subscribe_quotes=False,
+        subscribe_trades=True,
+        use_post_only=False,  # Alpaca doesn't have a post-only flag
+        close_positions_time_in_force=TimeInForce.DAY,  # Use DAY for Alpaca
+        close_positions_on_stop=True,
+        open_position_on_start_qty=trade_size,
+        open_position_time_in_force=TimeInForce.DAY,
+        dry_run=dry_run,
+        log_data=True,
+    )
+    return CustomExecTester(config=config_tester)
 
-node.trader.add_strategy(strategy)
+for instrument_id in instrument_ids:
+    strategy = create_strategy(instrument_id)
+    node.trader.add_strategy(strategy)
 
 node.add_data_client_factory(ALPACA, AlpacaLiveDataClientFactory)
 node.add_exec_client_factory(ALPACA, AlpacaLiveExecClientFactory)

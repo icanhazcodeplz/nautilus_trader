@@ -43,25 +43,14 @@ from nautilus_trader.config import LoggingConfig
 from nautilus_trader.config import TradingNodeConfig
 from nautilus_trader.live.node import TradingNode
 from nautilus_trader.model.data import BarType
-from nautilus_trader.model.enums import BookType
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.identifiers import TraderId
 from nautilus_trader.test_kit.strategies.tester_data import DataTester
 from nautilus_trader.test_kit.strategies.tester_data import DataTesterConfig
 
-
-# *** THIS IS A TEST STRATEGY WITH NO ALPHA ADVANTAGE WHATSOEVER. ***
-# *** IT IS NOT INTENDED TO BE USED TO TRADE LIVE WITH REAL MONEY. ***
-
-# Example symbols for different Alpaca products
-# US Stocks: AAPL (Apple), TSLA (Tesla), SPY (S&P 500 ETF)
-# Crypto: BTC/USD, ETH/USD (if using crypto trading)
-
 environment = "paper"  # Use "paper" for testing, "live" for production
 symbol = "AAPL"  # Apple stock
-# symbol = "TSLA"  # Tesla stock
-# symbol = "SPY"  # S&P 500 ETF
-# symbol = "BTC/USD"  # Bitcoin (if crypto enabled)
+
 
 # Configure the trading node
 config_node = TradingNodeConfig(
