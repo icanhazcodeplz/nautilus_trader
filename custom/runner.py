@@ -122,7 +122,7 @@ if __name__ == "__main__":
         random_seed = 41,
     )
     datasets = ["papl", "mss"]
-    datasets = ["agmh"]
+    datasets = ["aapl1015"]
 
     all_stats = []
     if len(datasets) > 1:

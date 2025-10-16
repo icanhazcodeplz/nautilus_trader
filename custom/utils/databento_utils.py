@@ -1,18 +1,39 @@
+"""
+To get example of creating nbbo
+https://databento.com/docs/examples/equities/consolidated-bbo/example
+
+"""
 from pathlib import Path
-
-from custom.utils.load_catalog_data import BACKTESTING_CATALOG
-from custom.utils import data_subdir
-from custom.nt_extensions.tbbo_data import TBBOData
-from custom import ENV
-from nautilus_trader.adapters.databento import DatabentoDataLoader
-from nautilus_trader.test_kit.providers import TestInstrumentProvider
-
+import time
 
 import databento as db
 import pandas as pd
 
-VENUE = "SIM"
-SYMBOL = "PAPL"
+from custom import ENV
+from custom.nt_extensions.tbbo_data import TBBOData
+from custom.utils import data_subdir
+from custom.utils.load_catalog_data import BACKTESTING_CATALOG
+from nautilus_trader.adapters.databento import DatabentoDataLoader
+from nautilus_trader.test_kit.providers import TestInstrumentProvider
+
+# dataset = "EQUS.MINI"
+ALL_EQUITY_DATASETS = [
+    "XNAS.ITCH",  # Nasdaq
+    "XBOS.ITCH",  # Nasdaq BX
+    "XPSX.ITCH",  # Nasdaq PSX
+    "XNYS.PILLAR",  # NYSE
+    "ARCX.PILLAR",  # NYSE Arca
+    "XASE.PILLAR",  # NYSE American
+    "XCHI.PILLAR",  # NYSE Texas
+    "XCIS.TRADESBBO",  # NYSE National
+    "MEMX.MEMOIR",  # Members Exchange
+    "EPRL.DOM",  # MIAX Pearl
+    "IEXG.TOPS",  # IEX
+    "BATS.PITCH",  # Cboe BZX
+    "BATY.PITCH",  # Cboe BYX
+    "EDGA.PITCH",  # Cboe EDGA
+    "EDGX.PITCH",  # Cboe EDGX
+]
 
 
 class _DatabentoClient:
@@ -21,8 +42,13 @@ class _DatabentoClient:
         self.client = db.Historical(ENV.DATABENTO_API_KEY)
 
     def raw_file_path(self, symbol, schema, start_dt, end_dt, dataset):
-        filename_prefix = f"{symbol}_{schema.lower()}_{start_dt.strftime("%Y%m%d")}_{end_dt.strftime("%Y%m%d")}-{dataset.upper()}"
-        return data_subdir("databento", f"{filename_prefix}.dbn.zst")
+        date_str = f"{start_dt.strftime("%Y%m%d")}_{end_dt.strftime("%Y%m%d")}"
+        dataset_str = dataset.replace(".", "-").upper()
+        symbol_str = symbol.upper()
+        schema_str = schema.lower()
+        filename = f"{date_str}-{symbol_str}-{schema_str}-{dataset_str}.dbn.zst"
+        subdir = data_subdir("databento", date_str, symbol_str)
+        return subdir / filename
 
     def check_data_cost(self, symbol, schema, start_dt, end_dt, dataset):
         params = dict(
@@ -37,14 +63,14 @@ class _DatabentoClient:
         params_copy = params.copy()
         params_copy.pop("path", None)
         cost = self.client.metadata.get_cost(**params_copy)
-        print(f"Estimated cost: ${cost}")
+        # print(f"Estimated cost: ${cost}")
         return cost
 
     def get_range_and_save(self, symbol, schema, start_dt, end_dt, dataset):
         path = self.raw_file_path(symbol, schema, start_dt, end_dt, dataset)
         if Path(path).exists():
-            print(f"File already exists. Doing nothing. File: {path}")
-            return
+            print(f"File: {path} already exists. Loading as df")
+            return self.load_dbn_as_df(symbol, schema, start_dt, end_dt, dataset)
         params = dict(
             symbols=symbol,
             schema=schema,
@@ -53,22 +79,18 @@ class _DatabentoClient:
             dataset=dataset,
             path=path,
         )
+        print(f"DataBento get_range request {params}")
         data = self.client.timeseries.get_range(**params)
-        return data
+        return data.to_df()
 
-    def load_data(self, symbol, schema, start_dt, end_dt, dataset):
+    def load_dbn_as_df(self, symbol, schema, start_dt, end_dt, dataset):
         path = self.raw_file_path(symbol, schema, start_dt, end_dt, dataset)
         if not Path(path).exists():
             raise FileNotFoundError(f"File does not exist: {path}")
         data = db.DBNStore.from_file(self.raw_file_path(symbol, schema, start_dt, end_dt, dataset))
         return data.to_df()
 
-
     def mbo_to_tbbo(self, mbo_df):
-        # TODO
-        pass
-
-    def save_to_catalog(self, mbo_df):
         # TODO
         pass
 
@@ -87,23 +109,54 @@ class _DatabentoClient:
 
         BACKTESTING_CATALOG.write_data(tbbo_list)
 
-    def load_and_save_to_catalog(self, symbol, schema, start_dt, end_dt, dataset):
-        loader = DatabentoDataLoader()
+    def prepare_data(self, symbol, start_dt, end_dt):
+        schema = "mbp-1"
 
-        data = loader.from_dbn_file(path=self.raw_file_path(symbol, schema, start_dt, end_dt, dataset),
-                                    instrument_id=self._instument_id(symbol), include_trades=True)
-        BACKTESTING_CATALOG.write_data(data)
+        loader = DatabentoDataLoader()
+        all_data = []
+        all_tbbo = []
+        for dset in ALL_EQUITY_DATASETS:
+            data_df = self.get_range_and_save(symbol, schema, start_dt, end_dt, dset)
+            tbbo_df = data_df[data_df["action"] == "T"]
+            all_tbbo.append(tbbo_df)
+
+            data = loader.from_dbn_file(path=self.raw_file_path(symbol, schema, start_dt, end_dt, dset),
+                                        instrument_id=self._instument_id(symbol), include_trades=True)
+            all_data.append(data)
+
+        tbbo = pd.concat(all_tbbo)
+        tbbo = tbbo.sort_index()
+        self.save_tbbo_catalog(tbbo)
+
+        # Merge and sort all_data lists by ts_init
+        sorted_mbp_data = sorted([item for sublist in all_data for item in sublist], key=lambda x: x.ts_init)
+
+        BACKTESTING_CATALOG.write_data(sorted_mbp_data)
 
     def _instument_id(self, symbol):
-        return TestInstrumentProvider.equity(symbol=symbol, venue="SIM").id
+        return TestInstrumentProvider.equity(symbol=symbol, venue="DATABENTO").id
 
 
 DatabentoClient = _DatabentoClient()
 
-
 if __name__ == "__main__":
     """
     Candidates
+
+    10/14 - NVA
+    10/14 - JDZG
+    10/14 - GWAV
+    10/13 - ELAB after hours
+    10/13 - AQMS after hours
+    10/13 - CHNR
+    10/13 - NDRA
+    10/13 - STI
+    10/13 - PMAX
+    10/13 - GWH
+    10/10 - GWH
+    10/10 - SGBX
+    10/9 - YDDL after hours
+    10/9 - LFS after hours
     10/9 - BJDX
     10/9 - TTRX (ipo 10/8)
     10/9 - BAOS
@@ -139,33 +192,19 @@ if __name__ == "__main__":
     9/19 - AGMH
     """
 
-    symbol = "ZOOZ"
-    start_dt = pd.Timestamp("2025-09-19", tz="America/New_York")
+    symbol = "AAPL"
+    start_dt = pd.Timestamp("2025-10-15", tz="America/New_York")
     end_dt = start_dt + pd.Timedelta(days=1)
 
     # https://databento.com/docs/schemas-and-data-formats?historical=python&live=python&reference=python
-    # schema = "trades"
+    schema = "trades"
     # schema = "tbbo"
     # schema = "mbo"
-    schema="mbp-1"
+    schema = "mbp-1"
 
-    dataset="XNAS.ITCH" # NASDAQ (equities)
-    dataset="XNYS.PILLAR" # NYSE (equities)
-    # dataset="XASE.PILLAR" # AMEX (equities)
-    dataset="EQUS.MINI" # AMEX (equities)
-
-    cost = DatabentoClient.check_data_cost(symbol, schema, start_dt, end_dt, dataset)
-    DatabentoClient.get_range_and_save(symbol, schema, start_dt, end_dt, dataset)
-    DatabentoClient.load_and_save_to_catalog(symbol, schema, start_dt, end_dt, dataset)
-
-    df = DatabentoClient.load_data(symbol, schema, start_dt, end_dt, dataset)
-    tbbo_df = df[df["action"] == "T"]
-    DatabentoClient.save_tbbo_catalog(tbbo_df)
-    #
-    # dfs = df[['ts_event', 'action', 'side', 'depth', 'price', 'size', 'ts_in_delta', 'bid_px_00', 'ask_px_00', 'bid_sz_00', 'ask_sz_00', 'bid_ct_00', 'ask_ct_00']]
-    print()
-
-
+    start_time = time.time()
+    DatabentoClient.prepare_data(symbol, start_dt, end_dt)
+    print(f"{time.time() - start_time:.2f} seconds")
 
 # Available schemas for Level 2 data:
 # - 'mbo': Market By Order (full order book with individual orders)

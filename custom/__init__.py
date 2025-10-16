@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # REPO_ROOT = Path(__file__).parent.absolute()
-BACKTEST_SYMBOL = "mss"
+BACKTEST_SYMBOL = "aapl1015"
 
 class ENV:
     # IBKR_ACCT = os.environ["IBKR_ACCT"]

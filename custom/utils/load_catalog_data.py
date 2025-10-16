@@ -8,7 +8,8 @@ from nautilus_trader.persistence.catalog import ParquetDataCatalog
 
 CATALOG_PATH = PACKAGE_ROOT / "catalog"
 BACKTESTING_CATALOG = ParquetDataCatalog(CATALOG_PATH)
-VENUE = "SIM"
+# VENUE = "SIM"
+VENUE = "DATABENTO"
 
 def get_tbbo_for_viz():
     params = CATALOG_OPTIONS[BACKTEST_SYMBOL]
