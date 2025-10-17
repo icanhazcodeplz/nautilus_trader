@@ -75,12 +75,6 @@ class AlpacaExecClientConfig(LiveExecClientConfig, frozen=True):
         If ``None`` then will source the `ALPACA_API_SECRET` environment variable.
     environment : str, default "paper"
         The Alpaca environment: "paper" or "live".
-    http_base_url : str, optional
-        Override base URL for HTTP requests.
-        If None, will use environment-appropriate default.
-    ws_base_url : str, optional
-        Override base URL for WebSocket connections.
-        If None, will use default WebSocket URL.
     http_timeout : PositiveInt, default 30
         The timeout (seconds) for HTTP requests.
     max_retries : PositiveInt or None, default 3
@@ -99,8 +93,6 @@ class AlpacaExecClientConfig(LiveExecClientConfig, frozen=True):
     api_key: str | None = None
     api_secret: str | None = None
     environment: str = "paper"
-    http_base_url: str | None = None
-    ws_base_url: str | None = None
     http_timeout: PositiveInt = 30
     max_retries: PositiveInt | None = 3
     retry_delay_initial_ms: PositiveInt | None = 1_000

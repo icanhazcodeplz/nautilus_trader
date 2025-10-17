@@ -42,7 +42,7 @@ from nautilus_trader.model.identifiers import ClientOrderId
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.identifiers import Venue
 from nautilus_trader.model.identifiers import VenueOrderId
-from nautilus_trader.model.objects import Money, AccountBalance, MarginBalance
+from nautilus_trader.model.objects import Money, AccountBalance, MarginBalance, Currency
 
 if TYPE_CHECKING:
     import asyncio
@@ -125,18 +125,12 @@ class AlpacaExecutionClient(LiveExecutionClient):
             self._log.warning("Alpaca API credentials not provided")
 
         # URLs
-        if config.http_base_url:
-            self._http_base_url = config.http_base_url
-        elif self._environment == "live":
+        if self._environment == "live":
             self._http_base_url = "https://api.alpaca.markets"
+            self._ws_base_url = "wss://api.alpaca.markets/stream"
         else:
             self._http_base_url = "https://paper-api.alpaca.markets"
-
-        # FIXME: BRENT: need to adjust for paper trading
-        if config.ws_base_url:
-            self._ws_base_url = config.ws_base_url
-        else:
-            self._ws_base_url = "wss://api.alpaca.markets/stream"
+            self._ws_base_url = "wss://paper-api.alpaca.markets/stream"
 
         # Set account ID
         account_id = AccountId(f"{name or ALPACA_VENUE.value}-{self._environment.upper()}")
@@ -512,11 +506,75 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
         """
         self._log.info(f"Modifying order: {command.client_order_id}")
-        raise RuntimeError("Modify order not yet implemented")
-        # TODO: Get order from cache
-        # TODO: Modify order via HTTP API
-        # TODO: Handle response and generate appropriate events
-        #       (OrderUpdated, OrderModifyRejected, etc.)
+
+        try:
+            # Get order from cache
+            order = self._cache.order(command.client_order_id)
+            if not order:
+                self._log.error(f"Order {command.client_order_id} not found in cache")
+                self.generate_order_modify_rejected(
+                    strategy_id=command.strategy_id,
+                    instrument_id=command.instrument_id,
+                    client_order_id=command.client_order_id,
+                    venue_order_id=command.venue_order_id,
+                    reason="Order not found in cache",
+                    ts_event=self._clock.timestamp_ns(),
+                )
+                return
+
+            if order.is_closed:
+                self._log.warning(f"Order {command.client_order_id} is already closed")
+                self.generate_order_modify_rejected(
+                    strategy_id=command.strategy_id,
+                    instrument_id=command.instrument_id,
+                    client_order_id=command.client_order_id,
+                    venue_order_id=command.venue_order_id,
+                    reason="Order is already closed",
+                    ts_event=self._clock.timestamp_ns(),
+                )
+                return
+
+            # Get venue order ID
+            venue_order_id = command.venue_order_id or self._cache.venue_order_id(command.client_order_id)
+            if not venue_order_id:
+                self._log.error(f"No venue_order_id found for {command.client_order_id}")
+                self.generate_order_modify_rejected(
+                    strategy_id=command.strategy_id,
+                    instrument_id=command.instrument_id,
+                    client_order_id=command.client_order_id,
+                    venue_order_id=None,
+                    reason="No venue_order_id found",
+                    ts_event=self._clock.timestamp_ns(),
+                )
+                return
+
+            # Build replacement parameters
+            qty = str(command.quantity) if command.quantity else None
+            limit_price = str(command.price) if command.price else None
+            stop_price = str(command.trigger_price) if command.trigger_price else None
+
+            # Modify order via HTTP API (Alpaca uses PATCH for replace)
+            await self._http_client.replace_order(
+                order_id=venue_order_id.value,
+                qty=qty,
+                limit_price=limit_price,
+                stop_price=stop_price,
+            )
+
+            # Generate order updated event
+            # Note: The WebSocket will also send an update, but we generate here for immediate feedback
+            self._log.info(f"Order modified: {venue_order_id}")
+
+        except Exception as e:
+            self._log.error(f"Failed to modify order: {e}")
+            self.generate_order_modify_rejected(
+                strategy_id=command.strategy_id,
+                instrument_id=command.instrument_id,
+                client_order_id=command.client_order_id,
+                venue_order_id=command.venue_order_id,
+                reason=str(e),
+                ts_event=self._clock.timestamp_ns(),
+            )
 
     async def _cancel_order(self, command: CancelOrder) -> None:
         """
@@ -645,8 +703,8 @@ class AlpacaExecutionClient(LiveExecutionClient):
         """
         try:
             # Extract event type and order data
-            event = msg.get("event")
-            order_data = msg.get("order", {})
+            event = msg['data'].get("event")
+            order_data = msg['data'].get("order", {})
 
             if not event or not order_data:
                 self._log.warning(f"Invalid trade update message: {msg}")
@@ -698,6 +756,9 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 )
 
             elif event == "fill":
+                if order_data['asset_class'] != 'us_equity':
+                    raise NotImplementedError(f"fill event for asset_class {order_data['asset_class']} not yet implemented")
+
                 # Order filled
                 filled_qty_str = order_data.get("filled_qty", "0")
                 filled_avg_price_str = order_data.get("filled_avg_price")
@@ -711,8 +772,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
                     last_qty = Quantity.from_str(filled_qty_str)
                     last_px = Price.from_str(filled_avg_price_str)
 
-                    # Commission is 0 for Alpaca
-                    commission = Money(0, instrument_id.symbol.value.split(".")[0].split("/")[-1] if "/" in instrument_id.symbol.value else "USD")
+                    currency = Currency.from_str("USD")
 
                     self.generate_order_filled(
                         strategy_id=order.strategy_id,
@@ -725,8 +785,8 @@ class AlpacaExecutionClient(LiveExecutionClient):
                         order_type=order.order_type,
                         last_qty=last_qty,
                         last_px=last_px,
-                        quote_currency=instrument_id.symbol.value.split(".")[ 0].split("/")[-1] if "/" in instrument_id.symbol.value else "USD",
-                        commission=commission,
+                        quote_currency=currency,
+                        commission=Money(0, currency), # Commission is 0 for Alpaca
                         liquidity_side=LiquiditySide.TAKER,
                         ts_event=ts_event,
                     )

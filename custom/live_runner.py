@@ -27,14 +27,11 @@ from nautilus_trader.config import LiveExecEngineConfig
 from nautilus_trader.config import LoggingConfig
 from nautilus_trader.config import TradingNodeConfig
 from nautilus_trader.live.node import TradingNode
-from nautilus_trader.model.enums import TimeInForce
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.identifiers import TraderId
 
-
-instrument_id = InstrumentId.from_str("AAPL.ALPACA")
-offset_ticks = 1
-trade_size = Decimal("1")
+symbol = "AAPL"
+instrument_id = InstrumentId.from_str(f"{symbol}.{ALPACA}")
 environment = "paper"  # "paper" or "live"
 dry_run = False  # Set this to False to enable actual trading
 
@@ -78,14 +75,14 @@ node = TradingNode(config=config_node)
 # strategy = CustomExecTester(config=CustomExecTesterConfig(
 #     instrument_id=instrument_id,
 #     external_order_claims=[instrument_id],
-#     order_qty=trade_size,
-#     tob_offset_ticks=offset_ticks,
+#     order_qty=1,
+#     tob_offset_ticks=1,
 #     subscribe_quotes=False,
 #     subscribe_trades=False,
 #     use_post_only=False,  # Alpaca doesn't have a post-only flag
 #     close_positions_time_in_force=TimeInForce.DAY,  # Use DAY for Alpaca
 #     close_positions_on_stop=True,
-#     open_position_on_start_qty=trade_size,
+#     open_position_on_start_qty=1,
 #     open_position_time_in_force=TimeInForce.DAY,
 #     dry_run=dry_run,
 #     log_data=True,

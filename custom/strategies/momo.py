@@ -140,6 +140,8 @@ class Momo(BaseStrategy):
         # self.subscribe_bars(self.config.bar_type)
         self.subscribe_trade_ticks(self.config.instrument_id)
 
+        # Use for LIVE testing
+        # self.buy(self.config.trade_size, 2.0, cancel_after_secs=10, tag="b")
 
     def on_stop(self) -> None:
         super().on_stop()

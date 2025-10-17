@@ -162,10 +162,7 @@ class AlpacaLiveExecClientFactory(LiveExecClientFactory):
         if not api_key or not api_secret:
             raise ValueError("Alpaca API credentials not provided")
 
-        # Determine base URL
-        if config.http_base_url:
-            http_base_url = config.http_base_url
-        elif config.environment == "live":
+        if config.environment == "live":
             http_base_url = "https://api.alpaca.markets"
         else:
             http_base_url = "https://paper-api.alpaca.markets"

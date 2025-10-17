@@ -63,8 +63,6 @@ class TestAlpacaExecClientConfig:
         assert config.api_key is None
         assert config.api_secret is None
         assert config.environment == "paper"
-        assert config.http_base_url is None
-        assert config.ws_base_url is None
         assert config.http_timeout == 30
         assert config.max_retries == 3
         assert config.retry_delay_initial_ms == 1_000
@@ -85,13 +83,3 @@ class TestAlpacaExecClientConfig:
         assert config.environment == "live"
         assert config.max_retries == 5
 
-    def test_config_with_custom_urls(self):
-        # Arrange, Act
-        config = AlpacaExecClientConfig(
-            http_base_url="https://custom-http.example.com",
-            ws_base_url="wss://custom-ws.example.com",
-        )
-
-        # Assert
-        assert config.http_base_url == "https://custom-http.example.com"
-        assert config.ws_base_url == "wss://custom-ws.example.com"

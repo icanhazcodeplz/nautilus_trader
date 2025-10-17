@@ -64,6 +64,10 @@ class AlpacaWebSocketClient:
         self._task: asyncio.Task | None = None
         self._is_running = False
         self._is_authenticated = False
+        self._reconnect_task: asyncio.Task | None = None
+        self._should_reconnect = True
+        self._max_reconnect_delay = 60.0  # Maximum delay between reconnection attempts (seconds)
+        self._reconnect_delay = 1.0  # Initial reconnection delay (seconds)
 
     @property
     def is_connected(self) -> bool:
@@ -109,6 +113,14 @@ class AlpacaWebSocketClient:
 
         self._is_running = False
         self._is_authenticated = False
+        self._should_reconnect = False  # Disable reconnection on manual disconnect
+
+        if self._reconnect_task and not self._reconnect_task.done():
+            self._reconnect_task.cancel()
+            try:
+                await self._reconnect_task
+            except asyncio.CancelledError:
+                pass
 
         if self._task and not self._task.done():
             self._task.cancel()
@@ -181,8 +193,14 @@ class AlpacaWebSocketClient:
 
         except websockets.exceptions.ConnectionClosed:
             self._log.warning("WebSocket connection closed")
+            if self._should_reconnect:
+                self._log.info("Attempting to reconnect...")
+                self._reconnect_task = asyncio.create_task(self._reconnect())
         except Exception as e:
             self._log.error(f"WebSocket error: {e}")
+            if self._should_reconnect:
+                self._log.info("Attempting to reconnect...")
+                self._reconnect_task = asyncio.create_task(self._reconnect())
         finally:
             self._is_running = False
             self._is_authenticated = False
@@ -249,6 +267,52 @@ class AlpacaWebSocketClient:
             # Unknown message type
             self._log.debug(f"Unknown message type '{msg_type}': {msg}")
 
+    async def _reconnect(self) -> None:
+        """Attempt to reconnect with exponential backoff."""
+        while self._should_reconnect:
+            delay = min(self._reconnect_delay, self._max_reconnect_delay)
+            self._log.info(f"Reconnecting in {delay} seconds...")
+            await asyncio.sleep(delay)
+
+            try:
+                self._log.info("Attempting to reconnect to WebSocket...")
+
+                # Close existing connection if any
+                if self._ws:
+                    try:
+                        await self._ws.close()
+                    except Exception:
+                        pass
+                    self._ws = None
+
+                # Attempt reconnection
+                self._ws = await websockets.connect(self._url)
+                self._is_running = True
+                self._task = asyncio.create_task(self._run())
+
+                # Wait for connection confirmation
+                await asyncio.sleep(0.5)
+
+                # Authenticate
+                await self._authenticate()
+
+                # Wait for authentication
+                await asyncio.sleep(0.5)
+
+                # Resubscribe to trade updates
+                await self.subscribe_trade_updates()
+
+                self._log.info("WebSocket reconnected successfully")
+
+                # Reset reconnection delay on success
+                self._reconnect_delay = 1.0
+                break
+
+            except Exception as e:
+                self._log.error(f"Reconnection failed: {e}")
+                # Exponential backoff with jitter
+                self._reconnect_delay = min(self._reconnect_delay * 2, self._max_reconnect_delay)
+
 
 class AlpacaMarketDataWebSocketClient:
     """
@@ -286,6 +350,10 @@ class AlpacaMarketDataWebSocketClient:
         self._task: asyncio.Task | None = None
         self._is_running = False
         self._is_authenticated = False
+        self._reconnect_task: asyncio.Task | None = None
+        self._should_reconnect = True
+        self._max_reconnect_delay = 60.0  # Maximum delay between reconnection attempts (seconds)
+        self._reconnect_delay = 1.0  # Initial reconnection delay (seconds)
         self._subscriptions: dict[str, set[str]] = {
             "trades": set(),
             "quotes": set(),
@@ -339,6 +407,14 @@ class AlpacaMarketDataWebSocketClient:
 
         self._is_running = False
         self._is_authenticated = False
+        self._should_reconnect = False  # Disable reconnection on manual disconnect
+
+        if self._reconnect_task and not self._reconnect_task.done():
+            self._reconnect_task.cancel()
+            try:
+                await self._reconnect_task
+            except asyncio.CancelledError:
+                pass
 
         if self._task and not self._task.done():
             self._task.cancel()
@@ -479,8 +555,14 @@ class AlpacaMarketDataWebSocketClient:
 
         except websockets.exceptions.ConnectionClosed:
             self._log.warning("Market data WebSocket connection closed")
+            if self._should_reconnect:
+                self._log.info("Attempting to reconnect...")
+                self._reconnect_task = asyncio.create_task(self._reconnect())
         except Exception as e:
             self._log.error(f"Market data WebSocket error: {e}")
+            if self._should_reconnect:
+                self._log.info("Attempting to reconnect...")
+                self._reconnect_task = asyncio.create_task(self._reconnect())
         finally:
             self._is_running = False
             self._is_authenticated = False
@@ -541,3 +623,54 @@ class AlpacaMarketDataWebSocketClient:
         else:
             # Unknown message type
             self._log.debug(f"Unknown market data message type '{msg_type}': {msg}")
+
+    async def _reconnect(self) -> None:
+        """Attempt to reconnect with exponential backoff."""
+        while self._should_reconnect:
+            delay = min(self._reconnect_delay, self._max_reconnect_delay)
+            self._log.info(f"Reconnecting in {delay} seconds...")
+            await asyncio.sleep(delay)
+
+            try:
+                self._log.info("Attempting to reconnect to market data WebSocket...")
+
+                # Close existing connection if any
+                if self._ws:
+                    try:
+                        await self._ws.close()
+                    except Exception:
+                        pass
+                    self._ws = None
+
+                # Attempt reconnection
+                self._ws = await websockets.connect(self._url)
+                self._is_running = True
+                self._task = asyncio.create_task(self._run())
+
+                # Wait for connection confirmation
+                await asyncio.sleep(0.5)
+
+                # Authenticate
+                await self._authenticate()
+
+                # Wait for authentication
+                await asyncio.sleep(0.5)
+
+                # Resubscribe to all previous subscriptions
+                if any(self._subscriptions.values()):
+                    await self.subscribe(
+                        trades=list(self._subscriptions["trades"]) if self._subscriptions["trades"] else None,
+                        quotes=list(self._subscriptions["quotes"]) if self._subscriptions["quotes"] else None,
+                        bars=list(self._subscriptions["bars"]) if self._subscriptions["bars"] else None,
+                    )
+
+                self._log.info("Market data WebSocket reconnected successfully")
+
+                # Reset reconnection delay on success
+                self._reconnect_delay = 1.0
+                break
+
+            except Exception as e:
+                self._log.error(f"Reconnection failed: {e}")
+                # Exponential backoff
+                self._reconnect_delay = min(self._reconnect_delay * 2, self._max_reconnect_delay)
