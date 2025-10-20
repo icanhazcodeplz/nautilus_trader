@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from typing import TYPE_CHECKING
 
@@ -26,7 +27,9 @@ from nautilus_trader.adapters.alpaca.parsing import AlpacaEnumParser
 from nautilus_trader.adapters.alpaca.parsing import parse_order_status_report
 from nautilus_trader.adapters.alpaca.websocket import AlpacaWebSocketClient
 from nautilus_trader.common.enums import LogColor
-
+from nautilus_trader.model.objects import Price, Quantity
+from nautilus_trader.model.identifiers import TradeId
+from nautilus_trader.model.enums import LiquiditySide
 from nautilus_trader.common.providers import InstrumentProvider
 from nautilus_trader.execution.reports import FillReport
 from nautilus_trader.execution.reports import OrderStatusReport
@@ -164,6 +167,8 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
         self._instrument_provider.load_all()
     #     BRENT. Instruments loaded here
+
+        self.order_previous_qty_and_value = dict()
 
     @property
     def instrument_provider(self):
@@ -554,16 +559,28 @@ class AlpacaExecutionClient(LiveExecutionClient):
             stop_price = str(command.trigger_price) if command.trigger_price else None
 
             # Modify order via HTTP API (Alpaca uses PATCH for replace)
-            await self._http_client.replace_order(
-                order_id=venue_order_id.value,
-                qty=qty,
-                limit_price=limit_price,
-                stop_price=stop_price,
-            )
-
-            # Generate order updated event
-            # Note: The WebSocket will also send an update, but we generate here for immediate feedback
-            self._log.info(f"Order modified: {venue_order_id}")
+            try:
+                await self._http_client.replace_order(
+                    order_id=venue_order_id.value,
+                    qty=qty,
+                    limit_price=limit_price,
+                    stop_price=stop_price,
+                )
+            except Exception as e:
+                string = e.args[0]
+                start = string.find('{')
+                json_text = string[start:]
+                data = json.loads(json_text)
+                msg = data['message']
+                if msg == "order already replaced":
+                    self._log.info(f"Order {command.client_order_id} is already pending replacement, skipping")
+                    new_order = await self._http_client.get_order(venue_order_id.value)
+                    if float(new_order['limit_price']) != float(limit_price) :
+                        self._log.warning(f"Order already replaced, but limit price has changed. {venue_order_id}")
+                elif msg == "order parameters are not changed":
+                    self._log.info(f"Order {command.client_order_id} is already in desired state, skipping")
+                else:
+                    raise Exception from e
 
         except Exception as e:
             self._log.error(f"Failed to modify order: {e}")
@@ -699,7 +716,6 @@ class AlpacaExecutionClient(LiveExecutionClient):
         ----------
         msg : dict
             The trade update message.
-
         """
         try:
             # Extract event type and order data
@@ -713,10 +729,6 @@ class AlpacaExecutionClient(LiveExecutionClient):
             # Extract order identifiers
             venue_order_id_str = order_data.get("id")
             client_order_id_str = order_data.get("client_order_id")
-
-            if not venue_order_id_str:
-                self._log.warning("Trade update missing order ID")
-                return
 
             venue_order_id = VenueOrderId(venue_order_id_str)
             client_order_id = ClientOrderId(client_order_id_str) if client_order_id_str else None
@@ -736,11 +748,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 return
 
             # Get instrument ID
-            symbol = order_data.get("symbol")
-            if symbol:
-                instrument_id = InstrumentId.from_str(f"{symbol}.{ALPACA_VENUE}")
-            else:
-                instrument_id = order.instrument_id
+            instrument_id = order.instrument_id
 
             # Handle different event types
             ts_event = self._clock.timestamp_ns()
@@ -755,49 +763,42 @@ class AlpacaExecutionClient(LiveExecutionClient):
                     ts_event=ts_event,
                 )
 
-            elif event == "fill":
+            elif event in ["fill", "partial_fill"]:
                 if order_data['asset_class'] != 'us_equity':
                     raise NotImplementedError(f"fill event for asset_class {order_data['asset_class']} not yet implemented")
 
-                # Order filled
-                filled_qty_str = order_data.get("filled_qty", "0")
-                filled_avg_price_str = order_data.get("filled_avg_price")
+                filled_qty = int(order_data.get("filled_qty"))
+                filled_avg_price = float(order_data.get("filled_avg_price"))
 
-                if filled_avg_price_str:
-                    # Generate fill event
-                    from nautilus_trader.model.objects import Price, Quantity
-                    from nautilus_trader.model.identifiers import TradeId
-                    from nautilus_trader.model.enums import LiquiditySide
+                previous_qty, previous_value = self.order_previous_qty_and_value.get(venue_order_id, (0, 0.0))
 
-                    last_qty = Quantity.from_str(filled_qty_str)
-                    last_px = Price.from_str(filled_avg_price_str)
+                this_fill_qty = filled_qty - previous_qty
+                current_total_value = round(filled_qty * filled_avg_price, 4)
+                this_fill_value = current_total_value - previous_value
+                this_fill_px = round(this_fill_value / this_fill_qty,4)
 
-                    currency = Currency.from_str("USD")
+                self.order_previous_qty_and_value[venue_order_id] = (filled_qty, current_total_value)
 
-                    self.generate_order_filled(
-                        strategy_id=order.strategy_id,
-                        instrument_id=instrument_id,
-                        client_order_id=client_order_id,
-                        venue_order_id=venue_order_id,
-                        venue_position_id=None,
-                        trade_id=TradeId(venue_order_id_str),  # Use order ID as trade ID
-                        order_side=order.side,
-                        order_type=order.order_type,
-                        last_qty=last_qty,
-                        last_px=last_px,
-                        quote_currency=currency,
-                        commission=Money(0, currency), # Commission is 0 for Alpaca
-                        liquidity_side=LiquiditySide.TAKER,
-                        ts_event=ts_event,
-                    )
-
-            elif event == "partial_fill":
-                # Order partially filled
-                self._log.info(f"Order {client_order_id} partially filled")
-                # Could generate partial fill event here if needed
+                alpaca_event_id = msg['data']['event_id']  # This is a unique id for the trade event
+                currency = Currency.from_str("USD")
+                self.generate_order_filled(
+                    strategy_id=order.strategy_id,
+                    instrument_id=instrument_id,
+                    client_order_id=client_order_id,
+                    venue_order_id=venue_order_id,
+                    venue_position_id=None,
+                    trade_id=TradeId(alpaca_event_id),  # Use order ID as trade ID
+                    order_side=order.side,
+                    order_type=order.order_type,
+                    last_qty=Quantity.from_str(str(this_fill_qty)),
+                    last_px=Price.from_str(str(this_fill_px)),
+                    quote_currency=currency,
+                    commission=Money(0, currency), # Commission is 0 for Alpaca
+                    liquidity_side=LiquiditySide.TAKER,
+                    ts_event=ts_event,
+                )
 
             elif event == "canceled":
-                # Order canceled
                 self.generate_order_canceled(
                     strategy_id=order.strategy_id,
                     instrument_id=instrument_id,
@@ -807,7 +808,6 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 )
 
             elif event == "rejected":
-                # Order rejected
                 reason = order_data.get("reject_reason", "Unknown")
                 self.generate_order_rejected(
                     strategy_id=order.strategy_id,
@@ -817,13 +817,26 @@ class AlpacaExecutionClient(LiveExecutionClient):
                     ts_event=ts_event,
                 )
 
-            elif event == "replaced":
-                # Order replaced (modified)
+            elif event == "replaced":  # AKA modified
                 self._log.info(f"Order {client_order_id} replaced")
-                # Could generate order updated event here
 
-            else:
+                replaced_by = msg['data']['order']['replaced_by']
+                self.generate_order_updated(
+                    strategy_id = order.strategy_id,
+                    instrument_id=instrument_id,
+                    client_order_id=client_order_id,
+                    venue_order_id=VenueOrderId(replaced_by),
+                    quantity=order.quantity,
+                    price=order.price,
+                    trigger_price=order.trigger_price if order.has_trigger_price else None,
+                    ts_event=ts_event,
+                    venue_order_id_modified=True,
+                )
+
+            elif event in ["pending_new"]:
                 self._log.debug(f"Unhandled trade update event: {event}")
+            else:
+                self._log.warn(f"Unrecognized trade update event: {event}")
 
         except Exception as e:
             self._log.error(f"Error handling WebSocket message: {e}")

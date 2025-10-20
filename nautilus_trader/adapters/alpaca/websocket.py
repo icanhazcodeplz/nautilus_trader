@@ -257,12 +257,6 @@ class AlpacaWebSocketClient:
             self._log.debug(f"Trade update: {msg}")
             self._handler(msg)
 
-        elif msg.get("data", {}).get("stream") == "trade_updates":
-            # Alternative trade update format
-            trade_data = msg.get("data", {})
-            self._log.debug(f"Trade update: {trade_data}")
-            self._handler(trade_data)
-
         else:
             # Unknown message type
             self._log.debug(f"Unknown message type '{msg_type}': {msg}")
