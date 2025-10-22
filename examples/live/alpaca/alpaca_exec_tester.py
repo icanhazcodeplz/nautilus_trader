@@ -14,25 +14,6 @@
 #  limitations under the License.
 # -------------------------------------------------------------------------------------------------
 
-"""
-Alpaca execution tester example.
-
-This example demonstrates using the ExecTester strategy for testing
-execution functionality with Alpaca Markets.
-The strategy places limit orders at a specified offset from the market.
-
-Requirements:
-1. Set environment variables:
-   - ALPACA_API_KEY: Your Alpaca API key
-   - ALPACA_API_SECRET: Your Alpaca API secret
-
-2. Make sure you have a funded Alpaca paper trading account.
-
-3. Run the script:
-   python examples/live/alpaca/alpaca_exec_tester.py
-
-"""
-
 from decimal import Decimal
 
 from custom.strategies.tester_exec import CustomExecTesterConfig, CustomExecTester
@@ -82,15 +63,14 @@ config_node = TradingNodeConfig(
     ),
     data_clients={
         ALPACA: AlpacaDataClientConfig(
-            environment=environment,
+            paper=True,
             feed="iex",  # 'iex' or 'sip' (SIP requires paid subscription)
             instrument_provider=instrument_provider_config,
         ),
     },
-
     exec_clients={
         ALPACA: AlpacaExecClientConfig(
-            environment=environment,
+            paper=True,
             instrument_provider=instrument_provider_config,
         ),
     },
@@ -102,6 +82,7 @@ config_node = TradingNodeConfig(
 )
 
 node = TradingNode(config=config_node)
+
 
 def create_strategy(instrument_id: InstrumentId):
     config_tester = CustomExecTesterConfig(
@@ -120,6 +101,7 @@ def create_strategy(instrument_id: InstrumentId):
         log_data=True,
     )
     return CustomExecTester(config=config_tester)
+
 
 for instrument_id in instrument_ids:
     strategy = create_strategy(instrument_id)

@@ -18,11 +18,11 @@
 from __future__ import annotations
 
 import json
-import os
 from typing import TYPE_CHECKING
 
+from custom.utils import run_artifacts_subdir
 from nautilus_trader.adapters.alpaca.enums import AlpacaOrderType, AlpacaTimeInForce
-from nautilus_trader.adapters.alpaca.http import AlpacaHttpClient
+from nautilus_trader.adapters.alpaca.http import get_alpaca_http_client
 from nautilus_trader.adapters.alpaca.parsing import AlpacaEnumParser
 from nautilus_trader.adapters.alpaca.parsing import parse_order_status_report
 from nautilus_trader.adapters.alpaca.websocket import AlpacaWebSocketClient
@@ -66,6 +66,19 @@ if TYPE_CHECKING:
 
 ALPACA = "ALPACA"
 ALPACA_VENUE = Venue("ALPACA")
+
+
+# Flatten msg into a single dictionary
+def flatten_dict(d: dict, parent_key: str = '', sep: str = '_') -> dict:
+    """Recursively flatten a nested dictionary."""
+    items = []
+    for k, v in d.items():
+        new_key = f"{parent_key}{sep}{k}" if parent_key and k in items else k
+        if isinstance(v, dict):
+            items.extend(flatten_dict(v, new_key, sep=sep).items())
+        else:
+            items.append((new_key, v))
+    return dict(items)
 
 class AlpacaExecutionClient(LiveExecutionClient):
     """
@@ -116,51 +129,27 @@ class AlpacaExecutionClient(LiveExecutionClient):
         )
 
         # Configuration
-        self._environment = config.environment
         self._http_timeout = config.http_timeout
         self._max_retries = config.max_retries or 3
 
-        # API credentials
-        self._api_key = config.api_key or os.getenv("ALPACA_API_KEY")
-        self._api_secret = config.api_secret or os.getenv("ALPACA_API_SECRET")
-
-        if not self._api_key or not self._api_secret:
-            self._log.warning("Alpaca API credentials not provided")
-
-        # URLs
-        if self._environment == "live":
-            self._http_base_url = "https://api.alpaca.markets"
-            self._ws_base_url = "wss://api.alpaca.markets/stream"
-        else:
-            self._http_base_url = "https://paper-api.alpaca.markets"
-            self._ws_base_url = "wss://paper-api.alpaca.markets/stream"
-
         # Set account ID
-        account_id = AccountId(f"{name or ALPACA_VENUE.value}-{self._environment.upper()}")
+        if config.paper:
+            account_id = AccountId(f"{name or ALPACA_VENUE.value}-PAPER")
+        else:
+            account_id = AccountId(f"{name or ALPACA_VENUE.value}-LIVE")
+
         self._set_account_id(account_id)
 
-        self._log.info(f"Account type: {account_type}", LogColor.BLUE)
-        self._log.info(f"Environment: {self._environment}", LogColor.BLUE)
-        self._log.info(f"HTTP base URL: {self._http_base_url}", LogColor.BLUE)
-        self._log.info(f"WS base URL: {self._ws_base_url}", LogColor.BLUE)
-
-        # Initialize HTTP client
-        self._http_client = AlpacaHttpClient(
-            base_url=self._http_base_url,
-            api_key=self._api_key,
-            api_secret=self._api_secret,
+        self._http_client = get_alpaca_http_client(
+            paper=config.paper,
             timeout=self._http_timeout,
-            logger=self._log,
         )
 
-        # Initialize enum parser
         self._enum_parser = AlpacaEnumParser()
 
         # Initialize WebSocket client for order updates
         self._ws_client = AlpacaWebSocketClient(
-            url=self._ws_base_url,
-            api_key=self._api_key,
-            api_secret=self._api_secret,
+            paper=config.paper,
             handler=self._handle_ws_message,
             logger=self._log,
         )
@@ -169,6 +158,10 @@ class AlpacaExecutionClient(LiveExecutionClient):
     #     BRENT. Instruments loaded here
 
         self.order_previous_qty_and_value = dict()
+
+        # Setup output directory and file for trade updates
+        self._trade_updates_output_file_path = run_artifacts_subdir("alpaca_trade_updates.json")
+        self._trade_updates_data = []
 
     @property
     def instrument_provider(self):
@@ -211,6 +204,9 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
         # Close HTTP client
         await self._http_client.close()
+
+        # Flush trade updates before disconnecting
+        self._save_trade_updates()
 
         self._log.info("Disconnected from Alpaca")
 
@@ -625,17 +621,6 @@ class AlpacaExecutionClient(LiveExecutionClient):
             # Cancel order via HTTP API
             await self._http_client.cancel_order(venue_order_id.value)
 
-            # Generate order canceled event
-            self.generate_order_canceled(
-                strategy_id=order.strategy_id,
-                instrument_id=order.instrument_id,
-                client_order_id=order.client_order_id,
-                venue_order_id=venue_order_id,
-                ts_event=self._clock.timestamp_ns(),
-            )
-
-            self._log.info(f"Order canceled: {venue_order_id}")
-
         except Exception as e:
             self._log.error(f"Failed to cancel order: {e}")
             if order:
@@ -840,3 +825,19 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
         except Exception as e:
             self._log.error(f"Error handling WebSocket message: {e}")
+
+        msg = flatten_dict(msg)
+
+        # Append to in-memory data
+        self._trade_updates_data.append(msg)
+
+        # Write to file (flush)
+        # self._flush_trade_updates()
+
+    def _save_trade_updates(self) -> None:
+        # TODO: save these every so often? Or wait until the end?
+        try:
+            with open(self._trade_updates_output_file_path, "w") as f:
+                json.dump(self._trade_updates_data, f, default=str)
+        except Exception as e:
+            self._log.error(f"Failed to save trade updates to file: {e}")

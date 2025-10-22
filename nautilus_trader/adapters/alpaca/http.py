@@ -1,70 +1,34 @@
-# -------------------------------------------------------------------------------------------------
-#  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
-#  https://nautechsystems.io
-#
-#  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
-#  You may not use this file except in compliance with the License.
-#  You may obtain a copy of the License at https://www.gnu.org/licenses/lgpl-3.0.en.html
-#
-#  Unless required by applicable law or agreed to in writing, software
-#  distributed under the License is distributed on an "AS IS" BASIS,
-#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#  See the License for the specific language governing permissions and
-#  limitations under the License.
-# -------------------------------------------------------------------------------------------------
-
-"""HTTP client for Alpaca API."""
-
 from __future__ import annotations
 
-import asyncio
+from functools import lru_cache
 from typing import Any
 
 import aiohttp
 
 from nautilus_trader.common.component import Logger
+from nautilus_trader.adapters.alpaca.utils import get_alpaca_key_and_secret
 
 
 class AlpacaHttpClient:
-    """
-    HTTP client for Alpaca REST API.
-
-    Parameters
-    ----------
-    base_url : str
-        The base URL for the API.
-    api_key : str
-        The API key for authentication.
-    api_secret : str
-        The API secret for authentication.
-    timeout : int
-        The timeout for HTTP requests (seconds).
-    logger : Logger
-        The logger for the client.
-
-    """
 
     def __init__(
         self,
-        base_url: str,
-        api_key: str,
-        api_secret: str,
+        paper: bool,
         timeout: int,
-        logger: Logger,
-        data_base_url: str | None = None,
     ) -> None:
-        self._base_url = base_url.rstrip("/")
-        self._data_base_url = (data_base_url or "https://data.alpaca.markets").rstrip("/")
-        self._api_key = api_key
-        self._api_secret = api_secret
-        self._timeout = timeout
-        self._log = logger
+        self.paper = paper
+        self._api_key, self._api_secret = get_alpaca_key_and_secret(paper=self.paper)
+
+        self._base_url = "https://paper-api.alpaca.markets" if self.paper else "https://api.alpaca.markets"
+        self._data_base_url = "https://data.alpaca.markets"
+        self.timeout = timeout
+        self._log = Logger(name="AlpacaHttpClient")
         self._session: aiohttp.ClientSession | None = None
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
         """Ensure HTTP session is initialized."""
         if self._session is None or self._session.closed:
-            timeout = aiohttp.ClientTimeout(total=self._timeout)
+            timeout = aiohttp.ClientTimeout(total=self.timeout)
             self._session = aiohttp.ClientSession(timeout=timeout)
         return self._session
 
@@ -200,20 +164,6 @@ class AlpacaHttpClient:
         return await self._request("GET", "/v2/assets", params=params)  # type: ignore
 
     async def get_asset(self, symbol: str) -> dict[str, Any]:
-        """
-        Get a specific asset.
-
-        Parameters
-        ----------
-        symbol : str
-            The asset symbol.
-
-        Returns
-        -------
-        dict[str, Any]
-            The asset details.
-
-        """
         return await self._request("GET", f"/v2/assets/{symbol}")  # type: ignore
 
     # Orders API
@@ -235,12 +185,6 @@ class AlpacaHttpClient:
             Maximum number of orders to return.
         symbols : str, optional
             Comma-separated list of symbols to filter.
-
-        Returns
-        -------
-        list[dict[str, Any]]
-            List of orders.
-
         """
         params = {}
         if status:
@@ -253,66 +197,15 @@ class AlpacaHttpClient:
         return await self._request("GET", "/v2/orders", params=params)  # type: ignore
 
     async def get_order(self, order_id: str) -> dict[str, Any]:
-        """
-        Get a specific order by ID.
-
-        Parameters
-        ----------
-        order_id : str
-            The order ID.
-
-        Returns
-        -------
-        dict[str, Any]
-            The order details.
-
-        """
         return await self._request("GET", f"/v2/orders/{order_id}")  # type: ignore
 
     async def submit_order(self, order_request: dict[str, Any]) -> dict[str, Any]:
-        """
-        Submit a new order.
-
-        Parameters
-        ----------
-        order_request : dict[str, Any]
-            The order request dictionary.
-
-        Returns
-        -------
-        dict[str, Any]
-            The created order details.
-
-        """
         return await self._request("POST", "/v2/orders", json_data=order_request)  # type: ignore
 
     async def cancel_order(self, order_id: str) -> dict[str, Any]:
-        """
-        Cancel an order.
-
-        Parameters
-        ----------
-        order_id : str
-            The order ID to cancel.
-
-        Returns
-        -------
-        dict[str, Any]
-            The cancellation response.
-
-        """
         return await self._request("DELETE", f"/v2/orders/{order_id}")  # type: ignore
 
     async def cancel_all_orders(self) -> list[dict[str, Any]]:
-        """
-        Cancel all open orders.
-
-        Returns
-        -------
-        list[dict[str, Any]]
-            List of canceled order details.
-
-        """
         return await self._request("DELETE", "/v2/orders")  # type: ignore
 
     async def replace_order(
@@ -360,61 +253,15 @@ class AlpacaHttpClient:
     # Positions API
 
     async def get_positions(self) -> list[dict[str, Any]]:
-        """
-        Get all open positions.
-
-        Returns
-        -------
-        list[dict[str, Any]]
-            List of positions.
-
-        """
         return await self._request("GET", "/v2/positions")  # type: ignore
 
     async def get_position(self, symbol: str) -> dict[str, Any]:
-        """
-        Get a specific position.
-
-        Parameters
-        ----------
-        symbol : str
-            The symbol for the position.
-
-        Returns
-        -------
-        dict[str, Any]
-            The position details.
-
-        """
         return await self._request("GET", f"/v2/positions/{symbol}")  # type: ignore
 
     async def close_position(self, symbol: str) -> dict[str, Any]:
-        """
-        Close a position.
-
-        Parameters
-        ----------
-        symbol : str
-            The symbol for the position to close.
-
-        Returns
-        -------
-        dict[str, Any]
-            The closure response.
-
-        """
         return await self._request("DELETE", f"/v2/positions/{symbol}")  # type: ignore
 
     async def close_all_positions(self) -> list[dict[str, Any]]:
-        """
-        Close all positions.
-
-        Returns
-        -------
-        list[dict[str, Any]]
-            List of closed positions.
-
-        """
         return await self._request("DELETE", "/v2/positions")  # type: ignore
 
     # Market Data API
@@ -488,3 +335,13 @@ class AlpacaHttpClient:
                 raise Exception(f"HTTP {response.status}: {text}")
 
             return await response.json()  # type: ignore
+
+
+@lru_cache(1)
+def get_alpaca_http_client(
+    paper:bool,
+    timeout: int,
+) -> AlpacaHttpClient:
+
+    return AlpacaHttpClient(paper=paper, timeout=timeout)
+

@@ -3,13 +3,14 @@ To get example of creating nbbo
 https://databento.com/docs/examples/equities/consolidated-bbo/example
 
 """
+
 from pathlib import Path
 import time
 
 import databento as db
 import pandas as pd
 
-from custom import ENV
+from nautilus_trader import ENV
 from custom.nt_extensions.tbbo_data import TBBOData
 from custom.utils import data_subdir
 from custom.utils.load_catalog_data import BACKTESTING_CATALOG
@@ -37,12 +38,11 @@ ALL_EQUITY_DATASETS = [
 
 
 class _DatabentoClient:
-
     def __init__(self):
         self.client = db.Historical(ENV.DATABENTO_API_KEY)
 
     def raw_file_path(self, symbol, schema, start_dt, end_dt, dataset):
-        date_str = f"{start_dt.strftime("%Y%m%d")}_{end_dt.strftime("%Y%m%d")}"
+        date_str = f"{start_dt.strftime('%Y%m%d')}_{end_dt.strftime('%Y%m%d')}"
         dataset_str = dataset.replace(".", "-").upper()
         symbol_str = symbol.upper()
         schema_str = schema.lower()
@@ -103,8 +103,18 @@ class _DatabentoClient:
         for index, row in tbbo_df.iterrows():
             ts_recv = int(index.timestamp() * 1e9)
             ts_event = int(row["ts_event"].timestamp() * 1e9)
-            tbbo = TBBOData(instrument_id, ts_event, ts_recv, row["price"], row["size"], row["side"], row["bid_px_00"],
-                            row["ask_px_00"], row["bid_sz_00"], row["ask_sz_00"])
+            tbbo = TBBOData(
+                instrument_id,
+                ts_event,
+                ts_recv,
+                row["price"],
+                row["size"],
+                row["side"],
+                row["bid_px_00"],
+                row["ask_px_00"],
+                row["bid_sz_00"],
+                row["ask_sz_00"],
+            )
             tbbo_list.append(tbbo)
 
         BACKTESTING_CATALOG.write_data(tbbo_list)
@@ -120,8 +130,9 @@ class _DatabentoClient:
             tbbo_df = data_df[data_df["action"] == "T"]
             all_tbbo.append(tbbo_df)
 
-            data = loader.from_dbn_file(path=self.raw_file_path(symbol, schema, start_dt, end_dt, dset),
-                                        instrument_id=self._instument_id(symbol), include_trades=True)
+            data = loader.from_dbn_file(
+                path=self.raw_file_path(symbol, schema, start_dt, end_dt, dset), instrument_id=self._instument_id(symbol), include_trades=True
+            )
             all_data.append(data)
 
         tbbo = pd.concat(all_tbbo)
@@ -213,6 +224,3 @@ if __name__ == "__main__":
 # - 'tbbo': Top of Book Best Bid/Offer
 # - 'trades': Trade data
 # - 'ohlcv-1s': OHLCV bars (1 second intervals)
-
-
-

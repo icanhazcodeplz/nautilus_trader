@@ -19,8 +19,10 @@ portfolios of automated trading strategies on historical data with an event-driv
 and also deploy those same strategies live, with no code changes.
 """
 
+import os
 from pathlib import Path
 from typing import Final
+from dotenv import load_dotenv
 
 from nautilus_trader.core import nautilus_pyo3
 
@@ -31,3 +33,23 @@ PACKAGE_ROOT: Final[Path] = Path(__file__).resolve().parent.parent
 TEST_DATA_DIR: Final[Path] = PACKAGE_ROOT / "tests" / "test_data"
 
 NAUTILUS_USER_AGENT: Final[str] = nautilus_pyo3.NAUTILUS_USER_AGENT
+
+load_dotenv(PACKAGE_ROOT / ".env")
+
+
+class ENV:
+    # IBKR_ACCT = os.environ["IBKR_ACCT"]
+    # IBKR_PAPER_USER = os.environ["IBKR_PAPER_USER"]
+    # IBKR_PAPER_ACCT = os.environ["IBKR_PAPER_ACCT"]
+    # OPERATOR_TZ = os.environ["OPERATOR_TZ"]
+    # POLYGON_API_KEY = os.environ["POLYGON_API_KEY"]
+    # STOCKNEWS_API_KEY = os.environ["STOCKNEWS_API_KEY"]
+    # TRADESTATION_API_KEY = os.environ["TRADESTATION_API_KEY"]
+    # TRADESTATION_API_SECRET = os.environ["TRADESTATION_API_SECRET"]
+    # TRADESTATION_REFRESH_TOKEN = os.environ["TRADESTATION_REFRESH_TOKEN"]
+
+    ALPACA_KEY = os.environ["ALPACA_KEY"]
+    ALPACA_SECRET = os.environ["ALPACA_SECRET"]
+    ALPACA_PAPER_KEY = os.environ["ALPACA_PAPER_KEY"]
+    ALPACA_PAPER_SECRET = os.environ["ALPACA_PAPER_SECRET"]
+    DATABENTO_API_KEY = os.environ["DATABENTO_API_KEY"]

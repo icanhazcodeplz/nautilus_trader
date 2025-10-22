@@ -58,12 +58,14 @@ class Momo(BaseStrategy):
         self.trades_since_order = 0
         self.metrics = []
 
+        self.initial_price = None
+        self.made_buy = False
+
     def _on_trade_tick(self, tick: TradeTick) -> None:
         # NOTE: Need to be subscribed to order book deltas to get best bid/ask prices
         # ob = self.cache.order_book(self.config.instrument_id)
         # best_bid = ob.best_bid_price()
         # best_ask = ob.best_ask_price()
-
         initialize_deque_if_needed(self.price_dq, tick.price)
         initialize_deque_if_needed(self.size_dq, tick.size)
 
@@ -79,7 +81,8 @@ class Momo(BaseStrategy):
         # if self.recent_big_drop and price > price_1ago:
         if price < (self.vwap.value - self.config.vwap_buy_threshold) and price > price_1ago and tick.size > 1:
             self.recent_big_drop = False
-            self.buy(self.config.trade_size, price, cancel_after_secs=10, tag="b")
+            # FIXME: ADd buy back
+            # self.buy(self.config.trade_size, price, cancel_after_secs=60, tag="b")
         if (
                 self.position_qty > 1 and
                 price > (self.vwap.value + self.config.vwap_buy_threshold) and
@@ -87,7 +90,9 @@ class Momo(BaseStrategy):
                 tick.size > 1 and
                 price > (self.position_avg_px + self.config.take_profit)
         ):
-            self.sell(int(self.position_qty / 2), limit_price=price, tag="vt")
+            # FIXME: ADd sell back
+            # self.sell(int(self.position_qty / 2), limit_price=price, tag="vt")
+            pass
 
         if (
             self.config.trailing_stop and
@@ -99,22 +104,28 @@ class Momo(BaseStrategy):
             new_stop = price - self.config.stop_loss
             self.stop_price = max(self.stop_price, new_stop)
 
+        if not self.made_buy:
+            self.buy(self.config.trade_size, tick.price - 1.0, cancel_after_secs=10, tag="b")
+            self.made_buy = True
+
+        if self.made_buy and self.position_qty > 0 and len(self.submitted_or_open_orders()) == 0:
+            self.sell(self.position_qty, tick.price - 0.03, tag="s")
+
     def on_order_filled(self, order) -> None:
-        if order.is_buy:
-            first_take_price = order.last_px + (self.config.take_profit * 1)
-            second_take_price = order.last_px + (self.config.take_profit * 1.2)
-            t1_qty = int(order.last_qty * self.config.take_ratio)
-            t2_qty = order.last_qty - t1_qty
-            t2_qty = 0
-            self.sell(quantity=t1_qty, limit_price=first_take_price, tag="t1")
-            if t2_qty > 0:
-                self.sell(quantity=t2_qty, limit_price=second_take_price, tag="t2")
-            self.stop_price = self.position_avg_px - self.config.stop_loss
+        pass
+        # if order.is_buy:
+        #     first_take_price = order.last_px + (self.config.take_profit * 1)
+        #     second_take_price = order.last_px + (self.config.take_profit * 1.2)
+        #     t1_qty = int(order.last_qty * self.config.take_ratio)
+        #     t2_qty = int(t1_qty * 0.5)
+        #     self.sell(quantity=t1_qty, limit_price=first_take_price, tag="t1")
+        #     if t2_qty > 0:
+        #         self.sell(quantity=t2_qty, limit_price=second_take_price, tag="t2")
+        #     self.stop_price = self.position_avg_px - self.config.stop_loss
+            # self.stop_price = self.position_avg_px
 
     def on_start(self) -> None:
-        """
-        Actions to be performed on strategy start.
-        """
+        super().on_start()
         self.instrument = self.cache.instrument(self.config.instrument_id)
         if self.instrument is None:
             self.log.error(f"Could not find instrument for {self.config.instrument_id}")
@@ -141,7 +152,8 @@ class Momo(BaseStrategy):
         self.subscribe_trade_ticks(self.config.instrument_id)
 
         # Use for LIVE testing
-        # self.buy(self.config.trade_size, 2.0, cancel_after_secs=10, tag="b")
+        # self.buy(self.config.trade_size, 3.00, cancel_after_secs=10, tag="b")
+        # self.buy(int(self.config.trade_size * 0.75), 260.0, cancel_after_secs=10, tag="b")
 
     def on_stop(self) -> None:
         super().on_stop()

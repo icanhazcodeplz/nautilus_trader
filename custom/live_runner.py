@@ -1,25 +1,13 @@
 #!/usr/bin/env python3
-# -------------------------------------------------------------------------------------------------
-#  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
-#  https://nautechsystems.io
-#
-#  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
-#  You may not use this file except in compliance with the License.
-#  You may obtain a copy of the License at https://www.gnu.org/licenses/lgpl-3.0.en.html
-#
-#  Unless required by applicable law or agreed to in writing, software
-#  distributed under the License is distributed on an "AS IS" BASIS,
-#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#  See the License for the specific language governing permissions and
-#  limitations under the License.
-# -------------------------------------------------------------------------------------------------
+import json
 
-from decimal import Decimal
-
-from custom.strategies.momo import Momo, MomoConfig
-from custom.strategies.tester_exec import CustomExecTesterConfig, CustomExecTester
-from nautilus_trader.adapters.alpaca import AlpacaDataClientConfig, AlpacaLiveDataClientFactory, ALPACA
+from custom.strategies.momo import Momo
+from custom.strategies.momo import MomoConfig
+from custom.utils import run_artifacts_subdir
+from nautilus_trader.adapters.alpaca import ALPACA
+from nautilus_trader.adapters.alpaca import AlpacaDataClientConfig
 from nautilus_trader.adapters.alpaca import AlpacaExecClientConfig
+from nautilus_trader.adapters.alpaca import AlpacaLiveDataClientFactory
 from nautilus_trader.adapters.alpaca import AlpacaLiveExecClientFactory
 from nautilus_trader.cache.config import CacheConfig
 from nautilus_trader.config import InstrumentProviderConfig
@@ -30,9 +18,10 @@ from nautilus_trader.live.node import TradingNode
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.identifiers import TraderId
 
+
 symbol = "AAPL"
 instrument_id = InstrumentId.from_str(f"{symbol}.{ALPACA}")
-environment = "paper"  # "paper" or "live"
+paper = True
 dry_run = False  # Set this to False to enable actual trading
 
 instrument_provider_config = InstrumentProviderConfig(
@@ -42,7 +31,7 @@ instrument_provider_config = InstrumentProviderConfig(
 )
 config_node = TradingNodeConfig(
     trader_id=TraderId("TESTER-001"),
-    logging=LoggingConfig(log_level="INFO", use_pyo3=True),
+    logging=LoggingConfig(log_level="DEBUG", use_pyo3=True),
     exec_engine=LiveExecEngineConfig(reconciliation=False),
     cache=CacheConfig(
         # database=DatabaseConfig(),
@@ -52,14 +41,14 @@ config_node = TradingNodeConfig(
     ),
     data_clients={
         ALPACA: AlpacaDataClientConfig(
-            environment=environment,
+            paper=paper,
             feed="iex",  # 'iex' or 'sip' (SIP requires paid subscription)
             instrument_provider=instrument_provider_config,
         ),
     },
     exec_clients={
         ALPACA: AlpacaExecClientConfig(
-            environment=environment,
+            paper=paper,
             instrument_provider=instrument_provider_config,
         ),
     },
@@ -87,18 +76,19 @@ node = TradingNode(config=config_node)
 #     dry_run=dry_run,
 #     log_data=True,
 # ))
-strategy = Momo(config=MomoConfig(
+strategy_config = MomoConfig(
     instrument_id=instrument_id,
     external_order_claims=[instrument_id],
-    trade_size=10,
+    trade_size=1,
     max_position_multiplier=1,
-    stop_loss=0.30,
-    take_profit=0.30,
+    stop_loss=0.00,
+    take_profit=0.01,
     take_ratio=0.5,
     vwap_window=50,
-    vwap_buy_threshold=0.20,
+    vwap_buy_threshold=0.01,
     trailing_stop=True,
-))
+)
+strategy = Momo(config=strategy_config)
 
 node.trader.add_strategy(strategy)
 
@@ -109,6 +99,12 @@ node.build()
 
 if __name__ == "__main__":
     try:
+        run_details = {"paper": paper, "symbol": symbol, "strategy": strategy_config.dict()}
+        details_filepath = run_artifacts_subdir("config.json")
+        with open(details_filepath, "w") as f:
+            json.dump(run_details, f, indent=2, default=str)
+
         node.run()
     finally:
+        # orders_report = node.trader.generate_orders_report()
         node.dispose()

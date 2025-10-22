@@ -1,4 +1,6 @@
+import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from nautilus_trader import PACKAGE_ROOT
 
@@ -16,3 +18,10 @@ def repo_path(*dirs):
 
 def data_subdir(*dirs):
     return repo_path("data", *dirs)
+
+
+_DT_STR = datetime.datetime.now(ZoneInfo("America/New_York")).strftime("%Y%m%d_%H%M%S")
+
+
+def run_artifacts_subdir(*dirs):
+    return data_subdir("runs", _DT_STR, *dirs)

@@ -27,8 +27,6 @@ from nautilus_trader.adapters.alpaca.factories import AlpacaLiveDataClientFactor
 from nautilus_trader.adapters.alpaca.factories import AlpacaLiveExecClientFactory
 from nautilus_trader.adapters.alpaca.providers import AlpacaInstrumentProvider
 
-
-
 __all__ = [
     "ALPACA",
     "ALPACA_VENUE",

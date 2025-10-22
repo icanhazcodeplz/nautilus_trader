@@ -1,13 +1,17 @@
 from abc import abstractmethod
 from datetime import timedelta
 
-from custom import ENV
+import pandas as pd
+
 from custom.app_utils.viz import write_to_metrics_txt_file
+from custom.utils import run_artifacts_subdir
+from nautilus_trader.common.component import TimeEvent
 from nautilus_trader.config import StrategyConfig
 from nautilus_trader.core.data import Data
 from nautilus_trader.core.message import Event
 from nautilus_trader.model.book import OrderBook
-from nautilus_trader.model.data import OrderBookDeltas, Bar
+from nautilus_trader.model.data import Bar
+from nautilus_trader.model.data import OrderBookDeltas
 from nautilus_trader.model.data import QuoteTick
 from nautilus_trader.model.data import TradeTick
 from nautilus_trader.model.enums import OrderSide
@@ -21,8 +25,8 @@ from nautilus_trader.trading.strategy import Strategy
 class BaseConfig(StrategyConfig, frozen=True):
     instrument_id: InstrumentId
     trade_size: int
-    max_position_multiplier:int
-    stop_loss:float
+    max_position_multiplier: int
+    stop_loss: float
 
 
 class BaseStrategy(Strategy):
@@ -32,6 +36,8 @@ class BaseStrategy(Strategy):
         self.stop_price = None
         self.metrics_to_save = None
         self._metrics_values = []
+        self._trade_ticks = []
+        self.trade_tick_event = {}
 
     @property
     def position_qty(self):
@@ -39,7 +45,7 @@ class BaseStrategy(Strategy):
 
     @property
     def position_avg_px(self):
-        positions_open = self.cache.positions_open()
+        positions_open = self.cache.positions_open(instrument_id=self.config.instrument_id)
         if len(positions_open) == 0:
             raise RuntimeError("No position open")
         if len(positions_open) == 1:
@@ -75,11 +81,13 @@ class BaseStrategy(Strategy):
             # FIXME: BRENT - this is not a great solution. The fills for selling are more accurate during backtesting
             # if you use a single order, but during live running it is less buggy to modify existing orders because
             # trying to cancel existing orders runs async.
-            if ENV.LIVE:
-                self.sell_position_at_price(new_limit_price)
-            else:
-                self.cancel_all_orders(self.config.instrument_id)
-                self.sell(quantity=self.position_qty, limit_price=new_limit_price, tag="s")
+            self.sell_position_at_price(new_limit_price)
+            # FIXME: cancelling all orders sometimes also cancels the subsequent sell order because of the async calls
+            # self.cancel_all_orders(self.config.instrument_id)
+            # self.sell(quantity=self.position_qty, limit_price=new_limit_price, tag="s")
+
+            # Adjust stop price so we don't send repeat orders
+            self.stop_price = tick.price
 
     def _max_buy_qty_allowed(self):
         max_position_allowed = self.config.max_position_multiplier * self.config.trade_size
@@ -93,20 +101,30 @@ class BaseStrategy(Strategy):
         return self.position_qty - sell_qty_open_orders
 
     def on_trade_tick(self, tick: TradeTick) -> None:
+        # FIXME: Only update trade_tick_event when testing?
+        self.trade_tick_event = {
+            "sz": int(tick.size),
+            "price": float(tick.price),
+            "ts_event": tick.ts_event,
+            "ts_recv": tick.ts_init,
+            "ts_clock": self.clock.utc_now(),
+            "ts_now": pd.Timestamp.utcnow(),
+        }
         self.stop_out_if_needed(tick)
-
-        # Cancel open buy orders if they have reached their expiration time
-        open_buys = self.submitted_or_open_orders(side=OrderSide.BUY)
-        for buy_order in open_buys:
-            expire_time = buy_order.tags[1]  # FIXME: BRENT - hardcoded to look at second item
-            if self.clock.utc_now() > expire_time:
-                self.cancel_order(buy_order)
-
         self._on_trade_tick(tick)
+        self.trade_tick_event["ts_now_after"] = pd.Timestamp.utcnow()
+        self._trade_ticks.append(self.trade_tick_event.copy())
+        self.trade_tick_event = {}
         if self.metrics_to_save is not None:
             metrics_vals = {name: round(item.value, 3) for name, item in self.metrics_to_save.items()}
             metrics_vals["time"] = tick.ts_event / 1e9
             self._metrics_values.append(metrics_vals)
+
+    def submit_order(self, order, position_id=None, client_id=None, params=None):
+        self.trade_tick_event["order_id"] = str(order.client_order_id)
+        self.trade_tick_event["order_event"] = pd.Timestamp(order.ts_init, tz="UTC")
+        self.trade_tick_event["order_submit"] = pd.Timestamp.utcnow()
+        super().submit_order(order, position_id=None, client_id=None, params=None)
 
     def buy(self, quantity, limit_price, tag, cancel_after_secs) -> None:
         allowed_qty = min(quantity, self._max_buy_qty_allowed())
@@ -120,13 +138,14 @@ class BaseStrategy(Strategy):
                 time_in_force=TimeInForce.DAY,
                 expire_time=None,
                 # emulation_trigger=TriggerType.LAST_PRICE,
-                tags=[tag, expire_time]
+                tags=[tag, expire_time],
             )
             self.submit_order(order)
         else:
             self.log.info(f"Not buying {quantity} @ {limit_price} because max position of reached")
 
     def sell(self, quantity, limit_price, tag) -> None:
+        # FIXME: Add cancel_after_secs param and abstract out the order_factory call
         allowed_qty = min(quantity, self._max_sell_qty_allowed())
         if self.position_qty <= 0:
             raise Exception("Cannot sell when position is negative")
@@ -137,19 +156,30 @@ class BaseStrategy(Strategy):
                 order_side=OrderSide.SELL,
                 quantity=self.instrument.make_qty(allowed_qty),
                 price=self.instrument.make_price(limit_price),
-                time_in_force=TimeInForce.GTC,
+                time_in_force=TimeInForce.DAY,
                 # emulation_trigger=TriggerType.LAST_PRICE,
-                tags=[tag]
+                tags=[tag],
             )
             self.submit_order(order)
         else:
-            self.log.info(f"Not selling {quantity} @ {limit_price} because position is {self.position_qty}")
+            self.log.info(f"Not selling {quantity} @ {limit_price} because position is {self.position_qty}. Allowed qty: {allowed_qty}")
+
+    def _cancel_orders_past_timeout(self, event: TimeEvent):
+        # Cancel open orders if they have reached their expiration time
+        open_orders = self.submitted_or_open_orders()
+        for order in open_orders:
+            if len(order.tags) > 1:
+                expire_time = order.tags[1]  # FIXME: BRENT - hardcoded to look at second item
+                if self.clock.utc_now() > expire_time:
+                    self.cancel_order(order)
 
     def on_start(self) -> None:
-        """
-        Actions to be performed on strategy start.
-        """
-        raise NotImplementedError
+        self.clock.set_timer(
+            name="cancel_orders_timer",
+            interval=timedelta(seconds=0.25),
+            callback=self._cancel_orders_past_timeout,
+        )
+
         self.instrument = self.cache.instrument(self.config.instrument_id)
         if self.instrument is None:
             self.log.error(f"Could not find instrument for {self.config.instrument_id}")
@@ -168,7 +198,6 @@ class BaseStrategy(Strategy):
         limit_price = self.position_avg_px if last_trade is None else last_trade.price
         self.sell_position_at_price(self.instrument.make_price(limit_price * 0.8))
 
-
     def on_stop(self) -> None:
         if self.position_qty > 0:
             # Cancel BUY orders, but use "close_position_limit_order" to modify sell orders
@@ -184,6 +213,10 @@ class BaseStrategy(Strategy):
         # self.unsubscribe_order_book_at_interval(self.config.instrument_id)
         if len(self._metrics_values) > 0:
             write_to_metrics_txt_file(self._metrics_values)
+
+        ticks_df = pd.DataFrame(self._trade_ticks)
+        ticks_path = run_artifacts_subdir("ticks_with_orders.pkl")
+        ticks_df.to_pickle(ticks_path)
 
     @abstractmethod
     def _on_trade_tick(self, tick: TradeTick) -> None:
@@ -226,4 +259,74 @@ class BaseStrategy(Strategy):
         pass
 
     def on_dispose(self) -> None:
-        pass
+        # Get all orders for this strategy
+        all_orders = self.cache.orders(strategy_id=self.id)
+
+        all_events = []
+        for order in all_orders:
+            for event in order.events:
+                all_events.append(
+                    {
+                        "id": str(order.client_order_id),
+                        "venue_id": str(order.venue_order_id),
+                        "side": str(order.side),
+                        "quantity": float(order.quantity),
+                        "filled_qty": float(order.filled_qty),
+                        "price": float(order.price) if hasattr(order, "price") else None,
+                        "avg_px": float(order.avg_px) if order.avg_px else None,
+                        "event": str(event.__class__.__name__),
+                        "ts_init": event.ts_init,
+                        "ts_event": event.ts_event,
+                    }
+                )
+
+        events = pd.DataFrame(all_events)
+        # FIXME: Brent finish this
+        print()
+
+
+"""
+  async def _periodic_task(self):
+      while True:
+          await asyncio.sleep(60)  # Wait 60 seconds
+          # Do your periodic operation here
+          self.log.info("Running periodic task")
+
+  def on_start(self):
+      # Start the periodic task
+      self.create_task(self._periodic_task())
+
+  2. Clock Timers (Recommended for Trading Logic)
+
+  Use the built-in clock timer system:
+
+  def on_start(self):
+      # Set a timer that fires every 60 seconds
+      self.clock.set_timer(
+          name="my_periodic_timer",
+          interval=timedelta(seconds=60),
+          callback=self._on_timer_event,
+      )
+
+  def _on_timer_event(self, event: TimeEvent):
+      # Called every 60 seconds
+      self.log.info("Timer fired!")
+      # Do your periodic operation here
+
+  3. Time Alerts (One-time events)
+
+  For one-time future events:
+
+  def on_start(self):
+      # Fire once at a specific time
+      alert_time = self.clock.utc_now() + timedelta(minutes=5)
+      self.clock.set_time_alert(
+          name="my_alert",
+          alert_time=alert_time,
+          callback=self._on_alert,
+      )
+
+  def _on_alert(self, event: TimeEvent):
+      self.log.info("Alert triggered!")
+
+"""

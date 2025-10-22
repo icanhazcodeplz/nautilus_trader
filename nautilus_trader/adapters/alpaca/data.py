@@ -89,7 +89,6 @@ class AlpacaDataClient(LiveMarketDataClient):
         self,
         loop: asyncio.AbstractEventLoop,
         http_client: AlpacaHttpClient,
-        ws_base_url: str,
         msgbus: MessageBus,
         cache: Cache,
         clock: LiveClock,
@@ -107,40 +106,15 @@ class AlpacaDataClient(LiveMarketDataClient):
             instrument_provider=instrument_provider,
         )
 
-        # Configuration
         self._config = config
-        self._log.info(f"config.environment={config.environment}", LogColor.BLUE)
-        self._log.info(f"config.feed={config.feed}", LogColor.BLUE)
-        self._log.info(f"config.http_timeout={config.http_timeout}", LogColor.BLUE)
-
-        # HTTP API
         self._http_client = http_client
-        self._log.info("HTTP client initialized", LogColor.BLUE)
-
-        # WebSocket API
-        self._ws_base_url = ws_base_url
-        self._log.info(f"WebSocket URL: {ws_base_url}", LogColor.BLUE)
-
-        # Get API credentials from config or environment
-        api_key = config.api_key or os.getenv("ALPACA_API_KEY")
-        api_secret = config.api_secret or os.getenv("ALPACA_API_SECRET")
-
-        if not api_key or not api_secret:
-            self._log.warning(
-                "API credentials not provided, WebSocket streaming will not be available",
-                LogColor.YELLOW,
-            )
-            self._ws_client = None
-        else:
-            # Initialize WebSocket client for market data streaming
-            self._ws_client = AlpacaMarketDataWebSocketClient(
-                url=ws_base_url,
-                api_key=api_key,
-                api_secret=api_secret,
-                handler=self._handle_ws_message,
-                logger=self._log,
-            )
-            self._log.info("Market data WebSocket client initialized", LogColor.BLUE)
+        # Initialize WebSocket client for market data streaming
+        self._ws_client = AlpacaMarketDataWebSocketClient(
+            paper=config.paper,
+            feed=config.feed,
+            handler=self._handle_ws_message,
+            logger=self._log,
+        )
 
     @property
     def instrument_provider(self) -> AlpacaInstrumentProvider:
@@ -548,4 +522,3 @@ class AlpacaDataClient(LiveMarketDataClient):
             request.end,
             request.params,
         )
-

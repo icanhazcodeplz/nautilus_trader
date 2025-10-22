@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from functools import lru_cache
 from typing import TYPE_CHECKING
 
 from nautilus_trader.adapters.alpaca.execution import ALPACA_VENUE
@@ -28,7 +29,6 @@ from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.identifiers import Symbol
 from nautilus_trader.model.instruments import Equity
 from nautilus_trader.model.objects import Currency
-from nautilus_trader.model.objects import Money
 from nautilus_trader.model.objects import Price
 from nautilus_trader.model.objects import Quantity
 
@@ -261,3 +261,16 @@ class AlpacaInstrumentProvider(InstrumentProvider):
         # Use the HTTP client get_assets endpoint
         # This wraps the /v2/assets endpoint
         return await self._client.get_assets()
+
+
+@lru_cache(1)
+def get_alpaca_instrument_provider(
+    client: AlpacaHttpClient,
+    clock: LiveClock,
+    config: InstrumentProviderConfig,
+) -> AlpacaInstrumentProvider:
+    return AlpacaInstrumentProvider(
+        client=client,
+        clock=clock,
+        config=config,
+    )

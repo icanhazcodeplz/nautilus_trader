@@ -28,22 +28,10 @@ class AlpacaDataClientConfig(LiveDataClientConfig, frozen=True):
 
     Parameters
     ----------
-    api_key : str, optional
-        The Alpaca API key.
-        If ``None`` then will source the `ALPACA_API_KEY` environment variable.
-    api_secret : str, optional
-        The Alpaca API secret.
-        If ``None`` then will source the `ALPACA_API_SECRET` environment variable.
     environment : str, default "paper"
         The Alpaca environment: "paper" or "live".
     feed : str, default "iex"
         The market data feed: "iex" or "sip".
-    http_base_url : str, optional
-        Override base URL for HTTP requests.
-        If None, will use environment-appropriate default.
-    data_base_url : str, optional
-        Override base URL for market data requests.
-        If None, will use default data URL.
     http_timeout : PositiveInt, default 30
         The timeout (seconds) for HTTP requests.
     update_instruments_interval_mins : PositiveInt or None, default 60
@@ -51,12 +39,8 @@ class AlpacaDataClientConfig(LiveDataClientConfig, frozen=True):
 
     """
 
-    api_key: str | None = None
-    api_secret: str | None = None
-    environment: str = "paper"
+    paper: bool = True
     feed: str = "iex"
-    http_base_url: str | None = None
-    data_base_url: str | None = None
     http_timeout: PositiveInt = 30
     update_instruments_interval_mins: PositiveInt | None = 60
 
@@ -67,12 +51,6 @@ class AlpacaExecClientConfig(LiveExecClientConfig, frozen=True):
 
     Parameters
     ----------
-    api_key : str, optional
-        The Alpaca API key.
-        If ``None`` then will source the `ALPACA_API_KEY` environment variable.
-    api_secret : str, optional
-        The Alpaca API secret.
-        If ``None`` then will source the `ALPACA_API_SECRET` environment variable.
     environment : str, default "paper"
         The Alpaca environment: "paper" or "live".
     http_timeout : PositiveInt, default 30
@@ -90,9 +68,7 @@ class AlpacaExecClientConfig(LiveExecClientConfig, frozen=True):
 
     """
 
-    api_key: str | None = None
-    api_secret: str | None = None
-    environment: str = "paper"
+    paper: bool = True
     http_timeout: PositiveInt = 30
     max_retries: PositiveInt | None = 3
     retry_delay_initial_ms: PositiveInt | None = 1_000
