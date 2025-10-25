@@ -18,13 +18,12 @@ Alpaca adapter for NautilusTrader.
 
 Provides integration with Alpaca Markets for both market data and order execution.
 """
-
-from nautilus_trader.adapters.alpaca.config import AlpacaDataClientConfig
-from nautilus_trader.adapters.alpaca.config import AlpacaExecClientConfig
-from nautilus_trader.adapters.alpaca.data import AlpacaDataClient
-from nautilus_trader.adapters.alpaca.execution import AlpacaExecutionClient, ALPACA, ALPACA_VENUE
+from nautilus_trader.adapters.alpaca.constants import ALPACA, ALPACA_VENUE
+from nautilus_trader.adapters.alpaca.data import AlpacaDataClient, AlpacaDataClientConfig
+from nautilus_trader.adapters.alpaca.execution import AlpacaExecutionClient, AlpacaExecClientConfig
 from nautilus_trader.adapters.alpaca.factories import AlpacaLiveDataClientFactory
 from nautilus_trader.adapters.alpaca.factories import AlpacaLiveExecClientFactory
+from nautilus_trader.adapters.alpaca.http import AlpacaHttpClient
 from nautilus_trader.adapters.alpaca.providers import AlpacaInstrumentProvider
 
 __all__ = [
@@ -37,4 +36,5 @@ __all__ = [
     "AlpacaInstrumentProvider",
     "AlpacaLiveDataClientFactory",
     "AlpacaLiveExecClientFactory",
+    "AlpacaHttpClient"
 ]

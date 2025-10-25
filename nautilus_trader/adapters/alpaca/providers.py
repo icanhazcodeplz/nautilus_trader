@@ -21,7 +21,7 @@ from decimal import Decimal
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
-from nautilus_trader.adapters.alpaca.execution import ALPACA_VENUE
+from nautilus_trader.adapters.alpaca.constants import ALPACA_VENUE
 from nautilus_trader.adapters.alpaca.http import AlpacaHttpClient
 from nautilus_trader.common.providers import InstrumentProvider
 from nautilus_trader.core.correctness import PyCondition

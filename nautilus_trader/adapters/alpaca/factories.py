@@ -21,16 +21,15 @@ from typing import TYPE_CHECKING
 
 from nautilus_trader.adapters.alpaca.data import AlpacaDataClient
 from nautilus_trader.adapters.alpaca.execution import AlpacaExecutionClient
-from nautilus_trader.adapters.alpaca.http import get_alpaca_http_client
 from nautilus_trader.adapters.alpaca.providers import get_alpaca_instrument_provider
+from nautilus_trader.adapters.alpaca.http import AlpacaHttpClient
 from nautilus_trader.live.factories import LiveDataClientFactory
 from nautilus_trader.live.factories import LiveExecClientFactory
 
 if TYPE_CHECKING:
     import asyncio
 
-    from nautilus_trader.adapters.alpaca.config import AlpacaDataClientConfig
-    from nautilus_trader.adapters.alpaca.config import AlpacaExecClientConfig
+    from nautilus_trader.adapters.alpaca import AlpacaExecClientConfig, AlpacaDataClientConfig
     from nautilus_trader.cache.cache import Cache
     from nautilus_trader.common.component import LiveClock
     from nautilus_trader.common.component import MessageBus
@@ -72,12 +71,11 @@ class AlpacaLiveExecClientFactory(LiveExecClientFactory):
         AlpacaExecutionClient
 
         """
-        http_client = get_alpaca_http_client(
+        http_client = AlpacaHttpClient(
             paper=config.paper,
             timeout=config.http_timeout,
         )
 
-        # Create instrument provider if configured
         instrument_provider = None
         if config.instrument_provider:
             instrument_provider = get_alpaca_instrument_provider(
@@ -86,7 +84,6 @@ class AlpacaLiveExecClientFactory(LiveExecClientFactory):
                 config=config.instrument_provider,
             )
 
-        # Create execution client
         client = AlpacaExecutionClient(
             loop=loop,
             msgbus=msgbus,
@@ -138,7 +135,7 @@ class AlpacaLiveDataClientFactory(LiveDataClientFactory):
 
         """
 
-        http_client = get_alpaca_http_client(
+        http_client = AlpacaHttpClient(
             paper=config.paper,
             timeout=config.http_timeout,
         )

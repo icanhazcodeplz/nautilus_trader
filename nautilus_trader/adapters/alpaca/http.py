@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import json
 from functools import lru_cache
 from typing import Any
 
 import aiohttp
+import pandas as pd
 
 from nautilus_trader.common.component import Logger
+
+from custom.utils import run_artifacts_subdir
 from nautilus_trader.adapters.alpaca.utils import get_alpaca_key_and_secret
 
 
@@ -15,6 +19,7 @@ class AlpacaHttpClient:
         self,
         paper: bool,
         timeout: int,
+        record_orders: bool = False,
     ) -> None:
         self.paper = paper
         self._api_key, self._api_secret = get_alpaca_key_and_secret(paper=self.paper)
@@ -24,6 +29,9 @@ class AlpacaHttpClient:
         self.timeout = timeout
         self._log = Logger(name="AlpacaHttpClient")
         self._session: aiohttp.ClientSession | None = None
+        self.record_orders = record_orders
+        if record_orders:
+            self._orders_file_buffer = open(run_artifacts_subdir("order_submissions.json"), "w")
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
         """Ensure HTTP session is initialized."""
@@ -36,6 +44,8 @@ class AlpacaHttpClient:
         """Close the HTTP session."""
         if self._session and not self._session.closed:
             await self._session.close()
+            # if self.record_orders:
+            #     self._orders_file_buffer.close()
 
     def _get_headers(self) -> dict[str, str]:
         """Get HTTP headers for authentication."""
@@ -199,10 +209,20 @@ class AlpacaHttpClient:
     async def get_order(self, order_id: str) -> dict[str, Any]:
         return await self._request("GET", f"/v2/orders/{order_id}")  # type: ignore
 
+    def _record_order(self, order_type:str, submit_dt, order_params: dict[str, Any]) -> None:
+        if self.record_orders:
+            full_order = {"type":order_type, "submit_dt":str(submit_dt), **order_params}
+            with open(run_artifacts_subdir("order_submissions.json"), "a") as f:
+                f.write(f"{json.dumps(full_order)}\n")
+
     async def submit_order(self, order_request: dict[str, Any]) -> dict[str, Any]:
-        return await self._request("POST", "/v2/orders", json_data=order_request)  # type: ignore
+        submit_dt = pd.Timestamp.utcnow()
+        response = await self._request("POST", "/v2/orders", json_data=order_request)
+        self._record_order("submit", submit_dt=submit_dt, order_params={**order_request, "venue_order_id":response["id"]})
+        return response
 
     async def cancel_order(self, order_id: str) -> dict[str, Any]:
+        self._record_order("cancel", pd.Timestamp.utcnow(), {"order_id":order_id})
         return await self._request("DELETE", f"/v2/orders/{order_id}")  # type: ignore
 
     async def cancel_all_orders(self) -> list[dict[str, Any]]:
@@ -248,6 +268,7 @@ class AlpacaHttpClient:
         if trail:
             json_data["trail"] = trail
 
+        self._record_order("replace", pd.Timestamp.utcnow(), {"order_id": order_id,**json_data})
         return await self._request("PATCH", f"/v2/orders/{order_id}", json_data=json_data)  # type: ignore
 
     # Positions API
@@ -336,12 +357,12 @@ class AlpacaHttpClient:
 
             return await response.json()  # type: ignore
 
-
-@lru_cache(1)
-def get_alpaca_http_client(
-    paper:bool,
-    timeout: int,
-) -> AlpacaHttpClient:
-
-    return AlpacaHttpClient(paper=paper, timeout=timeout)
-
+#
+# @lru_cache(1)
+# def get_alpaca_http_client(
+#     paper:bool,
+#     timeout: int,
+# ) -> AlpacaHttpClient:
+#
+#     return AlpacaHttpClient(paper=paper, timeout=timeout)
+#

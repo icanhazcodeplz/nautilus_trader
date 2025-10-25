@@ -18,17 +18,19 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from nautilus_trader.adapters.alpaca.execution import ALPACA_VENUE
+from nautilus_trader.adapters.alpaca.constants import ALPACA_VENUE
 from nautilus_trader.adapters.alpaca.http import AlpacaHttpClient
 from nautilus_trader.adapters.alpaca.providers import AlpacaInstrumentProvider
 from nautilus_trader.adapters.alpaca.websocket import AlpacaMarketDataWebSocketClient
+from nautilus_trader.common.config import PositiveInt
 from nautilus_trader.common.enums import LogColor
 from nautilus_trader.core.datetime import dt_to_unix_nanos
 from nautilus_trader.core.datetime import ensure_pydatetime_utc
+
+from nautilus_trader.live.config import LiveDataClientConfig
 from nautilus_trader.live.data_client import LiveMarketDataClient
 from nautilus_trader.model.data import QuoteTick
 from nautilus_trader.model.data import TradeTick
@@ -41,7 +43,6 @@ from nautilus_trader.model.objects import Quantity
 
 
 if TYPE_CHECKING:
-    from nautilus_trader.adapters.alpaca.config import AlpacaDataClientConfig
     from nautilus_trader.cache.cache import Cache
     from nautilus_trader.common.component import LiveClock
     from nautilus_trader.common.component import MessageBus
@@ -58,6 +59,26 @@ if TYPE_CHECKING:
     from nautilus_trader.data.messages import UnsubscribeTradeTicks
 
 
+class AlpacaDataClientConfig(LiveDataClientConfig, frozen=True):
+    """
+    Configuration for ``AlpacaDataClient`` instances.
+
+    Parameters
+    ----------
+    feed : str, default "iex"
+        The market data feed: "iex" or "sip".
+    http_timeout : PositiveInt, default 30
+        The timeout (seconds) for HTTP requests.
+    update_instruments_interval_mins : PositiveInt or None, default 60
+        The interval (minutes) between reloading instruments from the venue.
+
+    """
+    paper: bool = True
+    feed: str = "iex"
+    http_timeout: PositiveInt = 30
+    update_instruments_interval_mins: PositiveInt | None = 60
+
+
 class AlpacaDataClient(LiveMarketDataClient):
     """
     Provides a data client for Alpaca Markets.
@@ -68,8 +89,6 @@ class AlpacaDataClient(LiveMarketDataClient):
         The event loop for the client.
     http_client : AlpacaHttpClient
         The Alpaca HTTP client.
-    ws_base_url : str
-        The WebSocket base URL for market data streaming.
     msgbus : MessageBus
         The message bus for the client.
     cache : Cache
@@ -107,7 +126,10 @@ class AlpacaDataClient(LiveMarketDataClient):
         )
 
         self._config = config
+
+        # http_client used to request historical data
         self._http_client = http_client
+
         # Initialize WebSocket client for market data streaming
         self._ws_client = AlpacaMarketDataWebSocketClient(
             paper=config.paper,
@@ -522,3 +544,4 @@ class AlpacaDataClient(LiveMarketDataClient):
             request.end,
             request.params,
         )
+

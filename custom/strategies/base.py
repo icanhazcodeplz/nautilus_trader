@@ -2,6 +2,7 @@ from abc import abstractmethod
 from datetime import timedelta
 
 import pandas as pd
+from pandas import Timestamp
 
 from custom.app_utils.viz import write_to_metrics_txt_file
 from custom.utils import run_artifacts_subdir
@@ -34,10 +35,12 @@ class BaseStrategy(Strategy):
         super().__init__(config)
         self.instrument: Instrument = None  # Initialized in on_start
         self.stop_price = None
-        self.metrics_to_save = None
-        self._metrics_values = []
+
+        self._last_buy_dt: Timestamp = pd.Timestamp("1990", tz="UTC")
         self._trade_ticks = []
         self.trade_tick_event = {}
+        self.metrics_to_save = None
+        self._metrics_values = []
 
     @property
     def position_qty(self):
@@ -120,49 +123,40 @@ class BaseStrategy(Strategy):
             metrics_vals["time"] = tick.ts_event / 1e9
             self._metrics_values.append(metrics_vals)
 
-    def submit_order(self, order, position_id=None, client_id=None, params=None):
+    def _submit_limit_order(self, side: OrderSide, quantity: int, limit_price:float, tag:str, cancel_after_secs=None):
+        tags = [tag]
+        if cancel_after_secs is not None:
+            expire_time = self.clock.utc_now() + timedelta(seconds=cancel_after_secs)
+            tags.append(expire_time)
+        order: LimitOrder = self.order_factory.limit(
+            instrument_id=self.config.instrument_id,
+            order_side=side,
+            quantity=self.instrument.make_qty(quantity),
+            price=self.instrument.make_price(limit_price),
+            time_in_force=TimeInForce.DAY,
+            expire_time=None,
+            tags=tags,
+        )
+        # FIXME: move trade tick events?
         self.trade_tick_event["order_id"] = str(order.client_order_id)
         self.trade_tick_event["order_event"] = pd.Timestamp(order.ts_init, tz="UTC")
         self.trade_tick_event["order_submit"] = pd.Timestamp.utcnow()
-        super().submit_order(order, position_id=None, client_id=None, params=None)
+        self.submit_order(order, position_id=None, client_id=None, params=None)
 
-    def buy(self, quantity, limit_price, tag, cancel_after_secs) -> None:
+    def buy(self, quantity, limit_price, tag, cancel_after_secs=None) -> None:
         allowed_qty = min(quantity, self._max_buy_qty_allowed())
+        if allowed_qty != quantity:
+            self.log.info(f"Buy quantity reduced from {quantity} to {allowed_qty} to avoid exceeding max position.")
         if allowed_qty > 0:
-            expire_time = self.clock.utc_now() + timedelta(seconds=cancel_after_secs)
-            order: LimitOrder = self.order_factory.limit(
-                instrument_id=self.config.instrument_id,
-                order_side=OrderSide.BUY,
-                quantity=self.instrument.make_qty(allowed_qty),
-                price=self.instrument.make_price(limit_price),
-                time_in_force=TimeInForce.DAY,
-                expire_time=None,
-                # emulation_trigger=TriggerType.LAST_PRICE,
-                tags=[tag, expire_time],
-            )
-            self.submit_order(order)
-        else:
-            self.log.info(f"Not buying {quantity} @ {limit_price} because max position of reached")
+            self._submit_limit_order(OrderSide.BUY, allowed_qty, limit_price, tag, cancel_after_secs)
+            self._last_buy_dt = self.clock.utc_now()
 
-    def sell(self, quantity, limit_price, tag) -> None:
-        # FIXME: Add cancel_after_secs param and abstract out the order_factory call
+    def sell(self, quantity, limit_price, tag, cancel_after_secs=None) -> None:
         allowed_qty = min(quantity, self._max_sell_qty_allowed())
-        if self.position_qty <= 0:
-            raise Exception("Cannot sell when position is negative")
-
+        if allowed_qty != quantity:
+            self.log.info(f"Sell quantity reduced from {quantity} to {allowed_qty} to avoid going short.")
         if allowed_qty > 0:
-            order: LimitOrder = self.order_factory.limit(
-                instrument_id=self.config.instrument_id,
-                order_side=OrderSide.SELL,
-                quantity=self.instrument.make_qty(allowed_qty),
-                price=self.instrument.make_price(limit_price),
-                time_in_force=TimeInForce.DAY,
-                # emulation_trigger=TriggerType.LAST_PRICE,
-                tags=[tag],
-            )
-            self.submit_order(order)
-        else:
-            self.log.info(f"Not selling {quantity} @ {limit_price} because position is {self.position_qty}. Allowed qty: {allowed_qty}")
+            self._submit_limit_order(OrderSide.SELL, allowed_qty, limit_price, tag, cancel_after_secs)
 
     def _cancel_orders_past_timeout(self, event: TimeEvent):
         # Cancel open orders if they have reached their expiration time

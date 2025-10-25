@@ -105,7 +105,7 @@ class Momo(BaseStrategy):
             self.stop_price = max(self.stop_price, new_stop)
 
         if not self.made_buy:
-            self.buy(self.config.trade_size, tick.price - 1.0, cancel_after_secs=10, tag="b")
+            self.buy(self.config.trade_size, tick.price, cancel_after_secs=10, tag="b")
             self.made_buy = True
 
         if self.made_buy and self.position_qty > 0 and len(self.submitted_or_open_orders()) == 0:

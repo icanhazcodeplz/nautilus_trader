@@ -20,15 +20,21 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
+import pandas as pd
+
 from custom.utils import run_artifacts_subdir
+from nautilus_trader.adapters.alpaca.http import AlpacaHttpClient
+from nautilus_trader.adapters.alpaca.constants import ALPACA_VENUE
 from nautilus_trader.adapters.alpaca.enums import AlpacaOrderType, AlpacaTimeInForce
-from nautilus_trader.adapters.alpaca.http import get_alpaca_http_client
 from nautilus_trader.adapters.alpaca.parsing import AlpacaEnumParser
 from nautilus_trader.adapters.alpaca.parsing import parse_order_status_report
 from nautilus_trader.adapters.alpaca.websocket import AlpacaWebSocketClient
+from nautilus_trader.common.config import PositiveInt
 from nautilus_trader.common.enums import LogColor
 from nautilus_trader.model.objects import Price, Quantity
 from nautilus_trader.model.identifiers import TradeId
+
+from nautilus_trader.live.config import LiveExecClientConfig
 from nautilus_trader.model.enums import LiquiditySide
 from nautilus_trader.common.providers import InstrumentProvider
 from nautilus_trader.execution.reports import FillReport
@@ -50,7 +56,6 @@ from nautilus_trader.model.objects import Money, AccountBalance, MarginBalance, 
 if TYPE_CHECKING:
     import asyncio
 
-    from nautilus_trader.adapters.alpaca.config import AlpacaExecClientConfig
     from nautilus_trader.cache.cache import Cache
     from nautilus_trader.common.component import LiveClock
     from nautilus_trader.common.component import MessageBus
@@ -64,12 +69,9 @@ if TYPE_CHECKING:
     from nautilus_trader.execution.messages import QueryAccount
     from nautilus_trader.execution.messages import SubmitOrder
 
-ALPACA = "ALPACA"
-ALPACA_VENUE = Venue("ALPACA")
-
 
 # Flatten msg into a single dictionary
-def flatten_dict(d: dict, parent_key: str = '', sep: str = '_') -> dict:
+def flatten_dict(d: dict, parent_key: str = "", sep: str = "_") -> dict:
     """Recursively flatten a nested dictionary."""
     items = []
     for k, v in d.items():
@@ -79,6 +81,36 @@ def flatten_dict(d: dict, parent_key: str = '', sep: str = '_') -> dict:
         else:
             items.append((new_key, v))
     return dict(items)
+
+
+class AlpacaExecClientConfig(LiveExecClientConfig, frozen=True):
+    """
+    Configuration for ``AlpacaExecutionClient`` instances.
+
+    Parameters
+    ----------
+    http_timeout : PositiveInt, default 30
+        The timeout (seconds) for HTTP requests.
+    max_retries : PositiveInt or None, default 3
+        The maximum number of times a submit, cancel or modify order request will be retried.
+    retry_delay_initial_ms : PositiveInt or None, default 1000
+        The initial delay (milliseconds) between retries.
+    retry_delay_max_ms : PositiveInt or None, default 10000
+        The maximum delay (milliseconds) between retries.
+
+    Warnings
+    --------
+    A short `retry_delay` with frequent retries may result in account bans or rate limiting.
+
+    """
+
+    paper: bool = True
+    record_orders: bool = False
+    http_timeout: PositiveInt = 30
+    max_retries: PositiveInt | None = 3
+    retry_delay_initial_ms: PositiveInt | None = 1_000
+    retry_delay_max_ms: PositiveInt | None = 10_000
+
 
 class AlpacaExecutionClient(LiveExecutionClient):
     """
@@ -139,12 +171,11 @@ class AlpacaExecutionClient(LiveExecutionClient):
             account_id = AccountId(f"{name or ALPACA_VENUE.value}-LIVE")
 
         self._set_account_id(account_id)
-
-        self._http_client = get_alpaca_http_client(
+        self._http_client = AlpacaHttpClient(
             paper=config.paper,
-            timeout=self._http_timeout,
+            timeout=config.http_timeout,
+            record_orders=config.record_orders,
         )
-
         self._enum_parser = AlpacaEnumParser()
 
         # Initialize WebSocket client for order updates
@@ -155,7 +186,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
         )
 
         self._instrument_provider.load_all()
-    #     BRENT. Instruments loaded here
+        #     BRENT. Instruments loaded here
 
         self.order_previous_qty_and_value = dict()
 
@@ -432,18 +463,13 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
             # Submit order via HTTP API
             alpaca_order = await self._http_client.submit_order(order_request)
-
-            # Generate order accepted event
-            venue_order_id = VenueOrderId(alpaca_order["id"])
             self.generate_order_accepted(
                 strategy_id=order.strategy_id,
                 instrument_id=order.instrument_id,
                 client_order_id=order.client_order_id,
-                venue_order_id=venue_order_id,
+                venue_order_id=VenueOrderId(alpaca_order["id"]),
                 ts_event=self._clock.timestamp_ns(),
             )
-
-            self._log.info(f"Order accepted: {venue_order_id}")
 
         except Exception as e:
             self._log.error(f"Failed to submit order: {e}")
@@ -470,7 +496,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
         time_in_force = self._enum_parser.parse_nautilus_time_in_force(order.time_in_force)
 
         # FIXME: BRENT should we prevent any market orders?
-        extended_hours = (order_type == AlpacaOrderType.LIMIT and time_in_force == AlpacaTimeInForce.DAY)
+        extended_hours = order_type == AlpacaOrderType.LIMIT and time_in_force == AlpacaTimeInForce.DAY
         # Build base request
         request = {
             "symbol": symbol,
@@ -564,14 +590,14 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 )
             except Exception as e:
                 string = e.args[0]
-                start = string.find('{')
+                start = string.find("{")
                 json_text = string[start:]
                 data = json.loads(json_text)
-                msg = data['message']
+                msg = data["message"]
                 if msg == "order already replaced":
                     self._log.info(f"Order {command.client_order_id} is already pending replacement, skipping")
                     new_order = await self._http_client.get_order(venue_order_id.value)
-                    if float(new_order['limit_price']) != float(limit_price) :
+                    if float(new_order["limit_price"]) != float(limit_price):
                         self._log.warning(f"Order already replaced, but limit price has changed. {venue_order_id}")
                 elif msg == "order parameters are not changed":
                     self._log.info(f"Order {command.client_order_id} is already in desired state, skipping")
@@ -704,8 +730,9 @@ class AlpacaExecutionClient(LiveExecutionClient):
         """
         try:
             # Extract event type and order data
-            event = msg['data'].get("event")
-            order_data = msg['data'].get("order", {})
+            msg_received_dt = pd.Timestamp.utcnow()
+            event = msg["data"].get("event")
+            order_data = msg["data"].get("order", {})
 
             if not event or not order_data:
                 self._log.warning(f"Invalid trade update message: {msg}")
@@ -719,7 +746,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
             client_order_id = ClientOrderId(client_order_id_str) if client_order_id_str else None
 
             # Try to get client_order_id from cache if not in message
-            if not client_order_id:
+            if not client_order_id or len(client_order_id_str) > 30:
                 client_order_id = self._cache.client_order_id(venue_order_id)
 
             if not client_order_id:
@@ -740,6 +767,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
             if event == "new":
                 # Order accepted
+                # FIXME: Check if order already exists. This should raise a duplicate status update warning
                 self.generate_order_accepted(
                     strategy_id=order.strategy_id,
                     instrument_id=instrument_id,
@@ -749,7 +777,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 )
 
             elif event in ["fill", "partial_fill"]:
-                if order_data['asset_class'] != 'us_equity':
+                if order_data["asset_class"] != "us_equity":
                     raise NotImplementedError(f"fill event for asset_class {order_data['asset_class']} not yet implemented")
 
                 filled_qty = int(order_data.get("filled_qty"))
@@ -760,11 +788,11 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 this_fill_qty = filled_qty - previous_qty
                 current_total_value = round(filled_qty * filled_avg_price, 4)
                 this_fill_value = current_total_value - previous_value
-                this_fill_px = round(this_fill_value / this_fill_qty,4)
+                this_fill_px = round(this_fill_value / this_fill_qty, 4)
 
                 self.order_previous_qty_and_value[venue_order_id] = (filled_qty, current_total_value)
 
-                alpaca_event_id = msg['data']['event_id']  # This is a unique id for the trade event
+                alpaca_event_id = msg["data"]["event_id"]  # This is a unique id for the trade event
                 currency = Currency.from_str("USD")
                 self.generate_order_filled(
                     strategy_id=order.strategy_id,
@@ -778,7 +806,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
                     last_qty=Quantity.from_str(str(this_fill_qty)),
                     last_px=Price.from_str(str(this_fill_px)),
                     quote_currency=currency,
-                    commission=Money(0, currency), # Commission is 0 for Alpaca
+                    commission=Money(0, currency),  # Commission is 0 for Alpaca
                     liquidity_side=LiquiditySide.TAKER,
                     ts_event=ts_event,
                 )
@@ -805,9 +833,9 @@ class AlpacaExecutionClient(LiveExecutionClient):
             elif event == "replaced":  # AKA modified
                 self._log.info(f"Order {client_order_id} replaced")
 
-                replaced_by = msg['data']['order']['replaced_by']
+                replaced_by = msg["data"]["order"]["replaced_by"]
                 self.generate_order_updated(
-                    strategy_id = order.strategy_id,
+                    strategy_id=order.strategy_id,
                     instrument_id=instrument_id,
                     client_order_id=client_order_id,
                     venue_order_id=VenueOrderId(replaced_by),
@@ -818,18 +846,17 @@ class AlpacaExecutionClient(LiveExecutionClient):
                     venue_order_id_modified=True,
                 )
 
-            elif event in ["pending_new"]:
+            elif event in ["pending_new", "accepted"]:
                 self._log.debug(f"Unhandled trade update event: {event}")
             else:
-                self._log.warn(f"Unrecognized trade update event: {event}")
+                self._log.warning(f"Unrecognized trade update event: {event}")
 
         except Exception as e:
             self._log.error(f"Error handling WebSocket message: {e}")
 
-        msg = flatten_dict(msg)
+        flattened_msg = flatten_dict(msg)
 
-        # Append to in-memory data
-        self._trade_updates_data.append(msg)
+        self._trade_updates_data.append({"msg_received_dt": str(msg_received_dt), **flattened_msg})
 
         # Write to file (flush)
         # self._flush_trade_updates()

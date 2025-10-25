@@ -74,3 +74,29 @@ cargo nextest run -p <insert_package_name_here>
 ```
 
 https://stackoverflow.com/questions/1463340/how-can-i-revert-multiple-git-commits
+
+# Clock sync
+To measure ping
+```bash
+ping -c 100 -i 0.5 time.apple.com
+ping -c 100 -i 0.5 clock.nyc.he.net
+```
+
+To measure offset
+`sntp time.apple.com`
+
+Sync time with ntp
+`sudo sntp -sS time.apple.com`
+
+### To create cron job
+ - System Preferences -> Disk Access
+ - Add job
+ - CTRL + SHIFT + G
+ - search and add /usr/sbin/cron
+
+ - In terminal
+   - sudo crontab -l
+   - echo "* * * * * /usr/bin/sntp -sS time.apple.com" | sudo crontab -
+   - sudo crontab -l
+   - Check mail after 1 min by typing "mail" to see if any errors
+   - 

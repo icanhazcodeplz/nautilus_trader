@@ -2,8 +2,7 @@
 
 import pandas as pd
 
-from nautilus_trader.adapters.alpaca import ALPACA
-from nautilus_trader.adapters.alpaca import AlpacaDataClientConfig
+from nautilus_trader.adapters.alpaca import ALPACA, AlpacaDataClientConfig
 from nautilus_trader.config import InstrumentProviderConfig
 from nautilus_trader.config import LiveExecEngineConfig
 from nautilus_trader.config import LoggingConfig

@@ -17,8 +17,8 @@
 from decimal import Decimal
 
 from custom.strategies.tester_exec import CustomExecTesterConfig, CustomExecTester
-from nautilus_trader.adapters.alpaca import AlpacaDataClientConfig, AlpacaLiveDataClientFactory, ALPACA
-from nautilus_trader.adapters.alpaca import AlpacaExecClientConfig
+from nautilus_trader.adapters.alpaca import AlpacaDataClientConfig, AlpacaLiveDataClientFactory, ALPACA, \
+    AlpacaExecClientConfig
 from nautilus_trader.adapters.alpaca import AlpacaLiveExecClientFactory
 from nautilus_trader.cache.config import CacheConfig
 from nautilus_trader.config import InstrumentProviderConfig
