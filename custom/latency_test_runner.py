@@ -17,10 +17,12 @@ from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.identifiers import TraderId
 
 
-symbol = "AAPL"
-instrument_id = InstrumentId.from_str(f"{symbol}.{ALPACA}")
-paper = True
+symbol = "TSLA"
+paper = False
+buy_on_tick = True
+order_count = 50
 
+instrument_id = InstrumentId.from_str(f"{symbol}.{ALPACA}")
 instrument_provider_config = InstrumentProviderConfig(load_ids=frozenset([instrument_id]), load_all=False)
 config_node = TradingNodeConfig(
     trader_id=TraderId("TESTER-001"),
@@ -52,7 +54,8 @@ node = TradingNode(config=config_node)
 
 strategy_config = LatencyTestStrategyConfig(
     instrument_id=instrument_id,
-    buy_on_tick=True,
+    buy_on_tick=buy_on_tick,
+    order_count=order_count,
 )
 strategy = LatencyTestStrategy(config=strategy_config)
 

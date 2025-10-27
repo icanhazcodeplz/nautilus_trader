@@ -218,15 +218,15 @@ class AlpacaHttpClient:
     async def submit_order(self, order_request: dict[str, Any]) -> dict[str, Any]:
         submit_dt = pd.Timestamp.utcnow()
         response = await self._request("POST", "/v2/orders", json_data=order_request)
-        self._record_order("submit", submit_dt=submit_dt, order_params={**order_request, "venue_order_id":response["id"]})
+        self._record_order("submit", submit_dt=submit_dt, order_params={**order_request, "order_id":response["id"]})
         return response
 
     async def cancel_order(self, order_id: str) -> dict[str, Any]:
         self._record_order("cancel", pd.Timestamp.utcnow(), {"order_id":order_id})
-        return await self._request("DELETE", f"/v2/orders/{order_id}")  # type: ignore
+        return await self._request("DELETE", f"/v2/orders/{order_id}")
 
     async def cancel_all_orders(self) -> list[dict[str, Any]]:
-        return await self._request("DELETE", "/v2/orders")  # type: ignore
+        return await self._request("DELETE", "/v2/orders")
 
     async def replace_order(
         self,

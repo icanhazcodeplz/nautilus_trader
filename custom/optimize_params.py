@@ -5,13 +5,13 @@ from datetime import datetime
 
 import numpy as np
 
-from custom.process_manager import ProcessManager
+from custom.utils.process_manager import ProcessManager
 
 sys.path.append(os.getcwd())
 
 import optuna
 import logging
-from custom.runner import run_multiple_backtests
+from custom.backtest_runner import run_multiple_backtests
 from custom.statistics.trade_avg_scaled import TotalBought
 
 DATABASE_STR = "sqlite:///optuna.db"

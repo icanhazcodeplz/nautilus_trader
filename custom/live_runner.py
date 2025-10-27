@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 import json
 
-from custom.strategies.momo import Momo
-from custom.strategies.momo import MomoConfig
+from custom.strategies.momo import MomoStrategy
+from custom.strategies.momo import MomoStrategyConfig
 from custom.utils import run_artifacts_subdir
 from nautilus_trader.adapters.alpaca import ALPACA, AlpacaExecClientConfig, AlpacaDataClientConfig
 from nautilus_trader.adapters.alpaca import AlpacaLiveDataClientFactory
@@ -74,7 +74,7 @@ node = TradingNode(config=config_node)
 #     dry_run=dry_run,
 #     log_data=True,
 # ))
-strategy_config = MomoConfig(
+strategy_config = MomoStrategyConfig(
     instrument_id=instrument_id,
     external_order_claims=[instrument_id],
     trade_size=1,
@@ -86,7 +86,7 @@ strategy_config = MomoConfig(
     vwap_buy_threshold=0.01,
     trailing_stop=True,
 )
-strategy = Momo(config=strategy_config)
+strategy = MomoStrategy(config=strategy_config)
 
 node.trader.add_strategy(strategy)
 

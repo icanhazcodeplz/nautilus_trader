@@ -1,3 +1,4 @@
+import json
 from abc import abstractmethod
 from datetime import timedelta
 
@@ -23,22 +24,23 @@ from nautilus_trader.model.orders import LimitOrder
 from nautilus_trader.trading.strategy import Strategy
 
 
-class BaseConfig(StrategyConfig, frozen=True):
+class BaseStrategyConfig(StrategyConfig, frozen=True):
     instrument_id: InstrumentId
     trade_size: int
     max_position_multiplier: int
     stop_loss: float
+    record_op_speed: bool  # Record operation speed in the "on_trade_tick" method
 
 
 class BaseStrategy(Strategy):
-    def __init__(self, config: BaseConfig) -> None:
+    def __init__(self, config: BaseStrategyConfig) -> None:
         super().__init__(config)
         self.instrument: Instrument = None  # Initialized in on_start
         self.stop_price = None
 
         self._last_buy_dt: Timestamp = pd.Timestamp("1990", tz="UTC")
         self._trade_ticks = []
-        self.trade_tick_event = {}
+        self._trade_tick_event = {}
         self.metrics_to_save = None
         self._metrics_values = []
 
@@ -104,20 +106,26 @@ class BaseStrategy(Strategy):
         return self.position_qty - sell_qty_open_orders
 
     def on_trade_tick(self, tick: TradeTick) -> None:
-        # FIXME: Only update trade_tick_event when testing?
-        self.trade_tick_event = {
-            "sz": int(tick.size),
-            "price": float(tick.price),
-            "ts_event": tick.ts_event,
-            "ts_recv": tick.ts_init,
-            "ts_clock": self.clock.utc_now(),
-            "ts_now": pd.Timestamp.utcnow(),
-        }
+        if self.config.record_op_speed:
+            self._trade_tick_event = {
+                "sz": int(tick.size),
+                "price": float(tick.price),
+                "ts_event": tick.ts_event,
+                "ts_recv": tick.ts_init,
+                "ts_clock": self.clock.utc_now(),
+                "ts_now": pd.Timestamp.utcnow(),
+            }
+
+        #  Actual operations of this method
         self.stop_out_if_needed(tick)
         self._on_trade_tick(tick)
-        self.trade_tick_event["ts_now_after"] = pd.Timestamp.utcnow()
-        self._trade_ticks.append(self.trade_tick_event.copy())
-        self.trade_tick_event = {}
+
+        # Record if needed
+        if self.config.record_op_speed:
+            self._trade_tick_event["ts_now_after"] = pd.Timestamp.utcnow()
+            self._trade_ticks.append(self._trade_tick_event.copy())
+            self._trade_tick_event = {}
+
         if self.metrics_to_save is not None:
             metrics_vals = {name: round(item.value, 3) for name, item in self.metrics_to_save.items()}
             metrics_vals["time"] = tick.ts_event / 1e9
@@ -137,10 +145,11 @@ class BaseStrategy(Strategy):
             expire_time=None,
             tags=tags,
         )
-        # FIXME: move trade tick events?
-        self.trade_tick_event["order_id"] = str(order.client_order_id)
-        self.trade_tick_event["order_event"] = pd.Timestamp(order.ts_init, tz="UTC")
-        self.trade_tick_event["order_submit"] = pd.Timestamp.utcnow()
+        if self.config.record_op_speed:
+            self._trade_tick_event["order_id"] = str(order.client_order_id)
+            self._trade_tick_event["order_event"] = pd.Timestamp(order.ts_init, tz="UTC")
+            self._trade_tick_event["order_submit"] = pd.Timestamp.utcnow()
+
         self.submit_order(order, position_id=None, client_id=None, params=None)
 
     def buy(self, quantity, limit_price, tag, cancel_after_secs=None) -> None:
@@ -202,15 +211,15 @@ class BaseStrategy(Strategy):
 
         # Unsubscribe from data
         self.unsubscribe_trade_ticks(self.config.instrument_id)
-        # self.unsubscribe_quote_ticks(self.config.instrument_id)
-        # self.unsubscribe_order_book_deltas(self.config.instrument_id)
-        # self.unsubscribe_order_book_at_interval(self.config.instrument_id)
+
+        # Record metrics and trade ticks if present
         if len(self._metrics_values) > 0:
             write_to_metrics_txt_file(self._metrics_values)
 
-        ticks_df = pd.DataFrame(self._trade_ticks)
-        ticks_path = run_artifacts_subdir("ticks_with_orders.pkl")
-        ticks_df.to_pickle(ticks_path)
+        if len(self._trade_ticks) > 0:
+            ticks_df = pd.DataFrame(self._trade_ticks)
+            ticks_path = run_artifacts_subdir("ticks_with_orders.pkl")
+            ticks_df.to_pickle(ticks_path)
 
     @abstractmethod
     def _on_trade_tick(self, tick: TradeTick) -> None:
@@ -253,30 +262,31 @@ class BaseStrategy(Strategy):
         pass
 
     def on_dispose(self) -> None:
-        # Get all orders for this strategy
-        all_orders = self.cache.orders(strategy_id=self.id)
 
-        all_events = []
-        for order in all_orders:
-            for event in order.events:
-                all_events.append(
-                    {
-                        "id": str(order.client_order_id),
-                        "venue_id": str(order.venue_order_id),
-                        "side": str(order.side),
-                        "quantity": float(order.quantity),
-                        "filled_qty": float(order.filled_qty),
-                        "price": float(order.price) if hasattr(order, "price") else None,
-                        "avg_px": float(order.avg_px) if order.avg_px else None,
-                        "event": str(event.__class__.__name__),
-                        "ts_init": event.ts_init,
-                        "ts_event": event.ts_event,
-                    }
-                )
+        if self.config.record_op_speed:
+            # Get all orders for this strategy
+            all_orders = self.cache.orders(strategy_id=self.id)
+            all_events = []
+            for order in all_orders:
+                for event in order.events:
+                    all_events.append(
+                        {
+                            "id": str(order.client_order_id),
+                            "venue_id": str(order.venue_order_id),
+                            "side": str(order.side),
+                            "quantity": float(order.quantity),
+                            "filled_qty": float(order.filled_qty),
+                            "price": float(order.price) if hasattr(order, "price") else None,
+                            "avg_px": float(order.avg_px) if order.avg_px else None,
+                            "event": str(event.__class__.__name__),
+                            "ts_init": event.ts_init,
+                            "ts_event": event.ts_event,
+                        }
+                    )
 
-        events = pd.DataFrame(all_events)
-        # FIXME: Brent finish this
-        print()
+            with open(run_artifacts_subdir("orders_events.json"), "w") as f:
+                as_json = json.dumps(all_events)
+                f.write(as_json)
 
 
 """

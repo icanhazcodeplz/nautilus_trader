@@ -8,7 +8,7 @@ from custom.catalog_options import CATALOG_OPTIONS
 from custom.utils.load_catalog_data import VENUE, get_catalog_data
 from custom.nt_extensions.limit_fill_model import LimitFillModel
 from custom.utils.orders_to_trades import orders_to_trades
-from custom.strategies.momo import MomoConfig, Momo
+from custom.strategies.momo import MomoStrategyConfig, MomoStrategy
 from custom.app_utils.viz import create_and_save_markers
 from custom.strategies.random import RandomConfig, Random
 from nautilus_trader.backtest.engine import BacktestEngine
@@ -76,8 +76,8 @@ def run_single_backtest(dataset_name, strategy_name, params, return_engine=False
         config = RandomConfig(instrument_id=test_instrument.id, **params_copy)
         strategy = Random(config=config)
     elif strategy_name == "momo":
-        config = MomoConfig(instrument_id=test_instrument.id, **params_copy)
-        strategy = Momo(config=config)
+        config = MomoStrategyConfig(instrument_id=test_instrument.id, **params_copy)
+        strategy = MomoStrategy(config=config)
 
 
     engine.add_strategy(strategy=strategy)

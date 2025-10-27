@@ -2,7 +2,7 @@ from collections import deque
 
 from custom.nt_extensions.indicators import RollingVWAP
 from custom.utils.load_catalog_data import BACKTESTING_CATALOG
-from custom.strategies.base import BaseStrategy
+from custom.strategies.base import BaseStrategy, BaseStrategyConfig
 from nautilus_trader.config import StrategyConfig
 from nautilus_trader.indicators import ExponentialMovingAverage
 from nautilus_trader.model.data import Bar
@@ -12,7 +12,7 @@ from nautilus_trader.model.data import TradeTick
 from nautilus_trader.model.identifiers import InstrumentId
 
 
-class MomoConfig(StrategyConfig, frozen=True):
+class MomoStrategyConfig(BaseStrategyConfig, frozen=True):
     instrument_id: InstrumentId
     trade_size: int
     max_position_multiplier:int
@@ -23,6 +23,8 @@ class MomoConfig(StrategyConfig, frozen=True):
     vwap_window:int
     vwap_buy_threshold:float
     trailing_stop:bool
+
+    record_op_speed: bool = False  # Record operation speed
     # bar_type: BarType
     # fast_ema_period: PositiveInt = 10
     # slow_ema_period: PositiveInt = 20
@@ -34,8 +36,8 @@ def initialize_deque_if_needed(dq:deque, value):
             dq.append(value)
     return dq
 
-class Momo(BaseStrategy):
-    def __init__(self, config: MomoConfig) -> None:
+class MomoStrategy(BaseStrategy):
+    def __init__(self, config: MomoStrategyConfig) -> None:
         super().__init__(config)
 
         # self.fast_ema = ExponentialMovingAverage(config.fast_ema_period)
