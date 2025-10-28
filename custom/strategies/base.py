@@ -94,11 +94,14 @@ class BaseStrategy(Strategy):
             # Adjust stop price so we don't send repeat orders
             self.stop_price = tick.price
 
+    @property
+    def max_position_allowed(self):
+        return self.config.max_position_multiplier * self.config.trade_size
+
     def _max_buy_qty_allowed(self):
-        max_position_allowed = self.config.max_position_multiplier * self.config.trade_size
         open_orders = self.submitted_or_open_orders(side=OrderSide.BUY)
         buy_qty_open_orders = sum(order.quantity for order in open_orders)
-        return max_position_allowed - buy_qty_open_orders - self.position_qty
+        return self.max_position_allowed - buy_qty_open_orders - self.position_qty
 
     def _max_sell_qty_allowed(self):
         open_orders = self.submitted_or_open_orders(side=OrderSide.SELL)
@@ -155,7 +158,7 @@ class BaseStrategy(Strategy):
     def buy(self, quantity, limit_price, tag, cancel_after_secs=None) -> None:
         allowed_qty = min(quantity, self._max_buy_qty_allowed())
         if allowed_qty != quantity:
-            self.log.info(f"Buy quantity reduced from {quantity} to {allowed_qty} to avoid exceeding max position.")
+            self.log.info(f"Buy quantity reduced from {quantity} to {allowed_qty} to avoid exceeding max position of {self.max_position_allowed}.")
         if allowed_qty > 0:
             self._submit_limit_order(OrderSide.BUY, allowed_qty, limit_price, tag, cancel_after_secs)
             self._last_buy_dt = self.clock.utc_now()

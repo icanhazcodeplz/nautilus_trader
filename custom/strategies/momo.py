@@ -12,7 +12,7 @@ from nautilus_trader.model.data import TradeTick
 from nautilus_trader.model.identifiers import InstrumentId
 
 
-class MomoStrategyConfig(BaseStrategyConfig, frozen=True):
+class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     instrument_id: InstrumentId
     trade_size: int
     max_position_multiplier:int
@@ -83,8 +83,7 @@ class MomoStrategy(BaseStrategy):
         # if self.recent_big_drop and price > price_1ago:
         if price < (self.vwap.value - self.config.vwap_buy_threshold) and price > price_1ago and tick.size > 1:
             self.recent_big_drop = False
-            # FIXME: ADd buy back
-            # self.buy(self.config.trade_size, price, cancel_after_secs=60, tag="b")
+            self.buy(self.config.trade_size, price, cancel_after_secs=60, tag="b")
         if (
                 self.position_qty > 1 and
                 price > (self.vwap.value + self.config.vwap_buy_threshold) and
@@ -92,8 +91,7 @@ class MomoStrategy(BaseStrategy):
                 tick.size > 1 and
                 price > (self.position_avg_px + self.config.take_profit)
         ):
-            # FIXME: ADd sell back
-            # self.sell(int(self.position_qty / 2), limit_price=price, tag="vt")
+            self.sell(int(self.position_qty / 2), limit_price=price, cancel_after_secs=10,tag="vt")
             pass
 
         if (
@@ -106,12 +104,6 @@ class MomoStrategy(BaseStrategy):
             new_stop = price - self.config.stop_loss
             self.stop_price = max(self.stop_price, new_stop)
 
-        if not self.made_buy:
-            self.buy(self.config.trade_size, tick.price, cancel_after_secs=10, tag="b")
-            self.made_buy = True
-
-        if self.made_buy and self.position_qty > 0 and len(self.submitted_or_open_orders()) == 0:
-            self.sell(self.position_qty, tick.price - 0.03, tag="s")
 
     def on_order_filled(self, order) -> None:
         pass
@@ -159,11 +151,6 @@ class MomoStrategy(BaseStrategy):
 
     def on_stop(self) -> None:
         super().on_stop()
-        # Unsubscribe from data
-        # self.unsubscribe_bars(self.config.bar_type)
-        # self.unsubscribe_quote_ticks(self.config.instrument_id)
-        # self.unsubscribe_order_book_deltas(self.config.instrument_id)
-        # self.unsubscribe_order_book_at_interval(self.config.instrument_id)
 
         # # TODO: Only save if not already existing
         # bars_list = self.cache.bars(self.config.bar_type)

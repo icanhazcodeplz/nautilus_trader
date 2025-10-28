@@ -63,7 +63,6 @@ class _DatabentoClient:
         params_copy = params.copy()
         params_copy.pop("path", None)
         cost = self.client.metadata.get_cost(**params_copy)
-        # print(f"Estimated cost: ${cost}")
         return cost
 
     def get_range_and_save(self, symbol, schema, start_dt, end_dt, dataset):
@@ -80,6 +79,8 @@ class _DatabentoClient:
             path=path,
         )
         print(f"DataBento get_range request {params}")
+        cost = self.check_data_cost(symbol, schema, start_dt, end_dt, dataset)
+        print(f"Estimated cost: ${round(cost,3)}")
         data = self.client.timeseries.get_range(**params)
         return data.to_df()
 
@@ -121,7 +122,7 @@ class _DatabentoClient:
 
     def prepare_data(self, symbol, start_dt, end_dt):
         schema = "mbp-1"
-
+        symbol = symbol.upper()
         loader = DatabentoDataLoader()
         all_data = []
         all_tbbo = []
@@ -196,22 +197,22 @@ if __name__ == "__main__":
     9/24 - SHFS
     9/23 - SHFS (after hours)
     9/23 - FLD
+    9/29 - MSS
 
     pulled already
-    9/29 - MSS
     9/19 - ZOOZ
     9/19 - AGMH
     """
 
-    symbol = "AAPL"
-    start_dt = pd.Timestamp("2025-10-15", tz="America/New_York")
+    symbol = "zooz"
+    start_dt = pd.Timestamp("2025-09-19", tz="America/New_York")
     end_dt = start_dt + pd.Timedelta(days=1)
 
     # https://databento.com/docs/schemas-and-data-formats?historical=python&live=python&reference=python
-    schema = "trades"
+    # schema = "trades"
     # schema = "tbbo"
     # schema = "mbo"
-    schema = "mbp-1"
+    # schema = "mbp-1"
 
     start_time = time.time()
     DatabentoClient.prepare_data(symbol, start_dt, end_dt)

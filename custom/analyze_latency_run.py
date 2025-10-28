@@ -3,8 +3,8 @@ import pandas as pd
 from pathlib import Path
 
 # Specify the run directory
-run_dir = Path("data/runs/20251027_090413")
-run_dir = Path("data/runs/20251027_120049")  # TSLA live account 2 trades
+run_dir = Path("data/runs/latency/20251027_TSLA_live")  # TSLA live account 50 trades
+# run_dir = Path("data/runs/latency/20251027_TSLA_paper")  # TSLA paper account 200 trades
 
 
 with open(run_dir / "config.json", "r") as f:
@@ -66,12 +66,18 @@ def order_analysis(order_submissions_df, ws_updates_df):
     submissions["submit_dt"] = pd.to_datetime(submissions["submit_dt"])
     submissions["latency"] = (submissions["executed"] - submissions["submit_dt"]).dt.total_seconds() * 1e3
 
-    gp = submissions.groupby("type").agg({"latency": ["count", "min", "max", "mean", "std"]})
+    def p80(series):
+        return series.quantile(0.8)
+
+    def p90(series):
+        return series.quantile(0.9)
+
+    gp = submissions.groupby("type").agg({"latency": ["count", "min", "max", "mean", "std", p80, p90]})
     print(gp.round(1))
-    return gp
+    return submissions
 
 
-order_analysis(order_submissions_df, ws_updates_df)
+submission_latency = order_analysis(order_submissions_df, ws_updates_df)
 
 basepoint = "ts_recv"
 time_cols = ["ts_event", "ts_recv", "ts_clock", "ts_now", "order_event", "order_submit", "ts_now_after"]

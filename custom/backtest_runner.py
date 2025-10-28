@@ -20,7 +20,20 @@ from custom.statistics.win_loss_ratio import WinLossRatio
 from nautilus_trader.backtest.models import LatencyModel
 from nautilus_trader.cache.config import CacheConfig
 from nautilus_trader.config import LoggingConfig
-from nautilus_trader.core.nautilus_pyo3 import Expectancy, LongRatio, MinLoser, ProfitFactor, ReturnsAverage, ReturnsAverageLoss, ReturnsAverageWin, ReturnsVolatility, RiskReturnRatio, SharpeRatio, SortinoRatio, MinWinner
+from nautilus_trader.core.nautilus_pyo3 import (
+    Expectancy,
+    LongRatio,
+    MinLoser,
+    ProfitFactor,
+    ReturnsAverage,
+    ReturnsAverageLoss,
+    ReturnsAverageWin,
+    ReturnsVolatility,
+    RiskReturnRatio,
+    SharpeRatio,
+    SortinoRatio,
+    MinWinner,
+)
 from nautilus_trader.model.currencies import USD
 from nautilus_trader.model.data import QuoteTick, TradeTick
 from nautilus_trader.model.enums import AccountType, BookType
@@ -34,11 +47,13 @@ from nautilus_trader.test_kit.providers import TestInstrumentProvider
 def run_single_backtest(dataset_name, strategy_name, params, return_engine=False, log_level="ERROR"):
     params_copy = params.copy()
     random_seed = params_copy.pop("random_seed", None)
-    engine = BacktestEngine(config=BacktestEngineConfig(
-        trader_id=TraderId("M-1"),
-        logging=LoggingConfig(log_level=log_level, log_level_file=None, log_directory="logs", log_file_name=f"{log_level}.log"),
-        cache=CacheConfig(tick_capacity=10_000, bar_capacity=1000)
-    ))
+    engine = BacktestEngine(
+        config=BacktestEngineConfig(
+            trader_id=TraderId("M-1"),
+            logging=LoggingConfig(log_level=log_level, log_level_file=None, log_directory="logs", log_file_name=f"{log_level}.log"),
+            cache=CacheConfig(tick_capacity=10_000, bar_capacity=1000),
+        )
+    )
 
     engine.add_venue(
         venue=Venue(VENUE),
@@ -48,9 +63,14 @@ def run_single_backtest(dataset_name, strategy_name, params, return_engine=False
         account_type=AccountType.MARGIN,
         base_currency=USD,
         starting_balances=[Money(100000.0, USD)],
-        fill_model=LimitFillModel(prob_fill_on_limit=0.8,random_seed=random_seed),
+        fill_model=LimitFillModel(prob_fill_on_limit=0.8, random_seed=random_seed),
         # trade_execution=True,
-        latency_model=LatencyModel(0.120 * 1e9)  # 120 milliseconds
+        latency_model=LatencyModel(
+            base_latency_nanos=30 * 1e6,
+            insert_latency_nanos=34 * 1e6,
+            update_latency_nanos=25 * 1e6,
+            cancel_latency_nanos=25 * 1e6,
+        ),
     )
 
     dataset_params = CATALOG_OPTIONS[dataset_name]
@@ -64,7 +84,20 @@ def run_single_backtest(dataset_name, strategy_name, params, return_engine=False
 
     avg_trade_scaled = PnlPer100()
 
-    for stat_class in [ReturnsVolatility, SharpeRatio, SortinoRatio, LongRatio, ProfitFactor, RiskReturnRatio, ReturnsAverage, ReturnsAverageLoss, ReturnsAverageWin, MinWinner, MinLoser, Expectancy]:
+    for stat_class in [
+        ReturnsVolatility,
+        SharpeRatio,
+        SortinoRatio,
+        LongRatio,
+        ProfitFactor,
+        RiskReturnRatio,
+        ReturnsAverage,
+        ReturnsAverageLoss,
+        ReturnsAverageWin,
+        MinWinner,
+        MinLoser,
+        Expectancy,
+    ]:
         engine.portfolio.analyzer.deregister_statistic(stat_class())
 
     for stat_class in [NumTrades, Winners, Losers, WinLossRatio, AvgTrade, TotalBought]:  # Scratches
@@ -78,7 +111,6 @@ def run_single_backtest(dataset_name, strategy_name, params, return_engine=False
     elif strategy_name == "momo":
         config = MomoStrategyConfig(instrument_id=test_instrument.id, **params_copy)
         strategy = MomoStrategy(config=config)
-
 
     engine.add_strategy(strategy=strategy)
     random.seed(random_seed)
@@ -94,14 +126,14 @@ def run_single_backtest(dataset_name, strategy_name, params, return_engine=False
     return performance_stats
 
 
-
 def run_multiple_backtests(dataset_names, strategy_name, params, log_level="ERROR"):
     performance_stats = []
     for dataset_name in dataset_names:
         p_stats = run_single_backtest(dataset_name, strategy_name, params, return_engine=False, log_level=log_level)
-        performance_stats.append({"name":dataset_name, **p_stats})
+        performance_stats.append({"name": dataset_name, **p_stats})
     stats_df = pd.DataFrame(performance_stats).round(3)
     return stats_df
+
 
 if __name__ == "__main__":
     log_level = "INFO"
@@ -111,21 +143,21 @@ if __name__ == "__main__":
     strategy_name = "momo"
 
     params = dict(
-        trade_size = 100,
-        max_position_multiplier = 1,
-        stop_loss = 0.30,
-        take_profit = 0.30,
-        take_ratio = 0.5,
-        vwap_window = 50,
-        vwap_buy_threshold = 0.08,
-        trailing_stop = True,
-        random_seed = 41,
+        trade_size=100,
+        max_position_multiplier=1,
+        stop_loss=0.30,
+        take_profit=0.30,
+        take_ratio=0.5,
+        vwap_window=50,
+        vwap_buy_threshold=0.17,
+        trailing_stop=True,
+        random_seed=42,
     )
-    datasets = ["papl", "mss"]
-    datasets = ["aapl1015"]
+    datasets = ["zooz"]
+    run_BACKTEST_SYMBOL = True
 
     all_stats = []
-    if len(datasets) > 1:
+    if not run_BACKTEST_SYMBOL:
         for random_seed in [1]:
             params["random_seed"] = random_seed
             stats = run_multiple_backtests(datasets, strategy_name, params, log_level=log_level)
@@ -140,16 +172,15 @@ if __name__ == "__main__":
         orders_report = engine.trader.generate_orders_report()
         fills_report = engine.trader.generate_fills_report()
         positions_report = engine.trader.generate_positions_report()
-        positions = positions_report[['peak_qty', 'ts_opened', 'ts_closed','avg_px_open','avg_px_close','realized_pnl']]
+        positions = positions_report[["peak_qty", "ts_opened", "ts_closed", "avg_px_open", "avg_px_close", "realized_pnl"]]
 
         orders_report = orders_report[orders_report["filled_qty"].astype(int) > 0]
-        orders = orders_report[['side', 'quantity', 'filled_qty', 'price', 'avg_px', 'tags', 'ts_init', 'ts_last']].copy()
-        orders['ts_init'] = pd.to_datetime(orders['ts_init'], unit='ns')
-        orders['ts_last'] = pd.to_datetime(orders['ts_last'], unit='ns')
+        orders = orders_report[["side", "quantity", "filled_qty", "price", "avg_px", "tags", "ts_init", "ts_last"]].copy()
+        orders["ts_init"] = pd.to_datetime(orders["ts_init"], unit="ns")
+        orders["ts_last"] = pd.to_datetime(orders["ts_last"], unit="ns")
 
         trades, sell_legs = orders_to_trades(orders_report)
         create_and_save_markers(trades, sell_legs)
-
 
         trades, sell_legs = orders_to_trades(orders_report)
         create_and_save_markers(trades, sell_legs)
@@ -157,4 +188,3 @@ if __name__ == "__main__":
         print()
         # engine.reset()
         # engine.dispose()
-

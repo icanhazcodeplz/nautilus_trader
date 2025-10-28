@@ -18,7 +18,7 @@ from nautilus_trader.model.identifiers import TraderId
 
 
 symbol = "TSLA"
-paper = False
+paper = True
 buy_on_tick = True
 order_count = 50
 

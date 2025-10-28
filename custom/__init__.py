@@ -1,1 +1,1 @@
-BACKTEST_SYMBOL = "aapl1015"
+BACKTEST_SYMBOL = "zooz"
