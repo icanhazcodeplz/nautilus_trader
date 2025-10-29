@@ -180,11 +180,11 @@ fetch('/api/data')
         }));
         macdSeries.setData(macdData);
 
-        const priceLineSeries = tickChart.addSeries(LineSeries, { lineWidth: 3.5, lineType:0, pointMarkersVisible: true, pointMarkersRadius:3});
+        const priceLineSeries = tickChart.addSeries(LineSeries, { lineWidth: 1, lineType:0, pointMarkersVisible: false, pointMarkersRadius:3, color: '#ffffff'});
         const priceData = data.ticks.map(item => ({
             time: item.time,
             value: item.price,
-            color: priceColor(item.size),
+            // color: priceColor(item.size),  // Set the color based on size
         }));
         priceLineSeries.setData(priceData)
 
