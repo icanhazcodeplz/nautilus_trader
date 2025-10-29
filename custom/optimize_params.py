@@ -2,6 +2,7 @@
 import os
 import sys
 from datetime import datetime
+from time import sleep
 
 import numpy as np
 
@@ -18,13 +19,16 @@ DATABASE_STR = "sqlite:///optuna.db"
 # mysql_optuna = "mysql://root@localhost/optuna"
 optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
 
-DATASET_NAMES = ["papl", "mss"]
+DATASET_NAMES = ["zooz"]
+
 
 def linspace_int(low, high, step):
     return list(range(low, high + 1, step))
 
+
 def linspace_float(low, high, step):
     return [round(val, 4) for val in np.arange(low, high + step * 0.90, step)]
+
 
 def _try_round2(arg):
     try:
@@ -55,12 +59,15 @@ def optimize(trial):
 
     params = dict(
         trade_size=100,
-        max_position_multiplier=2,
-        stop_loss=0.3,
-        take_profit=0.3,
-        take_ratio=0.8,
-        vwap_window=60,
-        vwap_buy_threshold=0.10,
+        max_position_multiplier=3,
+        stop_loss=0.50,
+        take_profit=0.50,
+        take_ratio=0.5,
+        vwap_window=150,
+        vwap_buy_threshold=0.20,
+        vwap_sell_threshold=0.20,
+        time_vwap_window=200,
+        time_vwap_bin_ms=500,
         trailing_stop=False,
         random_seed=None,
     )
@@ -83,10 +90,14 @@ def optimize(trial):
             return previous_trail_value
 
     performance_stats = run_multiple_backtests(DATASET_NAMES, strategy_name, params, log_level="ERROR")
-    total_pnl = performance_stats['PnL (total)'].sum()
-    total_bought = performance_stats[TotalBought().name].sum()
-    value = total_pnl / total_bought * 100
-    return value
+    try:
+        total_pnl = performance_stats["PnL (total)"].sum()
+        total_bought = performance_stats[TotalBought().name].sum()
+        value = total_pnl / total_bought * 100
+        return value
+    except:
+        # FIXME: Is this the best solution?
+        return 0.0
 
 
 def load_or_create_optuna_study(study_name, sampler):
@@ -96,7 +107,7 @@ def load_or_create_optuna_study(study_name, sampler):
         direction="maximize",
         sampler=sampler,
         pruner=optuna.pruners.NopPruner(),
-        load_if_exists=True
+        load_if_exists=True,
     )
 
 
@@ -109,17 +120,19 @@ def target(study_name, sampler, n_trials):
 if __name__ == "__main__":
     study_name = "test"
 
-    delete_existing = True
+    delete_existing = False
     run_trials = True
 
-    search_space= dict(
-        random_seed= [4, 5, 6],
-        # max_position_multiplier=linspace_int( low=1, high=3, step=1),
-        stop_loss=linspace_float( low=0.25, high=0.35, step=0.1),
-        take_profit=linspace_float( low=0.25, high=0.35, step=0.05),
-        # take_ratio=linspace_float( low=0.8, high=1.0, step=0.10),
-        # vwap_window=linspace_int( low=40, high=50, step=5),
-        # vwap_buy_threshold=linspace_float( low=0.10, high=0.30, step=0.05),
+    search_space = dict(
+        random_seed=[4, 5, 6],
+        max_position_multiplier=linspace_int(low=2, high=3, step=1),
+        stop_loss=linspace_float(low=0.2, high=0.4, step=0.10),
+        take_profit=linspace_float(low=0.25, high=0.35, step=0.10),
+        take_ratio=linspace_float(low=0.5, high=1.0, step=0.50),
+        vwap_window=linspace_int(low=30, high=50, step=10),
+        vwap_buy_threshold=linspace_float(low=0.10, high=0.20, step=0.05),
+        vwap_sell_threshold=linspace_float(low=0.10, high=0.30, step=0.1),
+        time_vwap_window=linspace_int(low=100, high=300, step=100),
         # trailing_stop=[True, False],
     )
     sampler = optuna.samplers.GridSampler(search_space=search_space)
@@ -137,20 +150,29 @@ if __name__ == "__main__":
 
         # RUN SINGLE PROCESS
         # target(study_name, sampler, total_trials)
-
         # RUN MULTIPROCESSING
         n_processes = max(os.cpu_count() - 2, 2)
-        n_trials = int(total_trials / n_processes) + 1
+
+        trials_per_process = 4
+        trials_started = 0
         pm = ProcessManager()
-        for i in range(n_processes):
-            pm.add_and_start(name=str(i), target=target, args=(study_name, sampler, n_trials))
+        while trials_started < total_trials:
+            if pm.num_running_processes < n_processes:
+                print(f"Starting process {trials_started}")
+                pm.add_and_start(
+                    name=str(trials_started), target=target, args=(study_name, sampler, trials_per_process)
+                )
+                trials_started += trials_per_process
+                pm.remove_completed()
+            else:
+                sleep(1)
         pm.block(sleep_secs=1)
         print(f"TOTAL RUN TIME: {datetime.now() - start}")
 
     study = optuna.load_study(study_name=study_name, storage=DATABASE_STR)
 
     param_names = sampler._param_names
-    rename_map = {f"params_{p}":p for p in param_names}
+    rename_map = {f"params_{p}": p for p in param_names}
     df = study.trials_dataframe().round(3)
     df = df[df["state"] == "COMPLETE"]
     df = df.rename(columns=rename_map)

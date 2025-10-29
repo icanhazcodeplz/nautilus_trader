@@ -24,6 +24,8 @@ from nautilus_trader.core.nautilus_pyo3 import AvgWinner, AvgLoser
 class WinLossRatio(PortfolioStatistic):
 
     def calculate_from_realized_pnls(self, realized_pnls: pd.Series) -> Any | None:
+        if realized_pnls is None or realized_pnls.empty:
+            return 0.0
         avg_winner = AvgWinner().calculate_from_realized_pnls(realized_pnls)
         avg_loser = AvgLoser().calculate_from_realized_pnls(realized_pnls)
         if avg_loser == 0.0:

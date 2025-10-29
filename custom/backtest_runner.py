@@ -73,7 +73,7 @@ def run_single_backtest(dataset_name, strategy_name, params, return_engine=False
         ),
     )
 
-    dataset_params = CATALOG_OPTIONS[dataset_name]
+    dataset_params = CATALOG_OPTIONS[dataset_name.lower()]
     symbol = dataset_params["symbol"]
 
     test_instrument = TestInstrumentProvider.equity(symbol=symbol, venue=VENUE)
@@ -144,14 +144,17 @@ if __name__ == "__main__":
 
     params = dict(
         trade_size=100,
-        max_position_multiplier=1,
+        max_position_multiplier=2,
         stop_loss=0.30,
-        take_profit=0.30,
-        take_ratio=0.5,
-        vwap_window=50,
-        vwap_buy_threshold=0.17,
+        take_profit=0.35,
+        take_ratio=1.0,
+        vwap_window=40,
+        vwap_buy_threshold=0.08,
+        vwap_sell_threshold=0.30,
+        time_vwap_window=500,
+        time_vwap_bin_ms=500,
         trailing_stop=True,
-        random_seed=42,
+        random_seed=4,
     )
     datasets = ["zooz"]
     run_BACKTEST_SYMBOL = True

@@ -6,7 +6,6 @@ from time import sleep
 from typing import Set, Optional, Dict, Any, Callable
 
 
-
 @dataclasses.dataclass
 class _Process:
     proc: Process
@@ -15,7 +14,6 @@ class _Process:
 
 
 class ProcessManager:
-
     def __init__(self):
         self.procs: Dict[str, _Process] = {}
 
@@ -54,9 +52,16 @@ class ProcessManager:
                 #     logger.error(logger_msg)
 
         for name in completed_procs:
+            self.procs[name].proc.terminate()
+            self.procs[name].proc.kill()
+            self.procs[name].proc.close()
             del self.procs[name]
 
         return completed_procs
+
+    @property
+    def num_running_processes(self) -> int:
+        return len(self.get_running_processes())
 
     def get_running_processes(self) -> Set[str]:
         """Get names of all currently running processes."""

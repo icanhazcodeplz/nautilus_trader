@@ -44,6 +44,9 @@ class BaseStrategy(Strategy):
         self.metrics_to_save = None
         self._metrics_values = []
 
+        # Used to track order modifications to avoid sending duplicate modify orders when the cache is slow
+        self._last_order_modify_dict = {}
+
     @property
     def position_qty(self):
         return int(self.portfolio.net_position(self.config.instrument_id))
@@ -63,6 +66,15 @@ class BaseStrategy(Strategy):
     def submitted_or_open_orders(self, side=OrderSide.NO_ORDER_SIDE):
         return set(self.cache.orders_inflight(side=side) + self.cache.orders_open(side=side))
 
+    def _modify_order(self, order, quantity, price):
+        last_mod = self._last_order_modify_dict.get(order.client_order_id, None)
+        mod_vals = (quantity, price)
+        if last_mod is not None and last_mod == mod_vals:
+            self.log.debug(f"Not modifying order {order.client_order_id} because modify request has already been sent.")
+            return
+        self._last_order_modify_dict[order.client_order_id] = mod_vals
+        self.modify_order(order, quantity=quantity, price=price)
+
     def sell_position_at_price(self, new_limit_price):
         remaining_qty_to_sell = self.position_qty
         open_orders = self.submitted_or_open_orders(side=OrderSide.SELL)
@@ -70,7 +82,7 @@ class BaseStrategy(Strategy):
             order_qty = order.quantity
             remaining_qty_to_sell -= order_qty
             if order.price != new_limit_price:
-                self.modify_order(order, quantity=order_qty, price=new_limit_price)
+                self._modify_order(order, quantity=order_qty, price=new_limit_price)
         if remaining_qty_to_sell > 0:
             self.sell(quantity=remaining_qty_to_sell, limit_price=new_limit_price, tag="s")
 
@@ -78,6 +90,10 @@ class BaseStrategy(Strategy):
         if self.position_qty == 0:
             self.stop_price = None
             return
+
+        if self.position_qty > 0 and self.stop_price is None:
+            self.stop_price = tick.price - self.config.stop_loss
+            self.log.info(f"Setting stop price to {self.stop_price}")
 
         if self.stop_price is not None and tick.price <= self.stop_price:
             # TODO: HARDCODED to set stop price to 0.1 below current price
@@ -170,6 +186,25 @@ class BaseStrategy(Strategy):
         if allowed_qty > 0:
             self._submit_limit_order(OrderSide.SELL, allowed_qty, limit_price, tag, cancel_after_secs)
 
+    @abstractmethod
+    def _on_order_filled(self, order) -> None:
+        pass
+
+    def on_order_filled(self, order) -> None:
+        if order.is_buy:
+            new_stop_price = order.last_px - self.config.stop_loss
+            if self.stop_price is not None:
+                if new_stop_price > self.stop_price:
+                    self.log.info(f"Changing stop price from {self.stop_price} to {new_stop_price}")
+                    self.stop_price = new_stop_price
+            else:
+                self.log.info(f"Setting stop price to {new_stop_price}")
+                self.stop_price = new_stop_price
+        self._on_order_filled(order)
+
+        # Clean up order modify dict to reduce memory usage
+        self._last_order_modify_dict.pop(order.client_order_id, None)
+
     def _cancel_orders_past_timeout(self, event: TimeEvent):
         # Cancel open orders if they have reached their expiration time
         open_orders = self.submitted_or_open_orders()
@@ -244,9 +279,6 @@ class BaseStrategy(Strategy):
         pass
 
     def on_order_event(self, order) -> None:
-        pass
-
-    def on_order_filled(self, order) -> None:
         pass
 
     def on_data(self, data: Data) -> None:
