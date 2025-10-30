@@ -196,9 +196,7 @@ fetch('/api/data')
             })
         }
 
-        createSeriesMarkers(priceLineSeries, data.bid_markers)
-        createSeriesMarkers(priceLineSeries, data.ask_markers)
-
+        createSeriesMarkers(priceLineSeries, data.price_markers)
 
         tickChart.timeScale().fitContent();
     });

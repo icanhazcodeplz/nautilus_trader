@@ -5,7 +5,7 @@ from datetime import timedelta
 import pandas as pd
 from pandas import Timestamp
 
-from custom.app_utils.viz import write_to_metrics_txt_file
+from custom.app_utils.viz import write_to_metrics_txt_file, write_to_signals_file
 from custom.utils import run_artifacts_subdir
 from nautilus_trader.common.component import TimeEvent
 from nautilus_trader.config import StrategyConfig
@@ -16,7 +16,7 @@ from nautilus_trader.model.data import Bar
 from nautilus_trader.model.data import OrderBookDeltas
 from nautilus_trader.model.data import QuoteTick
 from nautilus_trader.model.data import TradeTick
-from nautilus_trader.model.enums import OrderSide
+from nautilus_trader.model.enums import OrderSide, OrderStatus
 from nautilus_trader.model.enums import TimeInForce
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.instruments import Instrument
@@ -41,8 +41,9 @@ class BaseStrategy(Strategy):
         self._last_buy_dt: Timestamp = pd.Timestamp("1990", tz="UTC")
         self._trade_ticks = []
         self._trade_tick_event = {}
-        self.metrics_to_save = None
+        self.metrics_to_save = []
         self._metrics_values = []
+        self._buy_sell_signals = []
 
         # Used to track order modifications to avoid sending duplicate modify orders when the cache is slow
         self._last_order_modify_dict = {}
@@ -145,10 +146,12 @@ class BaseStrategy(Strategy):
             self._trade_ticks.append(self._trade_tick_event.copy())
             self._trade_tick_event = {}
 
-        if self.metrics_to_save is not None:
-            metrics_vals = {name: round(item.value, 3) for name, item in self.metrics_to_save.items()}
-            metrics_vals["time"] = tick.ts_event / 1e9
-            self._metrics_values.append(metrics_vals)
+        if len(self.metrics_to_save) > 0:
+            all_mets = {}
+            for metric in  self.metrics_to_save:
+                all_mets = {**all_mets, **metric.get_vals()}
+            all_mets["time"] = tick.ts_event / 1e9
+            self._metrics_values.append(all_mets)
 
     def _submit_limit_order(self, side: OrderSide, quantity: int, limit_price:float, tag:str, cancel_after_secs=None):
         tags = [tag]
@@ -253,6 +256,9 @@ class BaseStrategy(Strategy):
         # Record metrics and trade ticks if present
         if len(self._metrics_values) > 0:
             write_to_metrics_txt_file(self._metrics_values)
+
+        if len(self._buy_sell_signals) > 0:
+            write_to_signals_file(self._buy_sell_signals)
 
         if len(self._trade_ticks) > 0:
             ticks_df = pd.DataFrame(self._trade_ticks)

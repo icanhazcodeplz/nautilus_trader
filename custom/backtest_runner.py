@@ -9,7 +9,7 @@ from custom.utils.load_catalog_data import VENUE, get_catalog_data
 from custom.nt_extensions.limit_fill_model import LimitFillModel
 from custom.utils.orders_to_trades import orders_to_trades
 from custom.strategies.momo import MomoStrategyConfig, MomoStrategy
-from custom.app_utils.viz import create_and_save_markers
+from custom.app_utils.viz import CreateMarkers
 from custom.strategies.random import RandomConfig, Random
 from nautilus_trader.backtest.engine import BacktestEngine
 from nautilus_trader.backtest.engine import BacktestEngineConfig
@@ -50,7 +50,17 @@ def run_single_backtest(dataset_name, strategy_name, params, return_engine=False
     engine = BacktestEngine(
         config=BacktestEngineConfig(
             trader_id=TraderId("M-1"),
-            logging=LoggingConfig(log_level=log_level, log_level_file=None, log_directory="logs", log_file_name=f"{log_level}.log"),
+            logging=LoggingConfig(
+                log_level=log_level,
+                log_level_file=None,
+                log_directory="logs",
+                log_file_name=f"{log_level}.log",
+                log_component_levels=dict(
+                    RiskEngine="WARNING",
+                    Portfolio="WARNING",
+                ),
+                use_pyo3=False,
+            ),
             cache=CacheConfig(tick_capacity=10_000, bar_capacity=1000),
         )
     )
@@ -144,16 +154,17 @@ if __name__ == "__main__":
 
     params = dict(
         trade_size=100,
-        max_position_multiplier=2,
-        stop_loss=0.30,
-        take_profit=0.35,
+        max_position_multiplier=1,
+        stop_loss=0.40,
+        take_profit=0.40,
         take_ratio=1.0,
-        vwap_window=40,
-        vwap_buy_threshold=0.08,
+        vwap_window=100,
+        vwap_buy_threshold=0.05,
         vwap_sell_threshold=0.30,
-        time_vwap_window=500,
+        time_vwap_window=5000,
         time_vwap_bin_ms=500,
-        trailing_stop=True,
+        trailing_stop=False,
+        simple_take=True,
         random_seed=4,
     )
     datasets = ["zooz"]
@@ -175,18 +186,19 @@ if __name__ == "__main__":
         orders_report = engine.trader.generate_orders_report()
         fills_report = engine.trader.generate_fills_report()
         positions_report = engine.trader.generate_positions_report()
-        positions = positions_report[["peak_qty", "ts_opened", "ts_closed", "avg_px_open", "avg_px_close", "realized_pnl"]]
+        positions = positions_report[
+            ["peak_qty", "ts_opened", "ts_closed", "avg_px_open", "avg_px_close", "realized_pnl"]
+        ]
 
         orders_report = orders_report[orders_report["filled_qty"].astype(int) > 0]
-        orders = orders_report[["side", "quantity", "filled_qty", "price", "avg_px", "tags", "ts_init", "ts_last"]].copy()
+        orders = orders_report[
+            ["side", "quantity", "filled_qty", "price", "avg_px", "tags", "ts_init", "ts_last"]
+        ].copy()
         orders["ts_init"] = pd.to_datetime(orders["ts_init"], unit="ns")
         orders["ts_last"] = pd.to_datetime(orders["ts_last"], unit="ns")
 
         trades, sell_legs = orders_to_trades(orders_report)
-        create_and_save_markers(trades, sell_legs)
-
-        trades, sell_legs = orders_to_trades(orders_report)
-        create_and_save_markers(trades, sell_legs)
+        CreateMarkers().create_and_save_markers(trades, sell_legs)
 
         print()
         # engine.reset()

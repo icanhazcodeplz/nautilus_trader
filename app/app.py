@@ -40,52 +40,25 @@ def get_data():
 
     # ticks = get_and_convert_tbbo()
     ticks = combine_tbbo_and_metrics_data()
-    bid_markers, ask_markers = CreateMarkers().load_markers()
-    # bid_markers, ask_markers = [], []
+    price_markers = CreateMarkers().load_markers()
 
     records = dict(
         ticks=ticks,
         ten_sec=[],
         one_min=bars,
         macd=[],
-        bid_markers=bid_markers,
-        ask_markers=ask_markers,
+        price_markers=price_markers,
         TickChartLines=[
             # dict(key='ask', color='#EF5350CC', width=1, type=1),
             # dict(key='bid', color='#26A69ACC', width=1, type=1),
-            dict(key='vwap', color='red', width=1, type=0),
-            dict(key='time_vwap', color='green', width=1, type=0),
+            dict(key='vwap_lower', color='#4590d1', width=1, type=0),
+            dict(key='vwap_value', color='#45d14c', width=1, type=0),
+            dict(key='vwap_upper', color='red', width=1, type=0),
+            # dict(key='day_vwap_value', color='green', width=1, type=0),
         ]
     )
     return jsonify(records)
 
-
-# @app.route("/10min")
-# @cross_origin(supports_credentials=True)
-# def get_10min():
-#     # cd = ChartData().load_pkl()
-#     records = dict(
-#         aapl={
-#             "start": 200.0,
-#             "price": 201.0,
-#         }
-#     )
-#     return jsonify(records)
-#
-#
-# # @cross_origin()
-# class PostList(Resource):
-#     @cross_origin()
-#     def get(self):
-#         return jsonify(
-#             [
-#                 dict(id=1, hi=2, hi2=3),
-#                 dict(id=2, hi=2, hi2=3),
-#             ]
-#         )
-
-
-# api.add_resource(PostList, "/posts")
 
 if __name__ == "__main__":
     app.run(port=5001, debug=True)

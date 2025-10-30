@@ -5,14 +5,20 @@ from nautilus_trader.model import TradeTick
 
 
 class RollingVWAP(Indicator):
-    def __init__(self, rolling_window: int):
-        super().__init__(params=[rolling_window])
+    def __init__(self, rolling_window: int, variance_window_ratio: float = 1, upper_lower_scaler: float = 0.0):
+        super().__init__(params=[rolling_window, variance_window_ratio, upper_lower_scaler])
 
         self.rolling_window = rolling_window
+        self.variance_window_ratio = variance_window_ratio
+        self.upper_lower_scaler = upper_lower_scaler
 
         self._trade_values = deque(maxlen=rolling_window)
         self._volumes = deque(maxlen=rolling_window)
+        self._variances = deque(maxlen=int(rolling_window * variance_window_ratio))
+
         self.value = 0
+        self.upper = 0
+        self.lower = 0
 
     def handle_trade_tick(self, tick: TradeTick):
         self.update_raw(price=float(tick.price), volume=float(tick.size))
@@ -22,16 +28,25 @@ class RollingVWAP(Indicator):
         price,
         volume,
     ):
-        if not self.initialized:
-            self._set_has_inputs(True)
-            self._set_initialized(True)
-
         # No weighting for this price (also avoiding divide by zero)
         if volume == 0:
             return
 
+        if not self.initialized:
+            self._set_has_inputs(True)
+            self._set_initialized(True)
+            self.value = price
+
         self._trade_values.append(price * volume)
         self._volumes.append(volume)
+
+        if self.variance_window_ratio is not None:
+            variance_from_val = abs(price - self.value)
+            self._variances.append(variance_from_val)
+            mean_var = sum(self._variances) / len(self._variances)
+            self.upper = self.value + mean_var + self.upper_lower_scaler
+            self.lower = self.value - mean_var - self.upper_lower_scaler
+
         self.value = sum(self._trade_values) / sum(self._volumes)
 
     def _reset(self):
