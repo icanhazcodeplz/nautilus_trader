@@ -9,7 +9,7 @@ def market_round(price):
 
 def _process_nautilus_orders_df(orders_df: pd.DataFrame) -> pd.DataFrame:
     orders = orders_df[["ts_last", "side", "filled_qty", "avg_px", "tags"]].copy()
-    orders["ts_last"] = orders["ts_last"] / 1e9
+    # orders["ts_last"] = orders["ts_last"]
     orders["avg_px"] = orders["avg_px"].astype(float)
     orders["tags"] = orders["tags"].apply(lambda s: s[0] if s is not None else "Missing")
     orders["filled_qty"] = orders["filled_qty"].astype(int)

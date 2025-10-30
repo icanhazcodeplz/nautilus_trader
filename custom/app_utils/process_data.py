@@ -24,13 +24,15 @@ def round_time_to_ms_and_increment_dup_times(list_of_data: list, data_to_dict_fn
     list
         A list of dictionaries with the processed and adjusted timestamps.
     """
-    rounding_factor = 3
+    rounding_factor = 9
     divisor = 10 ** rounding_factor
     last_adjusted = None
     data_list_of_dicts = []
     for data in list_of_data:
+        # FIXME: We are using strings now so some of this logic is not needed?
         data_dict = data_to_dict_fn(data) if data_to_dict_fn else data
-        rounded = int(round(data_dict["time"], rounding_factor) * divisor)
+        # rounded = int(round(data_dict["time"], rounding_factor) * divisor)
+        rounded = int(data_dict["time"] * divisor)
 
         if last_adjusted is not None and rounded <= last_adjusted:
             diff = last_adjusted - rounded
@@ -38,8 +40,9 @@ def round_time_to_ms_and_increment_dup_times(list_of_data: list, data_to_dict_fn
         else:
             adjusted = rounded
         last_adjusted = adjusted
-        secs = adjusted / divisor
-        data_dict["time"] = secs
+        # secs = adjusted / divisor
+        secs = adjusted
+        data_dict["time"] = str(secs)
 
         data_list_of_dicts.append(data_dict)
     return data_list_of_dicts
@@ -75,9 +78,8 @@ def combine_tbbo_and_metrics_data():
     tbbo_list = get_and_convert_tbbo()
     mets = get_metrics_data()
 
-
     mets_dict = {m["time"]: m for m in mets}
-
+    # FIXME: BRENT november: values not found in keys?
     for tbbo in tbbo_list:
         if tbbo["time"] in mets_dict:
             tbbo.update(mets_dict[tbbo["time"]])

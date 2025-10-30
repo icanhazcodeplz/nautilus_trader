@@ -15,6 +15,12 @@ CATALOG_OPTIONS = dict(
         end="2025-09-20T00:00:00Z",
         notes="Early move, back even by open",
     ),
+    zoozsm=dict(
+        symbol="ZOOZ",
+        start="2025-09-19T00:00:00Z",
+        end="2025-09-19T13:01:00Z",
+        notes="Small set for testing",
+    ),
     agmh=dict(
         symbol="AGMH",
         start="2025-09-19T00:00:00Z",

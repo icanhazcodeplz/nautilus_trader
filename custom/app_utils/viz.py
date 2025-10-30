@@ -30,7 +30,7 @@ class CreateMarkers:
             if sig["side"] == "buy":
                 signal_markers.append(
                     self._make_marker_dict(
-                        dt=sig["time"] / 1e9,
+                        dt=sig["time"],
                         position="belowBar",
                         color="#f77a0c",
                         shape="arrowUp",
@@ -48,7 +48,7 @@ class CreateMarkers:
             # Buy markers
             price_markers.append(
                 self._make_marker_dict(
-                    dt=ser["buy_dt"],
+                    dt=str(ser["buy_dt"]),
                     position="aboveBar",
                     color="#f77a0c",
                     shape="arrowDown",
@@ -60,7 +60,7 @@ class CreateMarkers:
             pnl = ser["pnl"]
             price_markers.append(
                 self._make_marker_dict(
-                    dt=ser["sell_dt"],
+                    dt=str(ser["sell_dt"]),
                     position="aboveBar",
                     color="#fc0317" if pnl < 0 else "#07fc03",
                     shape="arrowDown",
@@ -76,7 +76,7 @@ class CreateMarkers:
             text = f"{ser['qty']}{ser['desc']}"
             price_markers.append(
                 self._make_marker_dict(
-                    dt=ser["dt"],
+                    dt=str(ser["dt"]),
                     position="belowBar",
                     color=color,
                     shape="arrowUp",
@@ -90,7 +90,7 @@ class CreateMarkers:
         trades_markers = self.create_trades_markers(trades, sell_legs)
         signal_markers = self.create_signal_markers()
         markers = trades_markers + signal_markers
-        markers.sort(key=lambda x: x["time"])
+        markers.sort(key=lambda x: int(x["time"]))
         dict_to_file(markers, PRICE_MARKERS_FILE)
 
     def load_markers(self):

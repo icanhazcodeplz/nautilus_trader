@@ -194,8 +194,8 @@ if __name__ == "__main__":
         orders = orders_report[
             ["side", "quantity", "filled_qty", "price", "avg_px", "tags", "ts_init", "ts_last"]
         ].copy()
-        orders["ts_init"] = pd.to_datetime(orders["ts_init"], unit="ns")
-        orders["ts_last"] = pd.to_datetime(orders["ts_last"], unit="ns")
+        # orders["ts_init"] = pd.to_datetime(orders["ts_init"], unit="ns")
+        # orders["ts_last"] = pd.to_datetime(orders["ts_last"], unit="ns")
 
         trades, sell_legs = orders_to_trades(orders_report)
         CreateMarkers().create_and_save_markers(trades, sell_legs)

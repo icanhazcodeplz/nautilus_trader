@@ -1,1 +1,1 @@
-BACKTEST_SYMBOL = "zooz".lower()
+BACKTEST_SYMBOL = "zoozsm".lower()

@@ -110,7 +110,7 @@ class MomoStrategy(BaseStrategy):
             #     for tick in self.cache.trade_ticks(self.config.instrument_id)[0:5]:
             #         print(pd.Timestamp(tick.ts_event, tz="UTC"), tick.price, tick.size)
             self._buy_sell_signals.append(
-                dict(side="buy", time=tick.ts_event, price=float(price), tag=self.buy_signals_count)
+                dict(side="buy", time=str(tick.ts_event), price=float(price), tag=self.buy_signals_count)
             )
             if (
                 position_qty < self.max_position_allowed
