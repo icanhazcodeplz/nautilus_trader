@@ -143,6 +143,10 @@ cdef class VolumeWeightedAveragePrice(Indicator):
         self._volume_total = 0
         self.value = 0
 
+    cpdef void handle_trade_tick(self, TradeTick tick):
+        if tick.size > 0:
+            self.update_raw(tick.price.as_double(), tick.size.as_double(), pd.Timestamp(tick.ts_init, tz="UTC"))
+
     cpdef void handle_bar(self, Bar bar):
         """
         Update the indicator with the given bar.
