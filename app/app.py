@@ -7,8 +7,7 @@ from flask import Flask, render_template, jsonify
 from flask_restful import Api
 from flask_cors import CORS
 
-from custom.app_utils.process_data import combine_tbbo_and_metrics_data
-from custom.app_utils.viz import CreateMarkers
+from custom.app_utils.viz import CreateMarkers, load_signals_file, load_ticks_and_metrics_from_txt_file
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, expose_headers=["Content-Range"])
@@ -34,23 +33,43 @@ def index():
 
 @app.route("/api/data")
 def get_data():
-    # bars = get_one_min_bars()
-    # bars = [convert_bar_to_json(bar) for bar in bars]
-    bars = []
+    ticks_dict = load_ticks_and_metrics_from_txt_file()
+    markers = CreateMarkers().load_markers()
+    signals = load_signals_file()
 
-    # ticks = get_and_convert_tbbo()
-    ticks = combine_tbbo_and_metrics_data()
-    price_markers = CreateMarkers().load_markers()
+    # Markers may not have same time as a tick
+    for m in markers:
+        time_ = str(m['time'])
+        if time_ in ticks_dict:
+            # If tick already exists, add fill price to that tick
+            ticks_dict[time_]['fill'] = m['price']
+        else:
+            # If not tick at that time, create a new tick with fill price
+            ticks_dict[time_] = {'fill': m['price']}
+        # Convert to string because of JS
+        m['time'] = str(m['time'])
+
+
+    # Flatten ticks into a list and sort by time
+    ticks = [{"time":int(t), **vals} for t, vals in ticks_dict.items()]
+    ticks = sorted(ticks, key=lambda x: x['time'])
+
+    # Convert time to string for JS client
+    for t in ticks:
+        t['time'] = str(t['time'])
+
+    for s in signals:
+        s['time'] = str(s['time'])
 
     records = dict(
         ticks=ticks,
         ten_sec=[],
-        one_min=bars,
+        one_min=[],
         macd=[],
-        price_markers=price_markers,
+        fill_markers=markers,
+        signals=signals,
         TickChartLines=[
             # dict(key='ask', color='#EF5350CC', width=1, type=1),
-            # dict(key='bid', color='#26A69ACC', width=1, type=1),
             dict(key='vwap_lower', color='#4590d1', width=1, type=0),
             dict(key='vwap_value', color='#45d14c', width=1, type=0),
             dict(key='vwap_upper', color='red', width=1, type=0),

@@ -3,7 +3,6 @@ from custom.catalog_options import CATALOG_OPTIONS
 from custom.nt_extensions.tbbo_data import TBBOData
 
 from nautilus_trader import PACKAGE_ROOT
-from nautilus_trader.model import Bar
 from nautilus_trader.persistence.catalog import ParquetDataCatalog
 
 CATALOG_PATH = PACKAGE_ROOT / "catalog"

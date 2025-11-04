@@ -1,6 +1,6 @@
 from typing import Callable, List
 
-from custom.app_utils.viz import load_metrics_from_txt_file
+from custom.app_utils.viz import load_ticks_and_metrics_from_txt_file
 from custom.utils.load_catalog_data import get_tbbo_for_viz
 
 
@@ -42,7 +42,7 @@ def round_time_to_ms_and_increment_dup_times(list_of_data: list, data_to_dict_fn
         last_adjusted = adjusted
         # secs = adjusted / divisor
         secs = adjusted
-        data_dict["time"] = str(secs)
+        data_dict["time"] = secs
 
         data_list_of_dicts.append(data_dict)
     return data_list_of_dicts
@@ -69,7 +69,7 @@ def get_and_convert_tbbo():
     return round_time_to_ms_and_increment_dup_times(data, _tbbo_to_dict)
 
 def get_metrics_data():
-    mets = load_metrics_from_txt_file()
+    mets = load_ticks_and_metrics_from_txt_file()
     return round_time_to_ms_and_increment_dup_times(mets)
 
 def combine_tbbo_and_metrics_data():
@@ -86,5 +86,4 @@ def combine_tbbo_and_metrics_data():
     return tbbo_list
 
 if __name__ == "__main__":
-    mets_data = combine_tbbo_and_metrics_data()
     print()

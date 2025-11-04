@@ -20,7 +20,7 @@ class Metric:
     attrs: list[str]
 
     def get_vals(self):
-        return {f"{self.name}_{attr}": getattr(self.obj, attr) for attr in self.attrs}
+        return {f"{self.name}_{attr}": round(getattr(self.obj, attr),3) for attr in self.attrs}
 
 
 class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
@@ -109,8 +109,9 @@ class MomoStrategy(BaseStrategy):
             # if self.buy_signals_count == 39:
             #     for tick in self.cache.trade_ticks(self.config.instrument_id)[0:5]:
             #         print(pd.Timestamp(tick.ts_event, tz="UTC"), tick.price, tick.size)
+            # TODO: abstract this out?
             self._buy_sell_signals.append(
-                dict(side="buy", time=str(tick.ts_event), price=float(price), tag=self.buy_signals_count)
+                dict(side="buy", time=tick.ts_init, tag=f"{self.buy_signals_count}|{float(price)}")
             )
             if (
                 position_qty < self.max_position_allowed

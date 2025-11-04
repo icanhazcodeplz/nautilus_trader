@@ -5,7 +5,7 @@ from datetime import timedelta
 import pandas as pd
 from pandas import Timestamp
 
-from custom.app_utils.viz import write_to_metrics_txt_file, write_to_signals_file
+from custom.app_utils.viz import write_to_ticks_and_metrics_txt_file, write_to_signals_file
 from custom.utils import run_artifacts_subdir
 from nautilus_trader.common.component import TimeEvent
 from nautilus_trader.config import StrategyConfig
@@ -33,6 +33,9 @@ class BaseStrategyConfig(StrategyConfig, frozen=True):
 
 
 class BaseStrategy(Strategy):
+    # FIXME: Set whether to record ticks or not somewhere
+    record_ticks: bool = True
+
     def __init__(self, config: BaseStrategyConfig) -> None:
         super().__init__(config)
         self.instrument: Instrument = None  # Initialized in on_start
@@ -42,7 +45,8 @@ class BaseStrategy(Strategy):
         self._trade_ticks = []
         self._trade_tick_event = {}
         self.metrics_to_save = []
-        self._metrics_values = []
+        self._ticks_and_metrics = {}
+        self._last_mets_dt_ns = 0
         self._buy_sell_signals = []
 
         # Used to track order modifications to avoid sending duplicate modify orders when the cache is slow
@@ -126,12 +130,16 @@ class BaseStrategy(Strategy):
         return self.position_qty - sell_qty_open_orders
 
     def on_trade_tick(self, tick: TradeTick) -> None:
+        ts_event = tick.ts_event
+        ts_init = tick.ts_init
+        tick_size = int(tick.size)
+        tick_price = float(tick.price)
         if self.config.record_op_speed:
             self._trade_tick_event = {
-                "sz": int(tick.size),
-                "price": float(tick.price),
-                "ts_event": tick.ts_event,
-                "ts_recv": tick.ts_init,
+                "sz": tick_size,
+                "price": tick_price,
+                "ts_event": ts_event,
+                "ts_recv": ts_init,
                 "ts_clock": self.clock.utc_now(),
                 "ts_now": pd.Timestamp.utcnow(),
             }
@@ -146,14 +154,17 @@ class BaseStrategy(Strategy):
             self._trade_ticks.append(self._trade_tick_event.copy())
             self._trade_tick_event = {}
 
-        if len(self.metrics_to_save) > 0:
-            all_mets = {}
-            for metric in  self.metrics_to_save:
+        if self.record_ticks:
+            all_mets = dict(price=tick_price, size=tick_size)
+            for metric in self.metrics_to_save:
                 all_mets = {**all_mets, **metric.get_vals()}
-            all_mets["time"] = tick.ts_event / 1e9
-            self._metrics_values.append(all_mets)
+            if self._last_mets_dt_ns >= ts_init:
+                self._last_mets_dt_ns += 1
+            else:
+                self._last_mets_dt_ns = ts_init
+            self._ticks_and_metrics[self._last_mets_dt_ns] = all_mets
 
-    def _submit_limit_order(self, side: OrderSide, quantity: int, limit_price:float, tag:str, cancel_after_secs=None):
+    def _submit_limit_order(self, side: OrderSide, quantity: int, limit_price: float, tag: str, cancel_after_secs=None):
         tags = [tag]
         if cancel_after_secs is not None:
             expire_time = self.clock.utc_now() + timedelta(seconds=cancel_after_secs)
@@ -177,7 +188,9 @@ class BaseStrategy(Strategy):
     def buy(self, quantity, limit_price, tag, cancel_after_secs=None) -> None:
         allowed_qty = min(quantity, self._max_buy_qty_allowed())
         if allowed_qty != quantity:
-            self.log.info(f"Buy quantity reduced from {quantity} to {allowed_qty} to avoid exceeding max position of {self.max_position_allowed}.")
+            self.log.info(
+                f"Buy quantity reduced from {quantity} to {allowed_qty} to avoid exceeding max position of {self.max_position_allowed}."
+            )
         if allowed_qty > 0:
             self._submit_limit_order(OrderSide.BUY, allowed_qty, limit_price, tag, cancel_after_secs)
             self._last_buy_dt = self.clock.utc_now()
@@ -254,8 +267,8 @@ class BaseStrategy(Strategy):
         self.unsubscribe_trade_ticks(self.config.instrument_id)
 
         # Record metrics and trade ticks if present
-        if len(self._metrics_values) > 0:
-            write_to_metrics_txt_file(self._metrics_values)
+        if len(self._ticks_and_metrics) > 0:
+            write_to_ticks_and_metrics_txt_file(self._ticks_and_metrics)
 
         if len(self._buy_sell_signals) > 0:
             write_to_signals_file(self._buy_sell_signals)
@@ -303,7 +316,6 @@ class BaseStrategy(Strategy):
         pass
 
     def on_dispose(self) -> None:
-
         if self.config.record_op_speed:
             # Get all orders for this strategy
             all_orders = self.cache.orders(strategy_id=self.id)
