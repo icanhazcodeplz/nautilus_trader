@@ -1,5 +1,6 @@
 from custom.utils import data_subdir
 import json
+import pickle
 
 PRICE_MARKERS_FILE = data_subdir("viz", "price_markers.txt")
 SIGNALS_FILE = data_subdir("viz", "signals.txt")
@@ -80,12 +81,13 @@ class CreateMarkers:
 
 
 def write_to_ticks_and_metrics_txt_file(metrics):
-    # FIXME: This is slow. Switch to something faster?
-    dict_to_file(metrics, TICKS_AND_METRICS_FILE)
+    with open(TICKS_AND_METRICS_FILE, "wb") as f:
+        pickle.dump(metrics, f, protocol=pickle.HIGHEST_PROTOCOL)
 
 
 def load_ticks_and_metrics_from_txt_file():
-    return load_txt_file_to_dict(TICKS_AND_METRICS_FILE)
+    with open(TICKS_AND_METRICS_FILE, "rb") as f:
+        return pickle.load(f)
 
 
 def write_to_signals_file(signals):

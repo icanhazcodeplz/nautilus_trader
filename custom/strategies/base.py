@@ -16,7 +16,7 @@ from nautilus_trader.model.data import Bar
 from nautilus_trader.model.data import OrderBookDeltas
 from nautilus_trader.model.data import QuoteTick
 from nautilus_trader.model.data import TradeTick
-from nautilus_trader.model.enums import OrderSide, OrderStatus
+from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.enums import TimeInForce
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.instruments import Instrument
@@ -33,19 +33,16 @@ class BaseStrategyConfig(StrategyConfig, frozen=True):
 
 
 class BaseStrategy(Strategy):
-    # FIXME: Set whether to record ticks or not somewhere
-    record_ticks: bool = True
+    save_artifacts: bool = False
 
     def __init__(self, config: BaseStrategyConfig) -> None:
         super().__init__(config)
         self.instrument: Instrument = None  # Initialized in on_start
-        self.stop_price = None
-
-        self._last_buy_dt: Timestamp = pd.Timestamp("1990", tz="UTC")
-        self._trade_ticks = []
-        self._trade_tick_event = {}
         self.metrics_to_save = []
-        self._ticks_and_metrics = {}
+
+        self.stop_price = None
+        self._last_buy_dt: Timestamp = pd.Timestamp("1990", tz="UTC")
+        self._tick_data_dicts = {}
         self._last_mets_dt_ns = 0
         self._buy_sell_signals = []
 
@@ -101,8 +98,8 @@ class BaseStrategy(Strategy):
             self.log.info(f"Setting stop price to {self.stop_price}")
 
         if self.stop_price is not None and tick.price <= self.stop_price:
-            # TODO: HARDCODED to set stop price to 0.1 below current price
-            new_limit_price = self.instrument.make_price(tick.price - 0.0)
+            # TODO: HARDCODED to set stop price to 0.01 below current price
+            new_limit_price = self.instrument.make_price(tick.price - 0.01)
 
             # FIXME: BRENT - this is not a great solution. The fills for selling are more accurate during backtesting
             # if you use a single order, but during live running it is less buggy to modify existing orders because
@@ -130,16 +127,12 @@ class BaseStrategy(Strategy):
         return self.position_qty - sell_qty_open_orders
 
     def on_trade_tick(self, tick: TradeTick) -> None:
-        ts_event = tick.ts_event
-        ts_init = tick.ts_init
-        tick_size = int(tick.size)
-        tick_price = float(tick.price)
+        tick_data = {"price": float(tick.price), "size": int(tick.size)}
         if self.config.record_op_speed:
-            self._trade_tick_event = {
-                "sz": tick_size,
-                "price": tick_price,
-                "ts_event": ts_event,
-                "ts_recv": ts_init,
+            tick_data = {
+                **tick_data,
+                "ts_event": tick.ts_event,
+                "ts_recv": tick.ts_init,
                 "ts_clock": self.clock.utc_now(),
                 "ts_now": pd.Timestamp.utcnow(),
             }
@@ -150,19 +143,16 @@ class BaseStrategy(Strategy):
 
         # Record if needed
         if self.config.record_op_speed:
-            self._trade_tick_event["ts_now_after"] = pd.Timestamp.utcnow()
-            self._trade_ticks.append(self._trade_tick_event.copy())
-            self._trade_tick_event = {}
+            tick_data["ts_now_after"] = pd.Timestamp.utcnow()
 
-        if self.record_ticks:
-            all_mets = dict(price=tick_price, size=tick_size)
+        if self.save_artifacts:
             for metric in self.metrics_to_save:
-                all_mets = {**all_mets, **metric.get_vals()}
-            if self._last_mets_dt_ns >= ts_init:
+                tick_data = {**tick_data, **metric.get_vals()}
+            if self._last_mets_dt_ns >= tick.ts_init:
                 self._last_mets_dt_ns += 1
             else:
-                self._last_mets_dt_ns = ts_init
-            self._ticks_and_metrics[self._last_mets_dt_ns] = all_mets
+                self._last_mets_dt_ns = tick.ts_init
+            self._tick_data_dicts[self._last_mets_dt_ns] = tick_data
 
     def _submit_limit_order(self, side: OrderSide, quantity: int, limit_price: float, tag: str, cancel_after_secs=None):
         tags = [tag]
@@ -178,11 +168,6 @@ class BaseStrategy(Strategy):
             expire_time=None,
             tags=tags,
         )
-        if self.config.record_op_speed:
-            self._trade_tick_event["order_id"] = str(order.client_order_id)
-            self._trade_tick_event["order_event"] = pd.Timestamp(order.ts_init, tz="UTC")
-            self._trade_tick_event["order_submit"] = pd.Timestamp.utcnow()
-
         self.submit_order(order, position_id=None, client_id=None, params=None)
 
     def buy(self, quantity, limit_price, tag, cancel_after_secs=None) -> None:
@@ -267,16 +252,11 @@ class BaseStrategy(Strategy):
         self.unsubscribe_trade_ticks(self.config.instrument_id)
 
         # Record metrics and trade ticks if present
-        if len(self._ticks_and_metrics) > 0:
-            write_to_ticks_and_metrics_txt_file(self._ticks_and_metrics)
+        if len(self._tick_data_dicts) > 0:
+            write_to_ticks_and_metrics_txt_file(self._tick_data_dicts)
 
         if len(self._buy_sell_signals) > 0:
             write_to_signals_file(self._buy_sell_signals)
-
-        if len(self._trade_ticks) > 0:
-            ticks_df = pd.DataFrame(self._trade_ticks)
-            ticks_path = run_artifacts_subdir("ticks_with_orders.pkl")
-            ticks_df.to_pickle(ticks_path)
 
     @abstractmethod
     def _on_trade_tick(self, tick: TradeTick) -> None:

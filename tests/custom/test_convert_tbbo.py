@@ -1,6 +1,6 @@
 import dataclasses
 
-from custom.app_utils.process_data import convert_tbbo
+from custom.app_utils.process_data_DEPRECATED import convert_tbbo
 
 
 @dataclasses.dataclass

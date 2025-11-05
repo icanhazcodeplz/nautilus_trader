@@ -1,10 +1,7 @@
 from collections import deque
 from dataclasses import dataclass
 
-import pandas as pd
-
 from custom.nt_extensions.indicators import RollingVWAP
-from custom.utils.load_catalog_data import BACKTESTING_CATALOG
 from custom.strategies.base import BaseStrategy, BaseStrategyConfig
 from nautilus_trader.indicators import VolumeWeightedAveragePrice
 from nautilus_trader.model.data import Bar
@@ -20,7 +17,7 @@ class Metric:
     attrs: list[str]
 
     def get_vals(self):
-        return {f"{self.name}_{attr}": round(getattr(self.obj, attr),3) for attr in self.attrs}
+        return {f"{self.name}_{attr}": round(getattr(self.obj, attr), 3) for attr in self.attrs}
 
 
 class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):

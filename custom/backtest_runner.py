@@ -44,7 +44,9 @@ from nautilus_trader.model.objects import Money
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
 
 
-def run_single_backtest(dataset_name, strategy_name, params, return_engine=False, log_level="ERROR"):
+def run_single_backtest(
+    dataset_name, strategy_name, params, save_artifacts=False, return_engine=False, log_level="ERROR"
+):
     params_copy = params.copy()
     random_seed = params_copy.pop("random_seed", None)
     engine = BacktestEngine(
@@ -122,6 +124,8 @@ def run_single_backtest(dataset_name, strategy_name, params, return_engine=False
         config = MomoStrategyConfig(instrument_id=test_instrument.id, **params_copy)
         strategy = MomoStrategy(config=config)
 
+    strategy.save_artifacts = save_artifacts
+
     engine.add_strategy(strategy=strategy)
     random.seed(random_seed)
     engine.run()
@@ -139,7 +143,9 @@ def run_single_backtest(dataset_name, strategy_name, params, return_engine=False
 def run_multiple_backtests(dataset_names, strategy_name, params, log_level="ERROR"):
     performance_stats = []
     for dataset_name in dataset_names:
-        p_stats = run_single_backtest(dataset_name, strategy_name, params, return_engine=False, log_level=log_level)
+        p_stats = run_single_backtest(
+            dataset_name, strategy_name, params, save_artifacts=False, return_engine=False, log_level=log_level
+        )
         performance_stats.append({"name": dataset_name, **p_stats})
     stats_df = pd.DataFrame(performance_stats).round(3)
     return stats_df
@@ -181,7 +187,9 @@ if __name__ == "__main__":
             print(stats)
             pass
     else:
-        engine = run_single_backtest(BACKTEST_SYMBOL, strategy_name, params, return_engine=True, log_level=log_level)
+        engine = run_single_backtest(
+            BACKTEST_SYMBOL, strategy_name, params, save_artifacts=True, return_engine=True, log_level=log_level
+        )
         order_fills_report = engine.trader.generate_order_fills_report()
         orders_report = engine.trader.generate_orders_report()
         fills_report = engine.trader.generate_fills_report()

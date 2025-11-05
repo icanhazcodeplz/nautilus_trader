@@ -1,3 +1,4 @@
+import warnings
 from typing import Callable, List
 
 from custom.app_utils.viz import load_ticks_and_metrics_from_txt_file
@@ -24,12 +25,12 @@ def round_time_to_ms_and_increment_dup_times(list_of_data: list, data_to_dict_fn
     list
         A list of dictionaries with the processed and adjusted timestamps.
     """
+    warnings.warn("round_time_to_ms_and_increment_dup_times is deprecated.", DeprecationWarning, stacklevel=2)
     rounding_factor = 9
-    divisor = 10 ** rounding_factor
+    divisor = 10**rounding_factor
     last_adjusted = None
     data_list_of_dicts = []
     for data in list_of_data:
-        # FIXME: We are using strings now so some of this logic is not needed?
         data_dict = data_to_dict_fn(data) if data_to_dict_fn else data
         # rounded = int(round(data_dict["time"], rounding_factor) * divisor)
         rounded = int(data_dict["time"] * divisor)
@@ -48,7 +49,6 @@ def round_time_to_ms_and_increment_dup_times(list_of_data: list, data_to_dict_fn
     return data_list_of_dicts
 
 
-
 def _tbbo_to_dict(tbbo):
     tbbo_json = {
         "time": tbbo.ts_event / 1e9,
@@ -57,33 +57,36 @@ def _tbbo_to_dict(tbbo):
         # "bid_size": int(tbbo.bid_size),
         # "ask_size": int(tbbo.ask_size),
     }
-    if str(tbbo.bid) != 'nan':
+    if str(tbbo.bid) != "nan":
         tbbo_json["bid"] = tbbo.bid
-    if str(tbbo.ask) != 'nan':
+    if str(tbbo.ask) != "nan":
         tbbo_json["ask"] = tbbo.ask
     return tbbo_json
 
 
 def get_and_convert_tbbo():
+    warnings.warn("round_time_to_ms_and_increment_dup_times is deprecated.", DeprecationWarning, stacklevel=2)
     data = get_tbbo_for_viz()
     return round_time_to_ms_and_increment_dup_times(data, _tbbo_to_dict)
 
+
 def get_metrics_data():
+    warnings.warn("round_time_to_ms_and_increment_dup_times is deprecated.", DeprecationWarning, stacklevel=2)
     mets = load_ticks_and_metrics_from_txt_file()
     return round_time_to_ms_and_increment_dup_times(mets)
 
-def combine_tbbo_and_metrics_data():
-    # FIXME: This ignores metrics data points if they do not have "time" that matches a TBBO data point.
 
+def combine_tbbo_and_metrics_data():
     tbbo_list = get_and_convert_tbbo()
     mets = get_metrics_data()
 
     mets_dict = {m["time"]: m for m in mets}
-    # FIXME: BRENT november: values not found in keys?
+    # FIX IF USED: values not found in keys?
     for tbbo in tbbo_list:
         if tbbo["time"] in mets_dict:
             tbbo.update(mets_dict[tbbo["time"]])
     return tbbo_list
+
 
 if __name__ == "__main__":
     print()
