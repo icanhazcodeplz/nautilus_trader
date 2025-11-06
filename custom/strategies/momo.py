@@ -29,14 +29,15 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     take_profit: float
     take_ratio: float
     vwap_window: int
-    vwap_buy_threshold: float
-    vwap_sell_threshold: float
-    time_vwap_window: int
-    time_vwap_bin_ms: int
+    variance_window_ratio: float
+    upper_lower_scaler: float
+
     trailing_stop: bool
     simple_take: bool = False
 
     record_op_speed: bool = False  # Record operation speed
+    allow_trades: bool = True
+
     # bar_type: BarType
     # fast_ema_period: PositiveInt = 10
     # slow_ema_period: PositiveInt = 20
@@ -55,21 +56,20 @@ class MomoStrategy(BaseStrategy):
         super().__init__(config)
 
         self.vwap = RollingVWAP(
-            rolling_window=self.config.vwap_window, variance_window_ratio=1.5, upper_lower_scaler=0.05
+            rolling_window=self.config.vwap_window,
+            variance_window_ratio=self.config.variance_window_ratio,
+            upper_lower_scaler=self.config.upper_lower_scaler,
         )
-        # self.time_vwap = RollingVWAP(rolling_window=self.config.time_vwap_window)
         self.vwap_day = VolumeWeightedAveragePrice()
 
         self.metrics_to_save = [
             Metric(obj=self.vwap, name="vwap", attrs=["value", "upper", "lower"]),
-            # Metric(obj=self.time_vwap, name="time_vwap", attrs=["value"]),
             Metric(obj=self.vwap_day, name="day_vwap", attrs=["value"]),
         ]
 
         self.size_dq = deque(maxlen=10)
         self.price_dq = deque(maxlen=10)
         self.take_price = None
-        self.buy_signals_count = 0
 
         self.metrics = []
 
@@ -89,52 +89,39 @@ class MomoStrategy(BaseStrategy):
             self.last_take_ts = self.clock.utc_now()
             self.last_buy_ts = self.clock.utc_now()
 
-        price_2ago = self.price_dq[-2]
         price_1ago = self.price_dq[-1]
         price = tick.price
-        # if price - price_2ago <= -0.20 and price_2ago >= price_1ago >= price:
-        #     self.recent_big_drop = True
 
         self.price_dq.append(tick.price)
         self.size_dq.append(tick.size)
         position_qty = self.position_qty
-        # if self.recent_big_drop and price > price_1ago:
-
         # BUY LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-        if price < (self.vwap.lower) and (price > price_1ago) and (price > self.vwap_day.value):
-            self.buy_signals_count += 1
-            # if self.buy_signals_count == 39:
-            #     for tick in self.cache.trade_ticks(self.config.instrument_id)[0:5]:
-            #         print(pd.Timestamp(tick.ts_event, tz="UTC"), tick.price, tick.size)
-            # TODO: abstract this out?
-            self._buy_sell_signals.append(
-                dict(side="buy", time=tick.ts_init, tag=f"{self.buy_signals_count}|{float(price)}")
-            )
+        if (
+            price < self.vwap.lower and price_1ago > self.vwap.lower
+            # and (price > price_1ago)
+            # and (price > self.vwap_day.value)
+        ):
+            self.log_buy_signal(tick)
             if (
                 position_qty < self.max_position_allowed
                 and tick.size > 1
                 and (self.clock.utc_now() - self.last_buy_ts).total_seconds() > 1
             ):
-                self.log.info(f"Buying at {price}. vwap: {self.vwap.value}")
-                self.buy(self.config.trade_size, price, cancel_after_secs=30, tag=f"{self.buy_signals_count}")
+                # self.log.info(f"Buying at {price}")
+                self.buy(self.config.trade_size, price_1ago, cancel_after_secs=30, tag=f"{self._buy_signals_count}")
                 self.last_buy_ts = self.clock.utc_now()
 
         # TAKE LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         if (
-            position_qty > 1
+            position_qty > 0
             and price >= self.take_price
             and (self.clock.utc_now() - self.last_take_ts).total_seconds() > 1
         ):
-            if (
-                self.config.simple_take
-                or (
-                    price > (self.vwap.value + self.config.vwap_sell_threshold)
-                    and price <= price_1ago
-                    and tick.size > 1
-                )
+            if self.config.simple_take:
+                self.sell(position_qty, limit_price=price, cancel_after_secs=10, tag="vt")
+            elif price > (self.vwap.value + self.config.vwap_sell_threshold) and price <= price_1ago and tick.size > 1:
                 # and price > self.vwap.upper
-            ):
-                sell_qty = max(int(position_qty * self.config.take_ratio), int(self.config.trade_size / 10))
+                sell_qty = max(int(position_qty * self.config.take_ratio), int(self.config.trade_size / 10), 1)
                 self.sell(sell_qty, limit_price=price, cancel_after_secs=10, tag="vt")
                 self.last_take_ts = self.clock.utc_now()
 

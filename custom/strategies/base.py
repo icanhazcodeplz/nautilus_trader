@@ -30,6 +30,7 @@ class BaseStrategyConfig(StrategyConfig, frozen=True):
     max_position_multiplier: int
     stop_loss: float
     record_op_speed: bool  # Record operation speed in the "on_trade_tick" method
+    allow_trades: bool = True
 
 
 class BaseStrategy(Strategy):
@@ -43,7 +44,9 @@ class BaseStrategy(Strategy):
         self.stop_price = None
         self._last_buy_dt: Timestamp = pd.Timestamp("1990", tz="UTC")
         self._tick_data_dicts = {}
-        self._last_mets_dt_ns = 0
+        self._tick_init_dt_adjusted = 0
+
+        self._buy_signals_count = 0
         self._buy_sell_signals = []
 
         # Used to track order modifications to avoid sending duplicate modify orders when the cache is slow
@@ -126,7 +129,20 @@ class BaseStrategy(Strategy):
         sell_qty_open_orders = sum(order.quantity for order in open_orders)
         return self.position_qty - sell_qty_open_orders
 
+    def log_buy_signal(self, tick, tag=None):
+        self._buy_signals_count += 1
+        if tag is None:
+            tag = f"{self._buy_signals_count}"
+        self._buy_sell_signals.insert(
+            0, dict(side="buy", time=self._tick_init_dt_adjusted, price=float(tick.price), tag=tag, win=None)
+        )
+
     def on_trade_tick(self, tick: TradeTick) -> None:
+        if self._tick_init_dt_adjusted >= tick.ts_init:
+            self._tick_init_dt_adjusted += 1
+        else:
+            self._tick_init_dt_adjusted = tick.ts_init
+
         tick_data = {"price": float(tick.price), "size": int(tick.size)}
         if self.config.record_op_speed:
             tick_data = {
@@ -145,14 +161,21 @@ class BaseStrategy(Strategy):
         if self.config.record_op_speed:
             tick_data["ts_now_after"] = pd.Timestamp.utcnow()
 
+        # Track buy-sell signals
+        for signal in self._buy_sell_signals:
+            if signal["win"] is None:
+                if signal["side"] == "buy":
+                    if tick.price >= (signal["price"] + self.config.stop_loss):
+                        signal["win"] = True
+                        signal["end_time"] = self._tick_init_dt_adjusted
+                    elif tick.price <= (signal["price"] - self.config.stop_loss):
+                        signal["win"] = False
+                        signal["end_time"] = self._tick_init_dt_adjusted
+
         if self.save_artifacts:
             for metric in self.metrics_to_save:
                 tick_data = {**tick_data, **metric.get_vals()}
-            if self._last_mets_dt_ns >= tick.ts_init:
-                self._last_mets_dt_ns += 1
-            else:
-                self._last_mets_dt_ns = tick.ts_init
-            self._tick_data_dicts[self._last_mets_dt_ns] = tick_data
+            self._tick_data_dicts[self._tick_init_dt_adjusted] = tick_data
 
     def _submit_limit_order(self, side: OrderSide, quantity: int, limit_price: float, tag: str, cancel_after_secs=None):
         tags = [tag]
@@ -168,7 +191,8 @@ class BaseStrategy(Strategy):
             expire_time=None,
             tags=tags,
         )
-        self.submit_order(order, position_id=None, client_id=None, params=None)
+        if self.config.allow_trades:
+            self.submit_order(order, position_id=None, client_id=None, params=None)
 
     def buy(self, quantity, limit_price, tag, cancel_after_secs=None) -> None:
         allowed_qty = min(quantity, self._max_buy_qty_allowed())
@@ -256,7 +280,7 @@ class BaseStrategy(Strategy):
             write_to_ticks_and_metrics_txt_file(self._tick_data_dicts)
 
         if len(self._buy_sell_signals) > 0:
-            write_to_signals_file(self._buy_sell_signals)
+            write_to_signals_file(list(reversed(self._buy_sell_signals)))
 
     @abstractmethod
     def _on_trade_tick(self, tick: TradeTick) -> None:

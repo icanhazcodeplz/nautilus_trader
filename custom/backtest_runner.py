@@ -43,6 +43,13 @@ from nautilus_trader.model.identifiers import Venue
 from nautilus_trader.model.objects import Money
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
 
+measured_latency_model = LatencyModel(
+    base_latency_nanos=30 * 1e6,
+    insert_latency_nanos=34 * 1e6,
+    update_latency_nanos=25 * 1e6,
+    cancel_latency_nanos=25 * 1e6,
+)
+
 
 def run_single_backtest(
     dataset_name, strategy_name, params, save_artifacts=False, return_engine=False, log_level="ERROR"
@@ -77,12 +84,8 @@ def run_single_backtest(
         starting_balances=[Money(100000.0, USD)],
         fill_model=LimitFillModel(prob_fill_on_limit=0.8, random_seed=random_seed),
         # trade_execution=True,
-        latency_model=LatencyModel(
-            base_latency_nanos=30 * 1e6,
-            insert_latency_nanos=34 * 1e6,
-            update_latency_nanos=25 * 1e6,
-            cancel_latency_nanos=25 * 1e6,
-        ),
+        # latency_model=LatencyModel(),
+        latency_model=measured_latency_model,
     )
 
     dataset_params = CATALOG_OPTIONS[dataset_name.lower()]
@@ -129,6 +132,10 @@ def run_single_backtest(
     engine.add_strategy(strategy=strategy)
     random.seed(random_seed)
     engine.run()
+    num_buy_sells = len(strategy._buy_sell_signals)
+    if num_buy_sells > 0:
+        wins = len([b for b in strategy._buy_sell_signals if b["win"]])
+        print(f"\n BuySignals:  {num_buy_sells}   {wins}/{num_buy_sells - wins} = {round(wins/num_buy_sells, 2)}")
 
     if return_engine:
         return engine
@@ -161,16 +168,15 @@ if __name__ == "__main__":
     params = dict(
         trade_size=100,
         max_position_multiplier=1,
-        stop_loss=0.40,
-        take_profit=0.40,
-        take_ratio=1.0,
+        stop_loss=0.10,
+        take_profit=0.10,
+        take_ratio=0.8,
         vwap_window=100,
-        vwap_buy_threshold=0.05,
-        vwap_sell_threshold=0.30,
-        time_vwap_window=5000,
-        time_vwap_bin_ms=500,
+        variance_window_ratio=1.5,
+        upper_lower_scaler=0.10,
         trailing_stop=False,
         simple_take=True,
+        allow_trades=True,
         random_seed=4,
     )
     datasets = ["zooz"]
@@ -194,18 +200,23 @@ if __name__ == "__main__":
         orders_report = engine.trader.generate_orders_report()
         fills_report = engine.trader.generate_fills_report()
         positions_report = engine.trader.generate_positions_report()
-        positions = positions_report[
-            ["peak_qty", "ts_opened", "ts_closed", "avg_px_open", "avg_px_close", "realized_pnl"]
-        ]
 
-        orders_report = orders_report[orders_report["filled_qty"].astype(int) > 0]
-        orders = orders_report[
-            ["side", "quantity", "filled_qty", "price", "avg_px", "tags", "ts_init", "ts_last"]
-        ].copy()
-        # orders["ts_init"] = pd.to_datetime(orders["ts_init"], unit="ns")
-        # orders["ts_last"] = pd.to_datetime(orders["ts_last"], unit="ns")
+        trades = pd.DataFrame()
+        sell_legs = []
+        if not positions_report.empty:
+            positions = positions_report[
+                ["peak_qty", "ts_opened", "ts_closed", "avg_px_open", "avg_px_close", "realized_pnl"]
+            ]
 
-        trades, sell_legs = orders_to_trades(orders_report)
+            orders_report = orders_report[orders_report["filled_qty"].astype(int) > 0]
+            orders = orders_report[
+                ["side", "quantity", "filled_qty", "price", "avg_px", "tags", "ts_init", "ts_last"]
+            ].copy()
+            t = orders.copy()
+            t["ts_init"] = pd.to_datetime(orders["ts_init"], unit="ns")
+            t["ts_last"] = pd.to_datetime(orders["ts_last"], unit="ns")
+
+            trades, sell_legs = orders_to_trades(orders_report)
         CreateMarkers().create_and_save_markers(trades, sell_legs)
 
         print()

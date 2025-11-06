@@ -23,11 +23,14 @@ class CreateMarkers:
         return dict(time=dt, position=position, color=color, shape=shape, text=text, price=price)
 
     def create_trades_markers(self, trades, sell_legs):
+        if trades.empty:
+            print("No trades to create markers for")
+            return []
         price_markers = []
 
         for _, ser in trades.iterrows():
             # Buy markers
-            price_ = ser["buy_price"]
+            price_ = round(ser["buy_price"],2)
             price_markers.append(
                 self._make_marker_dict(
                     dt=ser["buy_dt"],
