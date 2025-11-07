@@ -33,7 +33,6 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     upper_lower_scaler: float
 
     use_bracket_orders: bool = False
-    trailing_stop: bool
     simple_take: bool = False
 
     record_op_speed: bool = False  # Record operation speed
@@ -143,15 +142,6 @@ class MomoStrategy(BaseStrategy):
                         f"Canceling order {order.client_order_id} @{order.price} because current price {price} is higher than vwap {self.vwap.value}"
                     )
                     self.cancel_order(order)
-
-        if (
-            self.config.trailing_stop
-            and self.stop_price is not None
-            and price > self.position_avg_px + self.config.take_profit
-            and tick.size > 10
-        ):
-            new_stop = price - self.config.stop_loss
-            self.stop_price = max(self.stop_price, new_stop)
 
     def _on_order_filled(self, order) -> None:
         if order.is_buy:

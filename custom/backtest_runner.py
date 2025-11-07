@@ -184,7 +184,6 @@ if __name__ == "__main__":
         variance_window_ratio=1.5,
         upper_lower_scaler=0.10,
         use_bracket_orders=True,
-        trailing_stop=False,
         simple_take=True,
         allow_trades=True,
         random_seed=4,
