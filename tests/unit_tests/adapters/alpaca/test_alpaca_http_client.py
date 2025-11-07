@@ -44,8 +44,7 @@ async def test_submit_order():
         },
         "stop_loss": {
             "stop_price": "259",
-            "type":"market",
-            # "limit_price": "258.5"
+            "limit_price": "258.5"
         }
     }
 

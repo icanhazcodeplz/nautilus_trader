@@ -16,11 +16,13 @@ from nautilus_trader.model.data import Bar
 from nautilus_trader.model.data import OrderBookDeltas
 from nautilus_trader.model.data import QuoteTick
 from nautilus_trader.model.data import TradeTick
-from nautilus_trader.model.enums import OrderSide
+from nautilus_trader.model.enums import OrderSide, ContingencyType
+from nautilus_trader.model.enums import OrderType
 from nautilus_trader.model.enums import TimeInForce
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.model.orders import LimitOrder
+from nautilus_trader.model.orders.list import OrderList
 from nautilus_trader.trading.strategy import Strategy
 
 
@@ -47,7 +49,7 @@ class BaseStrategy(Strategy):
         self._tick_init_dt_adjusted = 0
 
         self._buy_signals_count = 0
-        self._buy_sell_signals = []
+        self.buy_sell_signals = []
 
         # Used to track order modifications to avoid sending duplicate modify orders when the cache is slow
         self._last_order_modify_dict = {}
@@ -104,7 +106,7 @@ class BaseStrategy(Strategy):
             # TODO: HARDCODED to set stop price to 0.01 below current price
             new_limit_price = self.instrument.make_price(tick.price - 0.01)
 
-            # FIXME: BRENT - this is not a great solution. The fills for selling are more accurate during backtesting
+            # FIXME: this is not a great solution. The fills for selling are more accurate during backtesting
             # if you use a single order, but during live running it is less buggy to modify existing orders because
             # trying to cancel existing orders runs async.
             self.sell_position_at_price(new_limit_price)
@@ -133,8 +135,8 @@ class BaseStrategy(Strategy):
         self._buy_signals_count += 1
         if tag is None:
             tag = f"{self._buy_signals_count}"
-        self._buy_sell_signals.insert(
-            0, dict(side="buy", time=self._tick_init_dt_adjusted, price=float(tick.price), tag=tag, win=None)
+        self.buy_sell_signals.append(
+            dict(side="buy", time=self._tick_init_dt_adjusted, price=float(tick.price), tag=tag, win=None, win_delay=None)
         )
 
     def on_trade_tick(self, tick: TradeTick) -> None:
@@ -154,7 +156,7 @@ class BaseStrategy(Strategy):
             }
 
         #  Actual operations of this method
-        self.stop_out_if_needed(tick)
+        # self.stop_out_if_needed(tick)
         self._on_trade_tick(tick)
 
         # Record if needed
@@ -162,15 +164,18 @@ class BaseStrategy(Strategy):
             tick_data["ts_now_after"] = pd.Timestamp.utcnow()
 
         # Track buy-sell signals
-        for signal in self._buy_sell_signals:
-            if signal["win"] is None:
+        for signal in self.buy_sell_signals:
+            if signal["win"] is None or signal["win_delay"] is None:
                 if signal["side"] == "buy":
-                    if tick.price >= (signal["price"] + self.config.stop_loss):
-                        signal["win"] = True
-                        signal["end_time"] = self._tick_init_dt_adjusted
-                    elif tick.price <= (signal["price"] - self.config.stop_loss):
-                        signal["win"] = False
-                        signal["end_time"] = self._tick_init_dt_adjusted
+                    win = tick.price >= (signal["price"] + self.config.stop_loss)
+                    loss = tick.price <= (signal["price"] - self.config.stop_loss)
+                    if signal["win"] is None and (win or loss):
+                        signal["win"] = win
+                        signal["win_time"] = self._tick_init_dt_adjusted
+                    if signal["win_delay"] is None and (win or loss) and ((self._tick_init_dt_adjusted - signal["time"]) > 60 * 1e6):
+                        signal["win_delay"] = win
+                        signal["win_delay_time"] = self._tick_init_dt_adjusted
+
 
         if self.save_artifacts:
             for metric in self.metrics_to_save:
@@ -204,6 +209,49 @@ class BaseStrategy(Strategy):
             self._submit_limit_order(OrderSide.BUY, allowed_qty, limit_price, tag, cancel_after_secs)
             self._last_buy_dt = self.clock.utc_now()
 
+    def buy_bracket(self, quantity, limit_price, stop_loss, take_profit, tag, cancel_after_secs=None) -> None:
+        allowed_qty = min(quantity, self._max_buy_qty_allowed())
+        if allowed_qty != quantity:
+            self.log.info(
+                f"Buy quantity reduced from {quantity} to {allowed_qty} to avoid exceeding max position of {self.max_position_allowed}."
+            )
+        if allowed_qty > 0:
+            entry_tags = [tag]
+            if cancel_after_secs is not None:
+                expire_time = self.clock.utc_now() + timedelta(seconds=cancel_after_secs)
+                entry_tags.append(expire_time)
+
+            # Calculate stop-loss and take-profit prices
+            sl_trigger_price = self.instrument.make_price(limit_price - stop_loss)
+            tp_price = self.instrument.make_price(limit_price + take_profit)
+
+            # Create bracket order with entry, stop-loss, and take-profit
+            order_list: OrderList = self.order_factory.bracket(
+                instrument_id=self.config.instrument_id,
+                order_side=OrderSide.BUY,
+                quantity=self.instrument.make_qty(allowed_qty),
+                contingency_type=ContingencyType.OCO,
+                entry_order_type=OrderType.LIMIT,
+                entry_price=self.instrument.make_price(limit_price),
+                time_in_force=TimeInForce.DAY,
+                entry_tags=entry_tags,
+                tp_tags=[f"{tag}t"],
+                sl_tags=[f"{tag}s"],
+                tp_price=tp_price,
+                tp_time_in_force=TimeInForce.DAY,
+                sl_order_type=OrderType.STOP_LIMIT,
+                sl_time_in_force=TimeInForce.DAY,
+                sl_trigger_price=sl_trigger_price,
+                # FIXME: hardcoded to 0.02 below stop_loss_price
+                sl_price=self.instrument.make_price(limit_price - stop_loss - 0.02)
+            )
+
+            if self.config.allow_trades:
+                self.submit_order_list(order_list)
+
+            self._last_buy_dt = self.clock.utc_now()
+
+
     def sell(self, quantity, limit_price, tag, cancel_after_secs=None) -> None:
         allowed_qty = min(quantity, self._max_sell_qty_allowed())
         if allowed_qty != quantity:
@@ -235,7 +283,7 @@ class BaseStrategy(Strategy):
         open_orders = self.submitted_or_open_orders()
         for order in open_orders:
             if len(order.tags) > 1:
-                expire_time = order.tags[1]  # FIXME: BRENT - hardcoded to look at second item
+                expire_time = order.tags[1]  # FIXME: hardcoded to look at second item
                 if self.clock.utc_now() > expire_time:
                     self.cancel_order(order)
 
@@ -279,8 +327,8 @@ class BaseStrategy(Strategy):
         if len(self._tick_data_dicts) > 0:
             write_to_ticks_and_metrics_txt_file(self._tick_data_dicts)
 
-        if len(self._buy_sell_signals) > 0:
-            write_to_signals_file(list(reversed(self._buy_sell_signals)))
+        if len(self.buy_sell_signals) > 0:
+            write_to_signals_file(list(reversed(self.buy_sell_signals)))
 
     @abstractmethod
     def _on_trade_tick(self, tick: TradeTick) -> None:

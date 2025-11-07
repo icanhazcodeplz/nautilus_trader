@@ -83,6 +83,7 @@ def run_single_backtest(
         base_currency=USD,
         starting_balances=[Money(100000.0, USD)],
         fill_model=LimitFillModel(prob_fill_on_limit=0.8, random_seed=random_seed),
+        reject_stop_orders=False,
         # trade_execution=True,
         # latency_model=LatencyModel(),
         latency_model=measured_latency_model,
@@ -132,10 +133,18 @@ def run_single_backtest(
     engine.add_strategy(strategy=strategy)
     random.seed(random_seed)
     engine.run()
-    num_buy_sells = len(strategy._buy_sell_signals)
+    signals = strategy.buy_sell_signals
+    num_buy_sells = len(signals)
     if num_buy_sells > 0:
-        wins = len([b for b in strategy._buy_sell_signals if b["win"]])
-        print(f"\n BuySignals:  {num_buy_sells}   {wins}/{num_buy_sells - wins} = {round(wins/num_buy_sells, 2)}")
+        signals_df = pd.DataFrame(signals)
+        signals_df["duration_ms"] = (signals_df["win_time"] - signals_df["time"]) / 1e6
+        signals_df["delay_duration_ms"] = (signals_df["win_delay_time"] - signals_df["time"]) / 1e6
+        wins = len(signals_df[signals_df["win"]])
+        long_wins = len(signals_df[signals_df["win"] & signals_df["win_delay"]])
+        print(f"\n BuySignals:  {num_buy_sells}   {wins}/{num_buy_sells - wins} = {round(wins / num_buy_sells, 2)}")
+        print(
+            f"LongWins__:  {num_buy_sells}   {long_wins}/{num_buy_sells - long_wins} = {round(long_wins / num_buy_sells, 2)}"
+        )
 
     if return_engine:
         return engine
@@ -166,7 +175,7 @@ if __name__ == "__main__":
     strategy_name = "momo"
 
     params = dict(
-        trade_size=100,
+        trade_size=5,
         max_position_multiplier=1,
         stop_loss=0.10,
         take_profit=0.10,
@@ -174,6 +183,7 @@ if __name__ == "__main__":
         vwap_window=100,
         variance_window_ratio=1.5,
         upper_lower_scaler=0.10,
+        use_bracket_orders=True,
         trailing_stop=False,
         simple_take=True,
         allow_trades=True,
@@ -210,7 +220,7 @@ if __name__ == "__main__":
 
             orders_report = orders_report[orders_report["filled_qty"].astype(int) > 0]
             orders = orders_report[
-                ["side", "quantity", "filled_qty", "price", "avg_px", "tags", "ts_init", "ts_last"]
+                ["side", "quantity", "filled_qty", "price", "trigger_price", "avg_px", "tags", "ts_init", "ts_last"]
             ].copy()
             t = orders.copy()
             t["ts_init"] = pd.to_datetime(orders["ts_init"], unit="ns")

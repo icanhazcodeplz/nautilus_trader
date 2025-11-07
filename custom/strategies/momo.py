@@ -32,16 +32,12 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     variance_window_ratio: float
     upper_lower_scaler: float
 
+    use_bracket_orders: bool = False
     trailing_stop: bool
     simple_take: bool = False
 
     record_op_speed: bool = False  # Record operation speed
     allow_trades: bool = True
-
-    # bar_type: BarType
-    # fast_ema_period: PositiveInt = 10
-    # slow_ema_period: PositiveInt = 20
-    # request_historical_bars: bool = False
 
 
 def initialize_deque_if_needed(dq: deque, value):
@@ -101,29 +97,43 @@ class MomoStrategy(BaseStrategy):
             # and (price > price_1ago)
             # and (price > self.vwap_day.value)
         ):
-            self.log_buy_signal(tick)
             if (
                 position_qty < self.max_position_allowed
-                and tick.size > 1
+                # and tick.size > 1
                 and (self.clock.utc_now() - self.last_buy_ts).total_seconds() > 1
             ):
+                self.log_buy_signal(tick)
                 # self.log.info(f"Buying at {price}")
-                self.buy(self.config.trade_size, price_1ago, cancel_after_secs=30, tag=f"{self._buy_signals_count}")
+                if self.config.use_bracket_orders:
+                    self.buy_bracket(
+                        self.config.trade_size,
+                        price,
+                        self.config.stop_loss,
+                        self.config.take_profit,
+                        tag=f"{self._buy_signals_count}",
+                    )
+                else:
+                    self.buy(self.config.trade_size, price_1ago, cancel_after_secs=30, tag=f"{self._buy_signals_count}")
                 self.last_buy_ts = self.clock.utc_now()
 
-        # TAKE LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-        if (
-            position_qty > 0
-            and price >= self.take_price
-            and (self.clock.utc_now() - self.last_take_ts).total_seconds() > 1
-        ):
-            if self.config.simple_take:
-                self.sell(position_qty, limit_price=price, cancel_after_secs=10, tag="vt")
-            elif price > (self.vwap.value + self.config.vwap_sell_threshold) and price <= price_1ago and tick.size > 1:
-                # and price > self.vwap.upper
-                sell_qty = max(int(position_qty * self.config.take_ratio), int(self.config.trade_size / 10), 1)
-                self.sell(sell_qty, limit_price=price, cancel_after_secs=10, tag="vt")
-                self.last_take_ts = self.clock.utc_now()
+        if not self.config.use_bracket_orders:
+            # TAKE LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+            if (
+                position_qty > 0
+                and price >= self.take_price
+                and (self.clock.utc_now() - self.last_take_ts).total_seconds() > 1
+            ):
+                if self.config.simple_take:
+                    self.sell(position_qty, limit_price=price, cancel_after_secs=10, tag="simple")
+                elif (
+                    price > (self.vwap.value + self.config.vwap_sell_threshold)
+                    and price <= price_1ago
+                    and tick.size > 1
+                ):
+                    # and price > self.vwap.upper
+                    sell_qty = max(int(position_qty * self.config.take_ratio), int(self.config.trade_size / 10), 1)
+                    self.sell(sell_qty, limit_price=price, cancel_after_secs=10, tag="t")
+                    self.last_take_ts = self.clock.utc_now()
 
         open_buys = self.submitted_or_open_orders(side=OrderSide.BUY)
         if len(open_buys) > 0 and price > self.vwap.value and tick.size > 1:
