@@ -1231,6 +1231,7 @@ cdef class OrderFactory:
         # Stop-loss order
         OrderType sl_order_type = OrderType.STOP_MARKET,
         Price sl_trigger_price = None,
+        Price sl_price = None,
         TriggerType sl_trigger_type = TriggerType.DEFAULT,
         Price sl_activation_price = None,
         sl_trailing_offset:Decimal = None,
@@ -1688,6 +1689,34 @@ cdef class OrderFactory:
                 reduce_only=True,
                 quote_quantity=quote_quantity,
                 emulation_trigger=emulation_trigger,
+                trigger_instrument_id=trigger_instrument_id,
+                contingency_type=contingency_type,
+                order_list_id=order_list_id,
+                linked_order_ids=[tp_client_order_id],
+                parent_order_id=entry_client_order_id,
+                exec_algorithm_id=sl_exec_algorithm_id,
+                exec_algorithm_params=sl_exec_algorithm_params,
+                exec_spawn_id=sl_client_order_id if sl_exec_algorithm_id is not None else None,
+                tags=sl_tags,
+            )
+        elif sl_order_type == OrderType.STOP_LIMIT:
+            # Backtest logic occurs in matching_core.pyx `cpdef bint is_stop_triggered(`
+            sl_order = StopLimitOrder(
+                trader_id=self.trader_id,
+                strategy_id=self.strategy_id,
+                instrument_id=entry_order.instrument_id,
+                client_order_id=sl_client_order_id,
+                order_side=Order.opposite_side_c(entry_order.side),
+                quantity=quantity,
+                price=sl_price,
+                trigger_price=sl_trigger_price,
+                trigger_type=TriggerType.LAST_PRICE,  # Not sure this does anything
+                init_id=UUID4(),
+                ts_init=self._clock.timestamp_ns(),
+                time_in_force=sl_time_in_force,
+                reduce_only=True,
+                quote_quantity=quote_quantity,
+                emulation_trigger=TriggerType.LAST_PRICE,
                 trigger_instrument_id=trigger_instrument_id,
                 contingency_type=contingency_type,
                 order_list_id=order_list_id,

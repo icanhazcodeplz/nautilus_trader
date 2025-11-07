@@ -290,6 +290,7 @@ cdef class OrderFactory:
 
         OrderType sl_order_type=*,
         Price sl_trigger_price=*,
+        Price sl_price=*,
         TriggerType sl_trigger_type=*,
         Price sl_activation_price=*,
         sl_trailing_offset:Decimal=*,
