@@ -24,7 +24,7 @@ dry_run = False  # Set this to False to enable actual trading
 
 instrument_provider_config = InstrumentProviderConfig(
     load_ids=frozenset([instrument_id]),
-    # FIXME: BRENT - figure out why all instruments are loaded when load_all=False
+    # FIXME: figure out why all instruments are loaded when load_all=False
     load_all=False,
 )
 config_node = TradingNodeConfig(

@@ -30,15 +30,14 @@ class CreateMarkers:
 
         for _, ser in trades.iterrows():
             # Buy markers
-            price_ = round(ser["buy_price"],2)
             price_markers.append(
                 self._make_marker_dict(
                     dt=ser["buy_dt"],
                     position="aboveBar",
                     color="#f77a0c",
                     shape="arrowDown",
-                    text=f"{ser['desc']}|{price_}",
-                    price=price_,
+                    text=f"{ser['desc']}|{ser['qty']}",
+                    price=round(ser["buy_price"], 2),
                 )
             )
 
@@ -60,7 +59,7 @@ class CreateMarkers:
         for _, ser in sell_legs.iterrows():
             color = "#fc0317" if ser["pnl"] < 0 else "#07fc03"
 
-            text = f"{ser['qty']}{ser['desc']}"
+            text = f"{ser['desc']}|{ser['qty']}"
             price_markers.append(
                 self._make_marker_dict(
                     dt=ser["dt"],

@@ -17,8 +17,12 @@
 from decimal import Decimal
 
 from custom.strategies.tester_exec import CustomExecTesterConfig, CustomExecTester
-from nautilus_trader.adapters.alpaca import AlpacaDataClientConfig, AlpacaLiveDataClientFactory, ALPACA, \
-    AlpacaExecClientConfig
+from nautilus_trader.adapters.alpaca import (
+    AlpacaDataClientConfig,
+    AlpacaLiveDataClientFactory,
+    ALPACA,
+    AlpacaExecClientConfig,
+)
 from nautilus_trader.adapters.alpaca import AlpacaLiveExecClientFactory
 from nautilus_trader.cache.config import CacheConfig
 from nautilus_trader.config import InstrumentProviderConfig
@@ -48,7 +52,7 @@ dry_run = False  # Set this to False to enable actual trading
 
 instrument_provider_config = InstrumentProviderConfig(
     load_ids=frozenset(instrument_ids),
-    # FIXME: BRENT - figure out why all instruments are loaded when load_all=False
+    # FIXME: figure out why all instruments are loaded when load_all=False
     load_all=False,
 )
 config_node = TradingNodeConfig(
