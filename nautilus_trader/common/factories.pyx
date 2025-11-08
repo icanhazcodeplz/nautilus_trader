@@ -1716,7 +1716,7 @@ cdef class OrderFactory:
                 time_in_force=sl_time_in_force,
                 reduce_only=True,
                 quote_quantity=quote_quantity,
-                emulation_trigger=TriggerType.LAST_PRICE,
+                emulation_trigger=TriggerType.NO_TRIGGER,
                 trigger_instrument_id=trigger_instrument_id,
                 contingency_type=contingency_type,
                 order_list_id=order_list_id,
