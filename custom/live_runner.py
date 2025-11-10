@@ -17,10 +17,9 @@ from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.identifiers import TraderId
 
 
-symbol = "QLGN"
+symbol = "TSLA"
 instrument_id = InstrumentId.from_str(f"{symbol}.{ALPACA}")
 paper = True
-dry_run = False  # Set this to False to enable actual trading
 
 instrument_provider_config = InstrumentProviderConfig(
     load_ids=frozenset([instrument_id]),
@@ -29,7 +28,7 @@ instrument_provider_config = InstrumentProviderConfig(
 )
 config_node = TradingNodeConfig(
     trader_id=TraderId("TESTER-001"),
-    logging=LoggingConfig(log_level="DEBUG", use_pyo3=True),
+    logging=LoggingConfig(log_level="INFO", use_pyo3=True),
     exec_engine=LiveExecEngineConfig(reconciliation=False),
     cache=CacheConfig(
         # database=DatabaseConfig(),
@@ -59,32 +58,21 @@ config_node = TradingNodeConfig(
 
 node = TradingNode(config=config_node)
 
-# strategy = CustomExecTester(config=CustomExecTesterConfig(
-#     instrument_id=instrument_id,
-#     external_order_claims=[instrument_id],
-#     order_qty=1,
-#     tob_offset_ticks=1,
-#     subscribe_quotes=False,
-#     subscribe_trades=False,
-#     use_post_only=False,  # Alpaca doesn't have a post-only flag
-#     close_positions_time_in_force=TimeInForce.DAY,  # Use DAY for Alpaca
-#     close_positions_on_stop=True,
-#     open_position_on_start_qty=1,
-#     open_position_time_in_force=TimeInForce.DAY,
-#     dry_run=dry_run,
-#     log_data=True,
-# ))
 strategy_config = MomoStrategyConfig(
     instrument_id=instrument_id,
     external_order_claims=[instrument_id],
-    trade_size=1,
+    trade_size=10,
     max_position_multiplier=1,
-    stop_loss=0.00,
-    take_profit=0.01,
-    take_ratio=0.5,
-    vwap_window=50,
-    vwap_buy_threshold=0.01,
-    trailing_stop=True,
+    stop_loss=0.20,
+    take_profit=0.20,
+    take_ratio=0.8,
+    vwap_window=100,
+    variance_window_ratio=1.5,
+    upper_lower_scaler=0.05,
+    use_oco_sell_orders=True,
+    use_bracket_orders=False,
+    simple_take=False,
+    allow_trades=True,
 )
 strategy = MomoStrategy(config=strategy_config)
 
@@ -97,10 +85,12 @@ node.build()
 
 if __name__ == "__main__":
     try:
-        run_details = {"paper": paper, "symbol": symbol, "strategy": strategy_config.dict()}
-        details_filepath = run_artifacts_subdir("config.json")
-        with open(details_filepath, "w") as f:
-            json.dump(run_details, f, indent=2, default=str)
+        save_config = True
+        if save_config:
+            run_details = {"paper": paper, "symbol": symbol, "strategy": strategy_config.dict()}
+            details_filepath = run_artifacts_subdir("config.json")
+            with open(details_filepath, "w") as f:
+                json.dump(run_details, f, indent=2, default=str)
 
         node.run()
     finally:

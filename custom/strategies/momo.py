@@ -151,8 +151,6 @@ class MomoStrategy(BaseStrategy):
             if self.config.use_oco_sell_orders:
                 cached_order = self.cache.order(order_filled.client_order_id)
                 tag = cached_order.tags[0]
-                if tag == '16':
-                    print()
                 price = order_filled.last_px
                 self.sell_oco(
                     quantity=order_filled.last_qty,

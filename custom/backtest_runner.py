@@ -136,7 +136,7 @@ def run_single_backtest(
     signals = strategy.buy_sell_signals
     num_buy_sells = len(signals)
     if num_buy_sells > 0:
-        signals_df = pd.DataFrame(signals)
+        signals_df = pd.DataFrame(signals).dropna()
         signals_df["duration_ms"] = (signals_df["win_time"] - signals_df["time"]) / 1e6
         signals_df["delay_duration_ms"] = (signals_df["win_delay_time"] - signals_df["time"]) / 1e6
         wins = len(signals_df[signals_df["win"]])
