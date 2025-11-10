@@ -27,12 +27,12 @@ CATALOG_OPTIONS = dict(
         end="2025-09-20T00:00:00Z",
         notes="Up 3x. Huge volume",
     ),
-    aapl1014=dict(
+    aapl14=dict(
         symbol="AAPL",
         start="2025-10-14T00:00:00Z",
         end="2025-10-15T00:00:00Z",
     ),
-    aapl1015=dict(
+    aapl15=dict(
         symbol="AAPL",
         start="2025-10-15T00:00:00Z",
         end="2025-10-16T00:00:00Z",

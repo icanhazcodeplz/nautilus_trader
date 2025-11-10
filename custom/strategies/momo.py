@@ -33,6 +33,7 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     upper_lower_scaler: float
 
     use_bracket_orders: bool = False
+    use_oco_sell_orders: bool = False
     simple_take: bool = False
 
     record_op_speed: bool = False  # Record operation speed
@@ -49,6 +50,8 @@ def initialize_deque_if_needed(dq: deque, value):
 class MomoStrategy(BaseStrategy):
     def __init__(self, config: MomoStrategyConfig) -> None:
         super().__init__(config)
+        if sum([self.config.simple_take, self.config.use_bracket_orders, self.config.use_oco_sell_orders]) > 1:
+            raise ValueError("Cannot use more than one of simple_take, use_bracket_orders, use_oco_sell_orders")
 
         self.vwap = RollingVWAP(
             rolling_window=self.config.vwap_window,
@@ -72,8 +75,7 @@ class MomoStrategy(BaseStrategy):
         self.last_buy_ts = None
 
     def _on_trade_tick(self, tick: TradeTick) -> None:
-        # if self.clock.utc_now() > pd.Timestamp("2025-09-19T13:04:21.473147857", tz="UTC"):
-        #     stop_here=1
+        # self.log.info(f"Trade tick: {tick}")
         # NOTE: Need to be subscribed to order book deltas to get best bid/ask prices
         # ob = self.cache.order_book(self.config.instrument_id)
         # best_bid = ob.best_bid_price()
@@ -82,7 +84,7 @@ class MomoStrategy(BaseStrategy):
         initialize_deque_if_needed(self.size_dq, tick.size)
         if self.last_take_ts is None:
             self.last_take_ts = self.clock.utc_now()
-            self.last_buy_ts = self.clock.utc_now()
+            self.last_buy_ts = self.clock.utc_now() - pd.Timedelta(minutes=10)
 
         price_1ago = self.price_dq[-1]
         price = tick.price
@@ -99,10 +101,11 @@ class MomoStrategy(BaseStrategy):
             if (
                 position_qty < self.max_position_allowed
                 # and tick.size > 1
+                # and (self.clock.utc_now() - self.last_buy_ts).total_seconds() > random.randint(1, 20)
                 and (self.clock.utc_now() - self.last_buy_ts).total_seconds() > 1
             ):
                 self.log_buy_signal(tick)
-                # self.log.info(f"Buying at {price}")
+                self.log.info(f"Buying at {price}")
                 if self.config.use_bracket_orders:
                     self.buy_bracket(
                         self.config.trade_size,
@@ -112,11 +115,11 @@ class MomoStrategy(BaseStrategy):
                         tag=f"{self._buy_signals_count}",
                     )
                 else:
-                    self.buy(self.config.trade_size, price_1ago, cancel_after_secs=30, tag=f"{self._buy_signals_count}")
+                    self.buy(self.config.trade_size, price, cancel_after_secs=30, tag=f"{self._buy_signals_count}")
                 self.last_buy_ts = self.clock.utc_now()
 
-        if not self.config.use_bracket_orders:
-            # TAKE LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        if not self.config.use_bracket_orders and not self.config.use_oco_sell_orders:
+            # TAKE LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
             if (
                 position_qty > 0
                 and price >= self.take_price
@@ -139,17 +142,38 @@ class MomoStrategy(BaseStrategy):
             for order in open_buys:
                 if order.status != OrderStatus.PENDING_CANCEL:
                     self.log.info(
-                        f"Canceling order {order.client_order_id} @{order.price} because current price {price} is higher than vwap {self.vwap.value}"
+                        f"Canceling order {order.client_order_id}, tag {order.tags[0]} because current price {price} is higher than vwap {self.vwap.value}"
                     )
                     self.cancel_order(order)
 
-    def _on_order_filled(self, order) -> None:
-        if order.is_buy:
-            self.take_price = order.last_px + self.config.take_profit
-        elif order.is_sell:
-            self.take_price = order.last_px + self.config.take_profit
-        else:
-            raise ValueError("Invalid order type")
+    def _on_order_filled(self, order_filled) -> None:
+        if order_filled.is_buy:
+            if self.config.use_oco_sell_orders:
+                cached_order = self.cache.order(order_filled.client_order_id)
+                tag = cached_order.tags[0]
+                if tag == '16':
+                    print()
+                price = order_filled.last_px
+                self.sell_oco(
+                    quantity=order_filled.last_qty,
+                    stop_price=price - self.config.stop_loss,
+                    take_price=price + self.config.take_profit,
+                    tag=tag,
+                )
+            else:
+                # Set take and stop losses based on order fill price
+                self.take_price = order_filled.last_px + self.config.take_profit
+                new_stop_price = order_filled.last_px - self.config.stop_loss
+                if self.stop_price is not None:
+                    if new_stop_price > self.stop_price:
+                        self.log.info(f"Changing stop price from {self.stop_price} to {new_stop_price}")
+                        self.stop_price = new_stop_price
+                else:
+                    self.log.info(f"Setting stop price to {new_stop_price}")
+                    self.stop_price = new_stop_price
+
+        if order_filled.is_sell and not self.config.use_oco_sell_orders:
+            self.take_price = order_filled.last_px + self.config.take_profit
 
     def on_start(self) -> None:
         super().on_start()

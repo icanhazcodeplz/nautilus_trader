@@ -183,8 +183,9 @@ if __name__ == "__main__":
         vwap_window=100,
         variance_window_ratio=1.5,
         upper_lower_scaler=0.10,
-        use_bracket_orders=True,
-        simple_take=True,
+        use_bracket_orders=False,
+        use_oco_sell_orders=True,
+        simple_take=False,
         allow_trades=True,
         random_seed=4,
     )

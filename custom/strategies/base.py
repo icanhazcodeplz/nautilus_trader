@@ -135,9 +135,11 @@ class BaseStrategy(Strategy):
         self._buy_signals_count += 1
         if tag is None:
             tag = f"{self._buy_signals_count}"
-        self.buy_sell_signals.append(
-            dict(side="buy", time=self._tick_init_dt_adjusted, price=float(tick.price), tag=tag, win=None, win_delay=None)
+        buy_signal_dict = dict(
+            side="buy", time=self._tick_init_dt_adjusted, price=float(tick.price), tag=tag, win=None, win_delay=None
         )
+        self.buy_sell_signals.append(buy_signal_dict)
+        self.log.info(f"Buy signal {self._buy_signals_count}: {buy_signal_dict}")
 
     def on_trade_tick(self, tick: TradeTick) -> None:
         if self._tick_init_dt_adjusted >= tick.ts_init:
@@ -172,10 +174,13 @@ class BaseStrategy(Strategy):
                     if signal["win"] is None and (win or loss):
                         signal["win"] = win
                         signal["win_time"] = self._tick_init_dt_adjusted
-                    if signal["win_delay"] is None and (win or loss) and ((self._tick_init_dt_adjusted - signal["time"]) > 60 * 1e6):
+                    if (
+                        signal["win_delay"] is None
+                        and (win or loss)
+                        and ((self._tick_init_dt_adjusted - signal["time"]) > 60 * 1e6)
+                    ):
                         signal["win_delay"] = win
                         signal["win_delay_time"] = self._tick_init_dt_adjusted
-
 
         if self.save_artifacts:
             for metric in self.metrics_to_save:
@@ -230,7 +235,7 @@ class BaseStrategy(Strategy):
                 instrument_id=self.config.instrument_id,
                 order_side=OrderSide.BUY,
                 quantity=self.instrument.make_qty(allowed_qty),
-                contingency_type=ContingencyType.OCO,
+                contingency_type=ContingencyType.OUO,
                 entry_order_type=OrderType.LIMIT,
                 entry_price=self.instrument.make_price(limit_price),
                 time_in_force=TimeInForce.DAY,
@@ -242,8 +247,8 @@ class BaseStrategy(Strategy):
                 sl_order_type=OrderType.STOP_LIMIT,
                 sl_time_in_force=TimeInForce.DAY,
                 sl_trigger_price=sl_trigger_price,
-                # FIXME: hardcoded to 0.02 below stop_loss_price
-                sl_price=self.instrument.make_price(limit_price - stop_loss - 0.02)
+                # FIXME: hardcoded to 0.10 below stop_loss_price
+                sl_price=self.instrument.make_price(limit_price - stop_loss - 0.1),
             )
 
             if self.config.allow_trades:
@@ -251,6 +256,25 @@ class BaseStrategy(Strategy):
 
             self._last_buy_dt = self.clock.utc_now()
 
+    def sell_oco(self, quantity, stop_price, take_price, tag) -> None:
+        # Create oco order with stop-loss, and take-profit
+        order_list: OrderList = self.order_factory.oco_sell(
+            instrument_id=self.config.instrument_id,
+            quantity=self.instrument.make_qty(quantity),
+            contingency_type=ContingencyType.OUO,  # One updates the other
+            tp_tags=[f"{tag}t"],
+            sl_tags=[f"{tag}s"],
+            tp_price=self.instrument.make_price(take_price),
+            tp_time_in_force=TimeInForce.DAY,
+            sl_order_type=OrderType.STOP_LIMIT,
+            sl_time_in_force=TimeInForce.DAY,
+            sl_trigger_price=self.instrument.make_price(stop_price),
+            # FIXME: hardcoded to 0.10 below stop_loss_price
+            sl_price=self.instrument.make_price(stop_price - 0.1),
+        )
+
+        if self.config.allow_trades:
+            self.submit_order_list(order_list)
 
     def sell(self, quantity, limit_price, tag, cancel_after_secs=None) -> None:
         allowed_qty = min(quantity, self._max_sell_qty_allowed())
@@ -264,15 +288,6 @@ class BaseStrategy(Strategy):
         pass
 
     def on_order_filled(self, order) -> None:
-        if order.is_buy:
-            new_stop_price = order.last_px - self.config.stop_loss
-            if self.stop_price is not None:
-                if new_stop_price > self.stop_price:
-                    self.log.info(f"Changing stop price from {self.stop_price} to {new_stop_price}")
-                    self.stop_price = new_stop_price
-            else:
-                self.log.info(f"Setting stop price to {new_stop_price}")
-                self.stop_price = new_stop_price
         self._on_order_filled(order)
 
         # Clean up order modify dict to reduce memory usage
