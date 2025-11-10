@@ -21,6 +21,7 @@ import json
 from typing import TYPE_CHECKING
 
 import pandas as pd
+from nautilus_trader.model.orders import StopLimitOrder
 
 from custom.utils import run_artifacts_subdir
 from nautilus_trader.adapters.alpaca.http import AlpacaHttpClient
@@ -35,7 +36,7 @@ from nautilus_trader.model.objects import Price, Quantity
 from nautilus_trader.model.identifiers import TradeId
 
 from nautilus_trader.live.config import LiveExecClientConfig
-from nautilus_trader.model.enums import LiquiditySide
+from nautilus_trader.model.enums import LiquiditySide, OrderSide
 from nautilus_trader.common.providers import InstrumentProvider
 from nautilus_trader.execution.reports import FillReport
 from nautilus_trader.execution.reports import OrderStatusReport
@@ -51,7 +52,9 @@ from nautilus_trader.model.identifiers import ClientOrderId
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.identifiers import Venue
 from nautilus_trader.model.identifiers import VenueOrderId
+from nautilus_trader.model.orders.limit import LimitOrder
 from nautilus_trader.model.objects import Money, AccountBalance, MarginBalance, Currency
+
 
 if TYPE_CHECKING:
     import asyncio
@@ -431,6 +434,116 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
     # -- COMMAND HANDLERS ---------------------------------------------------------------------
 
+    async def _submit_order_list(self, command: SubmitOrder) -> None:
+        # Bracket order docs: https://docs.alpaca.markets/docs/orders-at-alpaca
+        orders = command.order_list.orders
+        if len(orders) == 2:
+            order_type = "oco"
+            buy_order = None
+            stop_order, take_order = orders
+        elif len(orders) == 3:
+            order_type = "bracket"
+            buy_order, stop_order, take_order = orders
+            assert isinstance(buy_order, LimitOrder)
+            assert buy_order.side == OrderSide.BUY
+        else:
+            raise Exception(f"Invalid number of orders: {len(orders)}")
+
+        assert isinstance(stop_order, StopLimitOrder)
+        assert isinstance(take_order, LimitOrder)
+        assert stop_order.side == OrderSide.SELL
+        assert take_order.side == OrderSide.SELL
+
+        strategy_id = take_order.strategy_id
+        instrument_id = take_order.instrument_id
+        symbol = instrument_id.symbol.value.split(".")[0]
+
+        order_request = {
+            "order_class": order_type,
+            "type": "limit",
+            "symbol": symbol,
+            "time_in_force": "day",
+            "take_profit": {
+                "limit_price": str(take_order.price),
+            },
+            "stop_loss": {
+                "stop_price": str(stop_order.trigger_price),
+                # "limit_price": str(stop_order.price) # TODO: Add this if want limit order, otherwise it'll be market
+            },
+        }
+        if order_type == "bracket":
+            order_request = {
+                **order_request,
+                "side": "buy",
+                "qty": str(buy_order.quantity),
+                "limit_price": str(buy_order.price),
+            }
+        elif order_type == "oco":
+            order_request = {
+                **order_request,
+                "side": "sell",
+                "qty": str(take_order.quantity),
+            }
+        else:
+            raise Exception(f"Invalid order type: {order_type}")
+
+        # Generate order submitted events
+        submitted_time = self._clock.timestamp_ns()
+        for order in orders:
+            self.generate_order_submitted(
+                strategy_id=strategy_id,
+                instrument_id=instrument_id,
+                client_order_id=order.client_order_id,
+                ts_event=submitted_time,
+            )
+
+        order_response = await self._http_client.submit_order(order_request)
+        accepted_time = self._clock.timestamp_ns()
+
+        if order_type == "bracket":
+            alpaca_take_order = None
+            alpaca_stop_order = None
+            for leg in order_response["legs"]:
+                if leg["type"] == "limit":
+                    alpaca_take_order = leg
+                elif leg["type"] == "stop":
+                    alpaca_stop_order = leg
+                else:
+                    raise Exception(f"Unknown leg type: {leg['type']}. Leg {leg}")
+
+            if alpaca_stop_order is None or alpaca_take_order is None:
+                raise Exception(f"Stop order or take order are not present. order response: {order_response}")
+            # Order accepted for BUY order
+            self.generate_order_accepted(
+                strategy_id=strategy_id,
+                instrument_id=instrument_id,
+                client_order_id=buy_order.client_order_id,
+                venue_order_id=VenueOrderId(order_response["id"]),
+                ts_event=accepted_time,
+            )
+
+        elif order_type == "oco":
+            alpaca_take_order = order_response
+            alpaca_stop_order = order_response["legs"][0]
+
+        # Order accepted for TAKE order
+        self.generate_order_accepted(
+            strategy_id=strategy_id,
+            instrument_id=instrument_id,
+            client_order_id=take_order.client_order_id,
+            venue_order_id=VenueOrderId(alpaca_take_order["id"]),
+            ts_event=accepted_time,
+        )
+
+        # Order accepted for STOP order
+        self.generate_order_accepted(
+            strategy_id=strategy_id,
+            instrument_id=instrument_id,
+            client_order_id=stop_order.client_order_id,
+            venue_order_id=VenueOrderId(alpaca_stop_order["id"]),
+            ts_event=accepted_time,
+        )
+
     async def _submit_order(self, command: SubmitOrder) -> None:
         """
         Submit an order to Alpaca.
@@ -778,7 +891,9 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
             elif event in ["fill", "partial_fill"]:
                 if order_data["asset_class"] != "us_equity":
-                    raise NotImplementedError(f"fill event for asset_class {order_data['asset_class']} not yet implemented")
+                    raise NotImplementedError(
+                        f"fill event for asset_class {order_data['asset_class']} not yet implemented"
+                    )
 
                 filled_qty = int(order_data.get("filled_qty"))
                 filled_avg_price = float(order_data.get("filled_avg_price"))
@@ -846,7 +961,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
                     venue_order_id_modified=True,
                 )
 
-            elif event in ["pending_new", "accepted"]:
+            elif event in ["pending_new", "accepted", "held"]:
                 self._log.debug(f"Unhandled trade update event: {event}")
             else:
                 self._log.warning(f"Unrecognized trade update event: {event}")
