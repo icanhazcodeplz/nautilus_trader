@@ -204,19 +204,36 @@ if __name__ == "__main__":
     9/19 - AGMH
     """
 
-    symbol = "zooz"
-    start_dt = pd.Timestamp("2025-09-19", tz="America/New_York")
-    end_dt = start_dt + pd.Timedelta(days=1)
+    symbol = "tsla"
+    for start_dt in [
+        pd.Timestamp("2025-10-20", tz="America/New_York"),
+        pd.Timestamp("2025-10-21", tz="America/New_York"),
+        pd.Timestamp("2025-10-22", tz="America/New_York"),
+        pd.Timestamp("2025-10-23", tz="America/New_York"),
+        pd.Timestamp("2025-10-24", tz="America/New_York"),
+        pd.Timestamp("2025-10-27", tz="America/New_York"),
+        pd.Timestamp("2025-10-28", tz="America/New_York"),
+        pd.Timestamp("2025-10-29", tz="America/New_York"),
+        pd.Timestamp("2025-10-30", tz="America/New_York"),
+        pd.Timestamp("2025-10-31", tz="America/New_York"),
+        pd.Timestamp("2025-11-03", tz="America/New_York"),
+        pd.Timestamp("2025-11-04", tz="America/New_York"),
+        pd.Timestamp("2025-11-05", tz="America/New_York"),
+        pd.Timestamp("2025-11-06", tz="America/New_York"),
+        pd.Timestamp("2025-11-07", tz="America/New_York"),
+    ]:
 
-    # https://databento.com/docs/schemas-and-data-formats?historical=python&live=python&reference=python
-    # schema = "trades"
-    # schema = "tbbo"
-    # schema = "mbo"
-    # schema = "mbp-1"
+        end_dt = start_dt + pd.Timedelta(days=1)
 
-    start_time = time.time()
-    DatabentoClient.prepare_data(symbol, start_dt, end_dt)
-    print(f"{time.time() - start_time:.2f} seconds")
+        # https://databento.com/docs/schemas-and-data-formats?historical=python&live=python&reference=python
+        # schema = "trades"
+        # schema = "tbbo"
+        # schema = "mbo"
+        # schema = "mbp-1"
+
+        start_time = time.time()
+        DatabentoClient.prepare_data(symbol, start_dt, end_dt)
+        print(f"{time.time() - start_time:.2f} seconds")
 
 # Available schemas for Level 2 data:
 # - 'mbo': Market By Order (full order book with individual orders)

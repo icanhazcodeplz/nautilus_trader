@@ -43,12 +43,15 @@ from nautilus_trader.model.identifiers import Venue
 from nautilus_trader.model.objects import Money
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
 
-measured_latency_model = LatencyModel(
+latency_model = LatencyModel(
     base_latency_nanos=30 * 1e6,
     insert_latency_nanos=34 * 1e6,
     update_latency_nanos=25 * 1e6,
     cancel_latency_nanos=25 * 1e6,
 )
+
+
+# latency_model=LatencyModel()
 
 
 def run_single_backtest(
@@ -85,8 +88,7 @@ def run_single_backtest(
         fill_model=LimitFillModel(prob_fill_on_limit=0.8, random_seed=random_seed),
         reject_stop_orders=False,
         # trade_execution=True,
-        # latency_model=LatencyModel(),
-        latency_model=measured_latency_model,
+        latency_model=latency_model,
     )
 
     dataset_params = CATALOG_OPTIONS[dataset_name.lower()]
@@ -225,6 +227,26 @@ if __name__ == "__main__":
             t = orders.copy()
             t["ts_init"] = pd.to_datetime(orders["ts_init"], unit="ns")
             t["ts_last"] = pd.to_datetime(orders["ts_last"], unit="ns")
+
+            # TODO: SLOPPY! Move somewhere and clean up?
+            orders["order_num"] = orders["tags"].apply(lambda t: t[0])
+
+            orders["position_change"] = orders["filled_qty"].astype(int)
+            orders.loc[orders["side"] == "SELL", "position_change"] = -orders.loc[orders["side"] == "SELL", "position_change"]
+            orders["position_cumsum"] = orders["position_change"].cumsum()
+
+            def pnl(group):
+                group["trade_value"] = group["price"] * group["filled_qty"]
+                group_buy_value = group[group["side"] == "BUY"]["trade_value"].sum()
+                group_sell_value = group[group["side"] == "SELL"]["trade_value"].sum()
+                return group_sell_value - group_buy_value
+
+            orders["price"] = orders["price"].astype(float)
+            orders["filled_qty"] = orders["filled_qty"].astype(int)
+            pnl_for_each_buy = orders.groupby("order_num")[["side", "filled_qty", "price"]].apply(pnl)
+            wins = len(pnl_for_each_buy[pnl_for_each_buy > 0])
+            losses = len(pnl_for_each_buy[pnl_for_each_buy < 0])
+            print(f"\n{len(pnl_for_each_buy)} buys. W/L {wins}|{losses} = {round(wins / (wins + losses), 3)}")
 
             trades, sell_legs = orders_to_trades(orders_report)
         CreateMarkers().create_and_save_markers(trades, sell_legs)

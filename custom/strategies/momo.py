@@ -1,11 +1,13 @@
 from collections import deque
 from dataclasses import dataclass
+import pandas as pd
 
 from custom.nt_extensions.indicators import RollingVWAP
 from custom.strategies.base import BaseStrategy, BaseStrategyConfig
 from nautilus_trader.indicators import VolumeWeightedAveragePrice
 from nautilus_trader.model.data import Bar
 from nautilus_trader.model.data import TradeTick
+from nautilus_trader.model.events import OrderFilled
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.enums import OrderSide, OrderStatus
 
@@ -32,6 +34,7 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     variance_window_ratio: float
     upper_lower_scaler: float
 
+    trailing_buy_order: bool = False
     use_bracket_orders: bool = False
     use_oco_sell_orders: bool = False
     simple_take: bool = False
@@ -47,12 +50,20 @@ def initialize_deque_if_needed(dq: deque, value):
     return dq
 
 
+def is_market_open(now_utc: pd.Timestamp) -> bool:
+    now_est = now_utc.tz_convert("US/Eastern")
+    market_open = now_est.replace(hour=9, minute=30, second=0, microsecond=0)
+    market_close = now_est.replace(hour=16, minute=0, second=0, microsecond=0)
+    return market_open <= now_est < market_close
+
+
 class MomoStrategy(BaseStrategy):
     def __init__(self, config: MomoStrategyConfig) -> None:
         super().__init__(config)
         if sum([self.config.simple_take, self.config.use_bracket_orders, self.config.use_oco_sell_orders]) > 1:
             raise ValueError("Cannot use more than one of simple_take, use_bracket_orders, use_oco_sell_orders")
 
+        self.market_open_only = self.config.use_bracket_orders or self.config.use_oco_sell_orders
         self.vwap = RollingVWAP(
             rolling_window=self.config.vwap_window,
             variance_window_ratio=self.config.variance_window_ratio,
@@ -65,47 +76,65 @@ class MomoStrategy(BaseStrategy):
             Metric(obj=self.vwap_day, name="day_vwap", attrs=["value"]),
         ]
 
-        self.size_dq = deque(maxlen=10)
-        self.price_dq = deque(maxlen=10)
+        self.price_dq = deque(maxlen=2)
         self.take_price = None
 
         self.metrics = []
 
         self.last_take_ts = None
-        self.last_buy_ts = None
 
     def _on_trade_tick(self, tick: TradeTick) -> None:
         # self.log.info(f"Trade tick: {tick}")
         # NOTE: Need to be subscribed to order book deltas to get best bid/ask prices
         # ob = self.cache.order_book(self.config.instrument_id)
         # best_bid = ob.best_bid_price()
-        # best_ask = ob.best_ask_price()
+        if self.market_open_only and not is_market_open(self.clock.utc_now()):
+            return
+
         initialize_deque_if_needed(self.price_dq, tick.price)
-        initialize_deque_if_needed(self.size_dq, tick.size)
         if self.last_take_ts is None:
             self.last_take_ts = self.clock.utc_now()
-            self.last_buy_ts = self.clock.utc_now() - pd.Timedelta(minutes=10)
 
         price_1ago = self.price_dq[-1]
         price = tick.price
 
         self.price_dq.append(tick.price)
-        self.size_dq.append(tick.size)
         position_qty = self.position_qty
+
         # BUY LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        if self.config.trailing_buy_order:
+            buy_orders = self.submitted_or_open_orders(OrderSide.BUY)
+            for order in buy_orders:
+                vwap_lower_as_price = self.instrument.make_price(self.vwap.lower)
+                if order.price != vwap_lower_as_price:
+                    self.modify_order(order, quantity=order.quantity, price=vwap_lower_as_price)
+                if order.filled_qty > 0:
+                    earliest_fill_time_ns = min(up.ts_event for up in order.events if isinstance(up, OrderFilled))
+                    ns_since_earliest_fill = self.clock.timestamp_ns() - earliest_fill_time_ns
+                    partial_fill_time_threshold = 0.5
+                    if (ns_since_earliest_fill / 1e9) > partial_fill_time_threshold:
+                        self.log.warning(
+                            f"Canceling order {order.client_order_id}, tag {order.tags[0]} because first fill occurred more than {partial_fill_time_threshold} secs ago"
+                        )
+                        self.cancel_order(order)
+
+            if len(buy_orders) == 0 and (self.clock.utc_now() - self.last_buy_dt).total_seconds() > 1:
+                # FIXME: Clunky to add buy orders count tag here. Should be handled in buy()
+                self.buy(
+                    self.config.trade_size, self.vwap.lower, cancel_after_secs=None, tag=f"{self.buy_orders_count}"
+                )
         if (
             price < self.vwap.lower and price_1ago > self.vwap.lower
             # and (price > price_1ago)
             # and (price > self.vwap_day.value)
         ):
+            self.log_buy_signal(tick)
             if (
                 position_qty < self.max_position_allowed
                 # and tick.size > 1
                 # and (self.clock.utc_now() - self.last_buy_ts).total_seconds() > random.randint(1, 20)
-                and (self.clock.utc_now() - self.last_buy_ts).total_seconds() > 1
+                and (self.clock.utc_now() - self.last_buy_dt).total_seconds() > 1
             ):
-                self.log_buy_signal(tick)
-                self.log.info(f"Buying at {price}")
                 if self.config.use_bracket_orders:
                     self.buy_bracket(
                         self.config.trade_size,
@@ -114,9 +143,8 @@ class MomoStrategy(BaseStrategy):
                         self.config.take_profit,
                         tag=f"{self._buy_signals_count}",
                     )
-                else:
-                    self.buy(self.config.trade_size, price, cancel_after_secs=30, tag=f"{self._buy_signals_count}")
-                self.last_buy_ts = self.clock.utc_now()
+                elif not self.config.trailing_buy_order:
+                    self.buy(self.config.trade_size, price, cancel_after_secs=None, tag=f"{self._buy_signals_count}")
 
         if not self.config.use_bracket_orders and not self.config.use_oco_sell_orders:
             # TAKE LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -138,13 +166,12 @@ class MomoStrategy(BaseStrategy):
                     self.last_take_ts = self.clock.utc_now()
 
         open_buys = self.submitted_or_open_orders(side=OrderSide.BUY)
-        if len(open_buys) > 0 and price > self.vwap.value and tick.size > 1:
+        if not self.config.trailing_buy_order and len(open_buys) > 0 and price > self.vwap.value and tick.size > 1:
             for order in open_buys:
-                if order.status != OrderStatus.PENDING_CANCEL:
-                    self.log.info(
-                        f"Canceling order {order.client_order_id}, tag {order.tags[0]} because current price {price} is higher than vwap {self.vwap.value}"
-                    )
-                    self.cancel_order(order)
+                self.log.info(
+                    f"Canceling order {order.client_order_id}, tags {order.tags} because current price {price} is higher than vwap {self.vwap.value}"
+                )
+                self.cancel_order(order)
 
     def _on_order_filled(self, order_filled) -> None:
         if order_filled.is_buy:

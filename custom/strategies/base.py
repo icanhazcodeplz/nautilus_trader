@@ -16,12 +16,12 @@ from nautilus_trader.model.data import Bar
 from nautilus_trader.model.data import OrderBookDeltas
 from nautilus_trader.model.data import QuoteTick
 from nautilus_trader.model.data import TradeTick
-from nautilus_trader.model.enums import OrderSide, ContingencyType
+from nautilus_trader.model.enums import OrderSide, ContingencyType, OrderStatus
 from nautilus_trader.model.enums import OrderType
 from nautilus_trader.model.enums import TimeInForce
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.instruments import Instrument
-from nautilus_trader.model.orders import LimitOrder
+from nautilus_trader.model.orders import LimitOrder, Order
 from nautilus_trader.model.orders.list import OrderList
 from nautilus_trader.trading.strategy import Strategy
 
@@ -44,15 +44,18 @@ class BaseStrategy(Strategy):
         self.metrics_to_save = []
 
         self.stop_price = None
-        self._last_buy_dt: Timestamp = pd.Timestamp("1990", tz="UTC")
+        self.last_buy_dt: Timestamp = pd.Timestamp("1990", tz="UTC")
         self._tick_data_dicts = {}
         self._tick_init_dt_adjusted = 0
 
         self._buy_signals_count = 0
+        self.buy_orders_count = 0
         self.buy_sell_signals = []
 
         # Used to track order modifications to avoid sending duplicate modify orders when the cache is slow
         self._last_order_modify_dict = {}
+        self._already_cancelled_orders = set()
+        self._uncached_orders = set()
 
     @property
     def position_qty(self):
@@ -71,16 +74,31 @@ class BaseStrategy(Strategy):
             raise RuntimeError("Multiple positions open")
 
     def submitted_or_open_orders(self, side=OrderSide.NO_ORDER_SIDE):
-        return set(self.cache.orders_inflight(side=side) + self.cache.orders_open(side=side))
+        inflight_or_open = set(self.cache.orders_inflight(side=side) + self.cache.orders_open(side=side))
+        removed_pending_cancel = [order for order in inflight_or_open if order.status != OrderStatus.PENDING_CANCEL]
+        return removed_pending_cancel
 
-    def _modify_order(self, order, quantity, price):
+    def modify_order(self, order, quantity, price):
         last_mod = self._last_order_modify_dict.get(order.client_order_id, None)
         mod_vals = (quantity, price)
         if last_mod is not None and last_mod == mod_vals:
-            self.log.debug(f"Not modifying order {order.client_order_id} because modify request has already been sent.")
+            self.log.debug(
+                f"Not modifying order {order.client_order_id}. Request has already been sent with values {mod_vals}."
+            )
             return
         self._last_order_modify_dict[order.client_order_id] = mod_vals
-        self.modify_order(order, quantity=quantity, price=price)
+        super().modify_order(
+            order, quantity=self.instrument.make_qty(quantity), price=self.instrument.make_price(price)
+        )
+
+    def cancel_order(self, order, client_id=None, params=None):
+        if order in self._already_cancelled_orders:
+            self.log.debug(
+                f"Not cancelling order {order.client_order_id} because cancellation request has already been sent."
+            )
+            return
+        self._already_cancelled_orders.add(order)
+        super().cancel_order(order=order, client_id=client_id, params=params)
 
     def sell_position_at_price(self, new_limit_price):
         remaining_qty_to_sell = self.position_qty
@@ -89,7 +107,7 @@ class BaseStrategy(Strategy):
             order_qty = order.quantity
             remaining_qty_to_sell -= order_qty
             if order.price != new_limit_price:
-                self._modify_order(order, quantity=order_qty, price=new_limit_price)
+                self.modify_order(order, quantity=order_qty, price=new_limit_price)
         if remaining_qty_to_sell > 0:
             self.sell(quantity=remaining_qty_to_sell, limit_price=new_limit_price, tag="s")
 
@@ -141,6 +159,24 @@ class BaseStrategy(Strategy):
         self.buy_sell_signals.append(buy_signal_dict)
         self.log.info(f"Buy signal {self._buy_signals_count}: {buy_signal_dict}")
 
+    def _update_buy_signals(self, tick):
+        # Track buy-sell signals
+        for signal in self.buy_sell_signals:
+            if signal["win"] is None or signal["win_delay"] is None:
+                if signal["side"] == "buy":
+                    win = tick.price >= (signal["price"] + self.config.stop_loss)
+                    loss = tick.price <= (signal["price"] - self.config.stop_loss)
+                    if signal["win"] is None and (win or loss):
+                        signal["win"] = win
+                        signal["win_time"] = self._tick_init_dt_adjusted
+                    if (
+                        signal["win_delay"] is None
+                        and (win or loss)
+                        and ((self._tick_init_dt_adjusted - signal["time"]) > 80 * 1e6)
+                    ):
+                        signal["win_delay"] = win
+                        signal["win_delay_time"] = self._tick_init_dt_adjusted
+
     def on_trade_tick(self, tick: TradeTick) -> None:
         if self._tick_init_dt_adjusted >= tick.ts_init:
             self._tick_init_dt_adjusted += 1
@@ -165,27 +201,36 @@ class BaseStrategy(Strategy):
         if self.config.record_op_speed:
             tick_data["ts_now_after"] = pd.Timestamp.utcnow()
 
-        # Track buy-sell signals
-        for signal in self.buy_sell_signals:
-            if signal["win"] is None or signal["win_delay"] is None:
-                if signal["side"] == "buy":
-                    win = tick.price >= (signal["price"] + self.config.stop_loss)
-                    loss = tick.price <= (signal["price"] - self.config.stop_loss)
-                    if signal["win"] is None and (win or loss):
-                        signal["win"] = win
-                        signal["win_time"] = self._tick_init_dt_adjusted
-                    if (
-                        signal["win_delay"] is None
-                        and (win or loss)
-                        and ((self._tick_init_dt_adjusted - signal["time"]) > 60 * 1e6)
-                    ):
-                        signal["win_delay"] = win
-                        signal["win_delay_time"] = self._tick_init_dt_adjusted
+        self._update_buy_signals(tick)
 
         if self.save_artifacts:
             for metric in self.metrics_to_save:
                 tick_data = {**tick_data, **metric.get_vals()}
             self._tick_data_dicts[self._tick_init_dt_adjusted] = tick_data
+
+    def _submit_orders_if_allowed(self, order_or_order_list) -> None:
+        buy_included = False
+        if self.config.allow_trades:
+            # For OrderList type, submit all at once, but parse through each to check for a buy order (from bracket)
+            # and to add to uncached
+            if isinstance(order_or_order_list, OrderList):
+                self.submit_order_list(order_or_order_list)
+                for order in order_or_order_list.orders:
+                    if order.side == OrderSide.BUY:
+                        buy_included = True
+                    # self._uncached_orders.add(order)
+
+            # If single item, submit and add to uncached
+            elif isinstance(order_or_order_list, Order):
+                self.submit_order(order_or_order_list)
+                if order_or_order_list.side == OrderSide.BUY:
+                    buy_included = True
+                # self._uncached_orders.add(order_or_order_list)
+            else:
+                raise ValueError(f"Unexpected order type: {type(order_or_order_list)}")
+        if buy_included:
+            self.buy_orders_count += 1
+            self.last_buy_dt = self.clock.utc_now()
 
     def _submit_limit_order(self, side: OrderSide, quantity: int, limit_price: float, tag: str, cancel_after_secs=None):
         tags = [tag]
@@ -201,23 +246,22 @@ class BaseStrategy(Strategy):
             expire_time=None,
             tags=tags,
         )
-        if self.config.allow_trades:
-            self.submit_order(order, position_id=None, client_id=None, params=None)
+
+        self._submit_orders_if_allowed(order)
 
     def buy(self, quantity, limit_price, tag, cancel_after_secs=None) -> None:
         allowed_qty = min(quantity, self._max_buy_qty_allowed())
         if allowed_qty != quantity:
-            self.log.info(
+            self.log.debug(
                 f"Buy quantity reduced from {quantity} to {allowed_qty} to avoid exceeding max position of {self.max_position_allowed}."
             )
         if allowed_qty > 0:
             self._submit_limit_order(OrderSide.BUY, allowed_qty, limit_price, tag, cancel_after_secs)
-            self._last_buy_dt = self.clock.utc_now()
 
     def buy_bracket(self, quantity, limit_price, stop_loss, take_profit, tag, cancel_after_secs=None) -> None:
         allowed_qty = min(quantity, self._max_buy_qty_allowed())
         if allowed_qty != quantity:
-            self.log.info(
+            self.log.debug(
                 f"Buy quantity reduced from {quantity} to {allowed_qty} to avoid exceeding max position of {self.max_position_allowed}."
             )
         if allowed_qty > 0:
@@ -240,8 +284,8 @@ class BaseStrategy(Strategy):
                 entry_price=self.instrument.make_price(limit_price),
                 time_in_force=TimeInForce.DAY,
                 entry_tags=entry_tags,
-                tp_tags=[f"{tag}t"],
-                sl_tags=[f"{tag}s"],
+                tp_tags=[tag, "t"],
+                sl_tags=[tag, "s"],
                 tp_price=tp_price,
                 tp_time_in_force=TimeInForce.DAY,
                 sl_order_type=OrderType.STOP_LIMIT,
@@ -250,11 +294,7 @@ class BaseStrategy(Strategy):
                 # FIXME: hardcoded to 0.10 below stop_loss_price
                 sl_price=self.instrument.make_price(limit_price - stop_loss - 0.1),
             )
-
-            if self.config.allow_trades:
-                self.submit_order_list(order_list)
-
-            self._last_buy_dt = self.clock.utc_now()
+            self._submit_orders_if_allowed(order_list)
 
     def sell_oco(self, quantity, stop_price, take_price, tag) -> None:
         # Create oco order with stop-loss, and take-profit
@@ -262,8 +302,8 @@ class BaseStrategy(Strategy):
             instrument_id=self.config.instrument_id,
             quantity=self.instrument.make_qty(quantity),
             contingency_type=ContingencyType.OUO,  # One updates the other
-            tp_tags=[f"{tag}t"],
-            sl_tags=[f"{tag}s"],
+            tp_tags=[tag, "t"],
+            sl_tags=[tag, "s"],
             tp_price=self.instrument.make_price(take_price),
             tp_time_in_force=TimeInForce.DAY,
             sl_order_type=OrderType.STOP_LIMIT,
@@ -273,8 +313,7 @@ class BaseStrategy(Strategy):
             sl_price=self.instrument.make_price(stop_price - 0.1),
         )
 
-        if self.config.allow_trades:
-            self.submit_order_list(order_list)
+        self._submit_orders_if_allowed(order_list)
 
     def sell(self, quantity, limit_price, tag, cancel_after_secs=None) -> None:
         allowed_qty = min(quantity, self._max_sell_qty_allowed())
@@ -295,12 +334,13 @@ class BaseStrategy(Strategy):
 
     def _cancel_orders_past_timeout(self, event: TimeEvent):
         # Cancel open orders if they have reached their expiration time
-        open_orders = self.submitted_or_open_orders()
-        for order in open_orders:
-            if len(order.tags) > 1:
-                expire_time = order.tags[1]  # FIXME: hardcoded to look at second item
-                if self.clock.utc_now() > expire_time:
-                    self.cancel_order(order)
+        pass
+        # open_orders = self.submitted_or_open_orders()
+        # for order in open_orders:
+        #     if len(order.tags) > 1:
+        #         expire_time = order.tags[1]  # FIXME: hardcoded to look at second item
+        #         if self.clock.utc_now() > expire_time:
+        #             self.cancel_order(order)
 
     def on_start(self) -> None:
         self.clock.set_timer(
@@ -349,37 +389,13 @@ class BaseStrategy(Strategy):
     def _on_trade_tick(self, tick: TradeTick) -> None:
         pass
 
-    def on_instrument(self, instrument: Instrument) -> None:
-        pass
-
-    def on_order_book_deltas(self, deltas: OrderBookDeltas) -> None:
-        pass
-
-    def on_order_book(self, order_book: OrderBook) -> None:
-        pass
-
-    def on_quote_tick(self, tick: QuoteTick) -> None:
-        pass
-
-    def on_bar(self, bar: Bar) -> None:
-        pass
-
     def on_order_event(self, order) -> None:
-        pass
-
-    def on_data(self, data: Data) -> None:
-        pass
-
-    def on_event(self, event: Event) -> None:
-        pass
-
-    def on_reset(self) -> None:
-        pass
-
-    def on_save(self) -> dict[str, bytes]:
-        return {}
-
-    def on_load(self, state: dict[str, bytes]) -> None:
+        # Check if this order was submitted but not yet cached
+        # if self.cache.order(order.client_order_id) is None:
+        #     # self.cache.add_order(order)
+        #     self.log.info(f"Added uncached order to cache: {order.client_order_id}")
+        #     order = self.cache.order(order.client_order_id)
+        #     order
         pass
 
     def on_dispose(self) -> None:
@@ -407,6 +423,36 @@ class BaseStrategy(Strategy):
             with open(run_artifacts_subdir("orders_events.json"), "w") as f:
                 as_json = json.dumps(all_events)
                 f.write(as_json)
+
+    def on_instrument(self, instrument: Instrument) -> None:
+        pass
+
+    def on_order_book_deltas(self, deltas: OrderBookDeltas) -> None:
+        pass
+
+    def on_order_book(self, order_book: OrderBook) -> None:
+        pass
+
+    def on_quote_tick(self, tick: QuoteTick) -> None:
+        pass
+
+    def on_bar(self, bar: Bar) -> None:
+        pass
+
+    def on_data(self, data: Data) -> None:
+        pass
+
+    def on_event(self, event: Event) -> None:
+        pass
+
+    def on_reset(self) -> None:
+        pass
+
+    def on_save(self) -> dict[str, bytes]:
+        return {}
+
+    def on_load(self, state: dict[str, bytes]) -> None:
+        pass
 
 
 """
