@@ -12,14 +12,28 @@ sys.path.append(os.getcwd())
 
 import optuna
 import logging
-from custom.backtest_runner import run_multiple_backtests
+from custom.backtest_runner import run_single_backtest
 from custom.statistics.trade_avg_scaled import TotalBought
 
 DATABASE_STR = "sqlite:///optuna.db"
 # mysql_optuna = "mysql://root@localhost/optuna"
 optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
 
-DATASET_NAMES = ["zooz"]
+DATASET_NAMES = [
+    "aapl1027",
+    "aapl1028",
+    "aapl1029",
+    "aapl1030",
+    "aapl1031",
+    "aapl1103",
+    "aapl1104",
+    "aapl1105",
+    "aapl1106",
+    "aapl1107",
+]
+OPTIMIZE_BUY_SIGNALS = False
+RANDOM_BUY = False
+MIN_BUYS_THRESHOLD = 10
 
 
 def linspace_int(low, high, step):
@@ -58,17 +72,20 @@ def optimize(trial):
     strategy_name = "momo"
 
     params = dict(
-        trade_size=100,
-        max_position_multiplier=3,
-        stop_loss=0.50,
-        take_profit=0.50,
-        take_ratio=0.5,
-        vwap_window=150,
-        vwap_buy_threshold=0.20,
-        vwap_sell_threshold=0.20,
-        time_vwap_window=200,
-        time_vwap_bin_ms=500,
-        trailing_stop=False,
+        trade_size=1,
+        max_position_multiplier=1,
+        stop_loss=0.10,
+        take_profit=None,
+        take_ratio=0.8,
+        vwap_window=200,
+        variance_window_ratio=1.5,
+        upper_lower_scaler=0.40,
+        trailing_buy_order=False,
+        use_bracket_orders=False,
+        use_oco_sell_orders=True,
+        simple_take=False,
+        allow_trades=not OPTIMIZE_BUY_SIGNALS,
+        random_buy=RANDOM_BUY,
         random_seed=None,
     )
     for param_name, space in trial.study.sampler._search_space.items():
@@ -81,6 +98,8 @@ def optimize(trial):
             params[param_name] = trial.suggest_float(param_name, low=min(space), high=max(space), step=0.01)
         elif param_type is bool:
             params[param_name] = trial.suggest_categorical(param_name, space)
+        elif param_type is str and param_name == "dataset":
+            dataset = trial.suggest_categorical(param_name, space)
         else:
             raise ValueError(f"Unknown param type {param_type}")
 
@@ -89,15 +108,29 @@ def optimize(trial):
         if previous_trail_value is not None:
             return previous_trail_value
 
-    performance_stats = run_multiple_backtests(DATASET_NAMES, strategy_name, params, log_level="ERROR")
+    performance_stats = run_single_backtest(
+        dataset, strategy_name, params, save_artifacts=False, return_engine=False, log_level="ERROR"
+    )
     try:
-        total_pnl = performance_stats["PnL (total)"].sum()
-        total_bought = performance_stats[TotalBought().name].sum()
-        value = total_pnl / total_bought * 100
-        return value
+        if OPTIMIZE_BUY_SIGNALS:
+            buy_signals = performance_stats["buy_signals"]
+            wins = performance_stats["buy_signal_wins"]
+            if performance_stats["buy_signals"] < MIN_BUYS_THRESHOLD and not RANDOM_BUY:
+                return -1.0
+            return round(wins / buy_signals, 3)
+        else:
+            buys = performance_stats["buys"]
+            wins = performance_stats["wins"]
+            if buys < MIN_BUYS_THRESHOLD and not RANDOM_BUY:
+                return -1.0
+            return round(wins / buys, 3)
+
+            # total_pnl = performance_stats["PnL (total)"].sum()
+            # total_bought = performance_stats[TotalBought().name].sum()
+            # value = total_pnl / total_bought * 100
+            # return value
     except:
-        # FIXME: Is this the best solution?
-        return 0.0
+        return -1.0
 
 
 def load_or_create_optuna_study(study_name, sampler):
@@ -118,26 +151,29 @@ def target(study_name, sampler, n_trials):
 
 
 if __name__ == "__main__":
-    study_name = "test"
-
     delete_existing = False
-    run_trials = True
+    run_trials = False or delete_existing
+    load_random_buy_study = True
 
-    search_space = dict(
-        random_seed=[4, 5, 6],
-        max_position_multiplier=linspace_int(low=2, high=3, step=1),
-        stop_loss=linspace_float(low=0.2, high=0.4, step=0.10),
-        take_profit=linspace_float(low=0.25, high=0.35, step=0.10),
-        take_ratio=linspace_float(low=0.5, high=1.0, step=0.50),
-        vwap_window=linspace_int(low=30, high=50, step=10),
-        vwap_buy_threshold=linspace_float(low=0.10, high=0.20, step=0.05),
-        vwap_sell_threshold=linspace_float(low=0.10, high=0.30, step=0.1),
-        time_vwap_window=linspace_int(low=100, high=300, step=100),
-        # trailing_stop=[True, False],
-    )
-    sampler = optuna.samplers.GridSampler(search_space=search_space)
+    if RANDOM_BUY:
+        study_name = "random"
+        search_space = dict(random_seed=[1, 2, 3, 4, 5, 6])
+    else:
+        study_name = "test"
+        search_space = dict(
+            random_seed=[5, 6],
+            # max_position_multiplier=linspace_int(low=1, high=1, step=1),
+            # stop_loss=linspace_float(low=0.18, high=0.28, step=0.03),
+            # take_profit=linspace_float(low=0.25, high=0.35, step=0.10),
+            # take_ratio=linspace_float(low=0.5, high=1.0, step=0.50),
+            vwap_window=linspace_int(low=150, high=250, step=50),
+            variance_window_ratio=linspace_float(low=1.5, high=2.5, step=0.5),
+            upper_lower_scaler=linspace_float(low=0.04, high=0.12, step=0.02),
+        )
+
+    sampler = optuna.samplers.GridSampler(search_space={**search_space, "dataset": DATASET_NAMES})
     total_trials = sampler._n_min_trials
-    print(f"Running {total_trials} trials")
+    print(f"Number Trials: {total_trials}\n")
 
     if delete_existing:
         try:
@@ -150,10 +186,9 @@ if __name__ == "__main__":
 
         # RUN SINGLE PROCESS
         # target(study_name, sampler, total_trials)
-        # RUN MULTIPROCESSING
-        n_processes = max(os.cpu_count() - 2, 2)
 
-        trials_per_process = 4
+        n_processes = 8
+        trials_per_process = 1
         trials_started = 0
         pm = ProcessManager()
         while trials_started < total_trials:
@@ -170,33 +205,65 @@ if __name__ == "__main__":
         print(f"TOTAL RUN TIME: {datetime.now() - start}")
 
     study = optuna.load_study(study_name=study_name, storage=DATABASE_STR)
-
     param_names = sampler._param_names
     rename_map = {f"params_{p}": p for p in param_names}
+    value_round = 1
+
+    if load_random_buy_study:
+        random_study = optuna.load_study(study_name="random", storage=DATABASE_STR)
+        df = random_study.trials_dataframe().round(3)
+        df = df.rename(columns=rename_map)
+        df = df[df["state"] == "COMPLETE"]
+        df = df[["value", "random_seed", "dataset"]]
+        df = df[~df.duplicated()]
+        random_buy_value_df = df.groupby("dataset").agg(["mean", "max"])["value"]
+        random_buy_value_df = (random_buy_value_df * 100).round(value_round)
+
     df = study.trials_dataframe().round(3)
     df = df[df["state"] == "COMPLETE"]
     df = df.rename(columns=rename_map)
     df = df[["value", *param_names]]
     df = df[~df.duplicated()]
-    if "random_seed" in df.columns:
-        param_names = [col for col in param_names if col != "random_seed"]
-        gb = df.groupby(param_names).mean().drop(columns="random_seed").round(3)
-        df = gb.reset_index()
+    df = df[df["value"] > 0]
+    df["value"] = (df["value"] * 100).round(value_round)
+    df_orig = df.copy()
+    for dataset in DATASET_NAMES:
+        if load_random_buy_study:
+            print(random_buy_value_df.loc[dataset].to_frame().T)
+        else:
+            print(dataset)
 
-    top_ratio = 0.25
-    top_count = int(len(df) * top_ratio)
-    tops_df = df.sort_values("value", ascending=False).head(top_count)
+        df = df_orig[df_orig["dataset"] == dataset]
+        if "random_seed" in df.columns:
+            param_names = [col for col in param_names if col != "random_seed"]
+            gb = df.groupby(param_names).mean().drop(columns="random_seed").round(3)
+            df = gb.reset_index()
 
-    max_ = {}
-    for col in param_names:
-        gp = df.groupby(col)["value"].mean().round(3)
-        max_[col] = _try_round2(gp.sort_values().index[-1])
+        top_ratio = 0.20
+        top_count = int(len(df) * top_ratio)
+        tops_df = df.sort_values("value", ascending=False).head(top_count)
+        print(
+            f"Top {top_ratio}: low={tops_df['value'].min()} avg={round(tops_df['value'].mean(), value_round)} max={tops_df['value'].max()}"
+        )
+        max_ = {}
+        for col in param_names:
+            if col == "dataset":
+                continue
+            gp = df.groupby(col)["value"].mean().round(value_round)
+            max_[col] = _try_round2(gp.sort_values().index[-1])
+            print(gp.to_frame().T)
+            print()
+
+        # print(f"\nBest set {max_}")
+        # print(f"\nMode of top {top_ratio}")
+        # print(tops_df.mode().to_dict(orient="records")[0])
+
+        # print("\nCorrelations")
+        # for col in param_names:
+        #     corr = df[col].corr(df["value"])
+        #     print(f"{col}: {corr:.3f}")
+
         print()
-        print(gp.to_string())
-
-    print(f"\nBest set {max_}")
-    print(f"\nMode of top {top_ratio}")
-    print(tops_df.mode().to_dict(orient="records")[0])
 
     """
     mysql.server start
