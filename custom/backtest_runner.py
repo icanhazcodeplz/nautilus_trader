@@ -54,6 +54,37 @@ latency_model = LatencyModel(
 # latency_model=LatencyModel()
 
 
+def _calculate_win_ratio(orders_report):
+    """Calculate win/loss ratio based on each buy order."""
+    orders = orders_report[
+        ["side", "quantity", "filled_qty", "price", "trigger_price", "avg_px", "tags", "ts_init", "ts_last"]
+    ].copy()
+
+    # Calculate win/loss ratio based on each buy order, instead of each trade.
+    orders["order_num"] = orders["tags"].apply(lambda t: t[0])
+
+    orders["position_change"] = orders["filled_qty"].astype(int)
+    orders.loc[orders["side"] == "SELL", "position_change"] = -orders.loc[orders["side"] == "SELL", "position_change"]
+    orders["position_cumsum"] = orders["position_change"].cumsum()
+
+    def pnl(group):
+        group["trade_value"] = group["price"] * group["filled_qty"]
+        group_buy_value = group[group["side"] == "BUY"]["trade_value"].sum()
+        group_sell_value = group[group["side"] == "SELL"]["trade_value"].sum()
+        return group_sell_value - group_buy_value
+
+    orders["price"] = orders["price"].astype(float)
+    orders["filled_qty"] = orders["filled_qty"].astype(int)
+    pnl_for_each_buy = orders.groupby("order_num")[["side", "filled_qty", "price"]].apply(pnl)
+    wins = len(pnl_for_each_buy[pnl_for_each_buy > 0])
+    losses = len(pnl_for_each_buy[pnl_for_each_buy < 0])
+    win_ratio = round(wins / (wins + losses), 3)
+
+    print(f"{len(pnl_for_each_buy)} buys. W/L {wins}|{losses} = {win_ratio}\n")
+
+    return wins, len(pnl_for_each_buy)
+
+
 def run_single_backtest(
     dataset_name, strategy_name, params, save_artifacts=False, return_engine=False, log_level="ERROR"
 ):
@@ -143,10 +174,16 @@ def run_single_backtest(
         signals_df["delay_duration_ms"] = (signals_df["win_delay_time"] - signals_df["time"]) / 1e6
         wins = len(signals_df[signals_df["win"]])
         long_wins = len(signals_df[signals_df["win"] & signals_df["win_delay"]])
-        print(f"\n BuySignals:  {num_buy_sells}   {wins}/{num_buy_sells - wins} = {round(wins / num_buy_sells, 2)}")
-        print(
-            f"LongWins__:  {num_buy_sells}   {long_wins}/{num_buy_sells - long_wins} = {round(long_wins / num_buy_sells, 2)}"
-        )
+        wins_ratio = round(wins / num_buy_sells, 2)
+        long_wins_ratio = round(long_wins / num_buy_sells, 2)
+        # print(f"\nBuySignals:  {num_buy_sells}   {wins}/{num_buy_sells - wins} = {wins_ratio}")
+        print(f"LongWins__:  {num_buy_sells}   {long_wins}/{num_buy_sells - long_wins} = {long_wins_ratio}")
+    else:
+        long_wins = 0
+    orders_report = engine.trader.generate_orders_report()
+    if not orders_report.empty:
+        orders_report = orders_report[orders_report["filled_qty"].astype(int) > 0]
+        wins, total_buys = _calculate_win_ratio(orders_report)
 
     if return_engine:
         return engine
@@ -154,6 +191,10 @@ def run_single_backtest(
         **engine.portfolio.analyzer.get_performance_stats_pnls(),
         **engine.portfolio.analyzer.get_performance_stats_returns(),
         **engine.portfolio.analyzer.get_performance_stats_general(),
+        "buy_signals": num_buy_sells,
+        "buy_signal_wins": long_wins,
+        "buys": total_buys,
+        "wins": wins,
     }
     return performance_stats
 
@@ -209,7 +250,6 @@ if __name__ == "__main__":
             BACKTEST_SYMBOL, strategy_name, params, save_artifacts=True, return_engine=True, log_level=log_level
         )
         order_fills_report = engine.trader.generate_order_fills_report()
-        orders_report = engine.trader.generate_orders_report()
         fills_report = engine.trader.generate_fills_report()
         positions_report = engine.trader.generate_positions_report()
 
@@ -220,35 +260,12 @@ if __name__ == "__main__":
                 ["peak_qty", "ts_opened", "ts_closed", "avg_px_open", "avg_px_close", "realized_pnl"]
             ]
 
+            orders_report = engine.trader.generate_orders_report()
             orders_report = orders_report[orders_report["filled_qty"].astype(int) > 0]
-            orders = orders_report[
-                ["side", "quantity", "filled_qty", "price", "trigger_price", "avg_px", "tags", "ts_init", "ts_last"]
-            ].copy()
-            t = orders.copy()
-            t["ts_init"] = pd.to_datetime(orders["ts_init"], unit="ns")
-            t["ts_last"] = pd.to_datetime(orders["ts_last"], unit="ns")
-
-            # TODO: SLOPPY! Move somewhere and clean up?
-            orders["order_num"] = orders["tags"].apply(lambda t: t[0])
-
-            orders["position_change"] = orders["filled_qty"].astype(int)
-            orders.loc[orders["side"] == "SELL", "position_change"] = -orders.loc[orders["side"] == "SELL", "position_change"]
-            orders["position_cumsum"] = orders["position_change"].cumsum()
-
-            def pnl(group):
-                group["trade_value"] = group["price"] * group["filled_qty"]
-                group_buy_value = group[group["side"] == "BUY"]["trade_value"].sum()
-                group_sell_value = group[group["side"] == "SELL"]["trade_value"].sum()
-                return group_sell_value - group_buy_value
-
-            orders["price"] = orders["price"].astype(float)
-            orders["filled_qty"] = orders["filled_qty"].astype(int)
-            pnl_for_each_buy = orders.groupby("order_num")[["side", "filled_qty", "price"]].apply(pnl)
-            wins = len(pnl_for_each_buy[pnl_for_each_buy > 0])
-            losses = len(pnl_for_each_buy[pnl_for_each_buy < 0])
-            print(f"\n{len(pnl_for_each_buy)} buys. W/L {wins}|{losses} = {round(wins / (wins + losses), 3)}")
+            win_ratio = _calculate_win_ratio(orders_report)
 
             trades, sell_legs = orders_to_trades(orders_report)
+
         CreateMarkers().create_and_save_markers(trades, sell_legs)
 
         print()

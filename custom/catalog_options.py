@@ -1,120 +1,44 @@
 CATALOG_OPTIONS = dict(
-    # papl=dict(
-    #     symbol="PAPL",
-    #     start = "2025-07-23T00:00:00Z",
-    #     end = "2025-07-24T00:00:00Z"
-    # ),
-    # mss=dict(
-    #     symbol="MSS",
-    #     start = "2025-09-29T00:00:00Z",
-    #     end = "2025-09-30T00:00:00Z"
-    # ),
     zooz=dict(
-        symbol="ZOOZ",
-        start="2025-09-19T00:00:00Z",
-        end="2025-09-20T00:00:00Z",
-        notes="Early move, back even by open",
+        symbol="ZOOZ", start="2025-09-19T00:00:00Z", end="2025-09-20T00:00:00Z", notes="Early move, back even by open"
     ),
-    zoozsm=dict(
-        symbol="ZOOZ",
-        start="2025-09-19T00:00:00Z",
-        end="2025-09-19T13:01:00Z",
-        notes="Small set for testing",
-    ),
-    agmh=dict(
-        symbol="AGMH",
-        start="2025-09-19T00:00:00Z",
-        end="2025-09-20T00:00:00Z",
-        notes="Up 3x. Huge volume",
-    ),
-    aapl14=dict(
-        symbol="AAPL",
-        start="2025-10-14T00:00:00Z",
-        end="2025-10-15T00:00:00Z",
-    ),
-    aapl15=dict(
-        symbol="AAPL",
-        start="2025-10-15T00:00:00Z",
-        end="2025-10-16T00:00:00Z",
-    ),
-    tsla1020=dict(
-        symbol="TSLA",
-        start="2025-10-20T00:00:00Z",
-        end="2025-10-21T00:00:00Z"
-    ),
-    tsla1021=dict(
-        symbol="TSLA",
-        start="2025-10-21T00:00:00Z",
-        end="2025-10-22T00:00:00Z"
-    ),
-    tsla1022=dict(
-        symbol="TSLA",
-        start="2025-10-22T00:00:00Z",
-        end="2025-10-23T00:00:00Z"
-    ),
-    tsla1023=dict(
-        symbol="TSLA",
-        start="2025-10-23T00:00:00Z",
-        end="2025-10-24T00:00:00Z"
-    ),
-    tsla1024=dict(
-        symbol="TSLA",
-        start="2025-10-24T00:00:00Z",
-        end="2025-10-25T00:00:00Z"
-    ),
-    tsla1027=dict(
-        symbol="TSLA",
-        start="2025-10-27T00:00:00Z",
-        end="2025-10-28T00:00:00Z"
-    ),
-    tsla1028=dict(
-        symbol="TSLA",
-        start="2025-10-28T00:00:00Z",
-        end="2025-10-29T00:00:00Z"
-    ),
-    tsla1029=dict(
-        symbol="TSLA",
-        start="2025-10-29T00:00:00Z",
-        end="2025-10-30T00:00:00Z"
-    ),
-    tsla1030=dict(
-        symbol="TSLA",
-        start="2025-10-30T00:00:00Z",
-        end="2025-10-31T00:00:00Z"
-    ),
-    tsla1031=dict(
-        symbol="TSLA",
-        start="2025-10-31T00:00:00Z",
-        end="2025-11-01T00:00:00Z"
-    ),
-    tsla1103=dict(
-        symbol="TSLA",
-        start="2025-11-03T00:00:00Z",
-        end="2025-11-04T00:00:00Z"
-    ),
-    tsla1104=dict(
-        symbol="TSLA",
-        start="2025-11-04T00:00:00Z",
-        end="2025-11-05T00:00:00Z"
-    ),
-    tsla1105=dict(
-        symbol="TSLA",
-        start="2025-11-05T00:00:00Z",
-        end="2025-11-06T00:00:00Z"
-    ),
-    tsla1106=dict(
-        symbol="TSLA",
-        start="2025-11-06T00:00:00Z",
-        end="2025-11-07T00:00:00Z"
-    ),
-    tsla1107=dict(
-        symbol="TSLA",
-        start="2025-11-07T00:00:00Z",
-        end="2025-11-08T00:00:00Z"
-    ),
-    tsla1110=dict(
-        symbol="TSLA",
-        start="2025-11-10T00:00:00Z",
-        end="2025-11-11T00:00:00Z",
-    ),
+    zoozsm=dict(symbol="ZOOZ", start="2025-09-19T00:00:00Z", end="2025-09-19T13:01:00Z", notes="Small set"),
+    agmh=dict(symbol="AGMH", start="2025-09-19T00:00:00Z", end="2025-09-20T00:00:00Z", notes="Up 3x. Huge volume"),
+    nva=dict(symbol="NVA", start="2025-10-14T00:00:00Z", end="2025-10-15T00:00:00Z", notes="$50 stock"),
+    gwav=dict(symbol="GWAV", start="2025-10-14T00:00:00Z", end="2025-10-15T00:00:00Z", notes="$20"),
+    jdzg=dict(symbol="JDZG", start="2025-10-14T00:00:00Z", end="2025-10-15T00:00:00Z", notes="$3, most action 7am-open"),
+    chnr=dict(symbol="CHNR", start="2025-10-13T00:00:00Z", end="2025-10-14T00:00:00Z", notes="$7"),
+    tsla1020=dict(symbol="TSLA", start="2025-10-20T13:15:00Z", end="2025-10-20T20:00:00Z"),
+    tsla1021=dict(symbol="TSLA", start="2025-10-21T13:15:00Z", end="2025-10-21T20:00:00Z"),
+    tsla1022=dict(symbol="TSLA", start="2025-10-22T13:15:00Z", end="2025-10-22T20:00:00Z"),
+    tsla1023=dict(symbol="TSLA", start="2025-10-23T13:15:00Z", end="2025-10-23T20:00:00Z"),
+    tsla1024=dict(symbol="TSLA", start="2025-10-24T13:15:00Z", end="2025-10-24T20:00:00Z"),
+    tsla1027=dict(symbol="TSLA", start="2025-10-27T13:15:00Z", end="2025-10-27T20:00:00Z"),
+    tsla1028=dict(symbol="TSLA", start="2025-10-28T13:15:00Z", end="2025-10-28T20:00:00Z"),
+    tsla1029=dict(symbol="TSLA", start="2025-10-29T13:15:00Z", end="2025-10-29T20:00:00Z"),
+    tsla1030=dict(symbol="TSLA", start="2025-10-30T13:15:00Z", end="2025-10-30T20:00:00Z"),
+    tsla1031=dict(symbol="TSLA", start="2025-10-31T13:15:00Z", end="2025-10-31T20:00:00Z"),
+    tsla1103=dict(symbol="TSLA", start="2025-11-03T14:15:00Z", end="2025-11-03T21:00:00Z"),
+    tsla1104=dict(symbol="TSLA", start="2025-11-04T14:15:00Z", end="2025-11-04T21:00:00Z"),
+    tsla1105=dict(symbol="TSLA", start="2025-11-05T14:15:00Z", end="2025-11-05T21:00:00Z"),
+    tsla1106=dict(symbol="TSLA", start="2025-11-06T14:15:00Z", end="2025-11-06T21:00:00Z"),
+    tsla1107=dict(symbol="TSLA", start="2025-11-07T14:15:00Z", end="2025-11-07T21:00:00Z"),
+    tsla1110=dict(symbol="TSLA", start="2025-11-10T14:15:00Z", end="2025-11-10T21:00:00Z"),
+    aapl1014=dict(symbol="AAPL", start="2025-10-14T00:00:00Z", end="2025-10-15T00:00:00Z"),
+    aapl1015=dict(symbol="AAPL", start="2025-10-15T00:00:00Z", end="2025-10-16T00:00:00Z"),
+    aapl1020=dict(symbol="AAPL", start="2025-10-20T13:15:00Z", end="2025-10-20T20:00:00Z"),
+    aapl1021=dict(symbol="AAPL", start="2025-10-21T13:15:00Z", end="2025-10-21T20:00:00Z"),
+    aapl1022=dict(symbol="AAPL", start="2025-10-22T13:15:00Z", end="2025-10-22T20:00:00Z"),
+    aapl1023=dict(symbol="AAPL", start="2025-10-23T13:15:00Z", end="2025-10-23T20:00:00Z"),
+    aapl1024=dict(symbol="AAPL", start="2025-10-24T13:15:00Z", end="2025-10-24T20:00:00Z"),
+    aapl1027=dict(symbol="AAPL", start="2025-10-27T13:15:00Z", end="2025-10-27T20:00:00Z"),
+    aapl1028=dict(symbol="AAPL", start="2025-10-28T13:15:00Z", end="2025-10-28T20:00:00Z"),
+    aapl1029=dict(symbol="AAPL", start="2025-10-29T13:15:00Z", end="2025-10-29T20:00:00Z"),
+    aapl1030=dict(symbol="AAPL", start="2025-10-30T13:15:00Z", end="2025-10-30T20:00:00Z"),
+    aapl1031=dict(symbol="AAPL", start="2025-10-31T13:15:00Z", end="2025-10-31T20:00:00Z"),
+    aapl1103=dict(symbol="AAPL", start="2025-11-03T14:15:00Z", end="2025-11-03T21:00:00Z"),
+    aapl1104=dict(symbol="AAPL", start="2025-11-04T14:15:00Z", end="2025-11-04T21:00:00Z"),
+    aapl1105=dict(symbol="AAPL", start="2025-11-05T14:15:00Z", end="2025-11-05T21:00:00Z"),
+    aapl1106=dict(symbol="AAPL", start="2025-11-06T14:15:00Z", end="2025-11-06T21:00:00Z"),
+    aapl1107=dict(symbol="AAPL", start="2025-11-07T14:15:00Z", end="2025-11-07T21:00:00Z"),
 )

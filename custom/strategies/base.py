@@ -37,6 +37,7 @@ class BaseStrategyConfig(StrategyConfig, frozen=True):
 
 class BaseStrategy(Strategy):
     save_artifacts: bool = False
+    buy_signal_delay_secs: int = 1
 
     def __init__(self, config: BaseStrategyConfig) -> None:
         super().__init__(config)
@@ -51,6 +52,7 @@ class BaseStrategy(Strategy):
         self._buy_signals_count = 0
         self.buy_orders_count = 0
         self.buy_sell_signals = []
+        self.last_buy_signal_dt = 0
 
         # Used to track order modifications to avoid sending duplicate modify orders when the cache is slow
         self._last_order_modify_dict = {}
@@ -150,6 +152,8 @@ class BaseStrategy(Strategy):
         return self.position_qty - sell_qty_open_orders
 
     def log_buy_signal(self, tick, tag=None):
+        if (self._tick_init_dt_adjusted - self.last_buy_signal_dt) / 1e9 < self.buy_signal_delay_secs:
+            return
         self._buy_signals_count += 1
         if tag is None:
             tag = f"{self._buy_signals_count}"
@@ -158,6 +162,7 @@ class BaseStrategy(Strategy):
         )
         self.buy_sell_signals.append(buy_signal_dict)
         self.log.info(f"Buy signal {self._buy_signals_count}: {buy_signal_dict}")
+        self.last_buy_signal_dt = self._tick_init_dt_adjusted
 
     def _update_buy_signals(self, tick):
         # Track buy-sell signals
@@ -334,13 +339,12 @@ class BaseStrategy(Strategy):
 
     def _cancel_orders_past_timeout(self, event: TimeEvent):
         # Cancel open orders if they have reached their expiration time
-        pass
-        # open_orders = self.submitted_or_open_orders()
-        # for order in open_orders:
-        #     if len(order.tags) > 1:
-        #         expire_time = order.tags[1]  # FIXME: hardcoded to look at second item
-        #         if self.clock.utc_now() > expire_time:
-        #             self.cancel_order(order)
+        open_orders = self.submitted_or_open_orders(OrderSide.BUY)
+        for order in open_orders:
+            if len(order.tags) > 1:
+                expire_time = order.tags[1]  # FIXME: hardcoded to look at second item
+                if self.clock.utc_now() > expire_time:
+                    self.cancel_order(order)
 
     def on_start(self) -> None:
         self.clock.set_timer(

@@ -1,5 +1,7 @@
 from collections import deque
 from dataclasses import dataclass
+from random import random
+
 import pandas as pd
 
 from custom.nt_extensions.indicators import RollingVWAP
@@ -38,6 +40,7 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     use_bracket_orders: bool = False
     use_oco_sell_orders: bool = False
     simple_take: bool = False
+    random_buy: bool = False
 
     record_op_speed: bool = False  # Record operation speed
     allow_trades: bool = True
@@ -63,17 +66,19 @@ class MomoStrategy(BaseStrategy):
         if sum([self.config.simple_take, self.config.use_bracket_orders, self.config.use_oco_sell_orders]) > 1:
             raise ValueError("Cannot use more than one of simple_take, use_bracket_orders, use_oco_sell_orders")
 
+        # FIXME: This is temporary
+        self.take_profit = self.config.take_profit if self.config.take_profit is not None else self.config.stop_loss
         self.market_open_only = self.config.use_bracket_orders or self.config.use_oco_sell_orders
         self.vwap = RollingVWAP(
             rolling_window=self.config.vwap_window,
             variance_window_ratio=self.config.variance_window_ratio,
             upper_lower_scaler=self.config.upper_lower_scaler,
         )
-        self.vwap_day = VolumeWeightedAveragePrice()
+        # self.vwap_day = VolumeWeightedAveragePrice()
 
         self.metrics_to_save = [
             Metric(obj=self.vwap, name="vwap", attrs=["value", "upper", "lower"]),
-            Metric(obj=self.vwap_day, name="day_vwap", attrs=["value"]),
+            # Metric(obj=self.vwap_day, name="day_vwap", attrs=["value"]),
         ]
 
         self.price_dq = deque(maxlen=2)
@@ -91,6 +96,16 @@ class MomoStrategy(BaseStrategy):
         if self.market_open_only and not is_market_open(self.clock.utc_now()):
             return
 
+        buy_orders = self.submitted_or_open_orders(OrderSide.BUY)
+        if self.config.random_buy:
+            if (
+                len(buy_orders) == 0
+                and (self.clock.utc_now() - self.last_buy_dt).total_seconds() > 20
+                and random() < 0.3
+            ):
+                self.buy(self.config.trade_size, tick.price, cancel_after_secs=3, tag=f"{self.buy_orders_count}")
+            return
+
         initialize_deque_if_needed(self.price_dq, tick.price)
         if self.last_take_ts is None:
             self.last_take_ts = self.clock.utc_now()
@@ -103,11 +118,10 @@ class MomoStrategy(BaseStrategy):
 
         # BUY LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         if self.config.trailing_buy_order:
-            buy_orders = self.submitted_or_open_orders(OrderSide.BUY)
+            vwap_lower = self.instrument.make_price(self.vwap.lower)
             for order in buy_orders:
-                vwap_lower_as_price = self.instrument.make_price(self.vwap.lower)
-                if order.price != vwap_lower_as_price:
-                    self.modify_order(order, quantity=order.quantity, price=vwap_lower_as_price)
+                if order.price != vwap_lower:
+                    self.modify_order(order, quantity=order.quantity, price=vwap_lower)
                 if order.filled_qty > 0:
                     earliest_fill_time_ns = min(up.ts_event for up in order.events if isinstance(up, OrderFilled))
                     ns_since_earliest_fill = self.clock.timestamp_ns() - earliest_fill_time_ns
@@ -120,9 +134,8 @@ class MomoStrategy(BaseStrategy):
 
             if len(buy_orders) == 0 and (self.clock.utc_now() - self.last_buy_dt).total_seconds() > 1:
                 # FIXME: Clunky to add buy orders count tag here. Should be handled in buy()
-                self.buy(
-                    self.config.trade_size, self.vwap.lower, cancel_after_secs=None, tag=f"{self.buy_orders_count}"
-                )
+                self.buy(self.config.trade_size, vwap_lower, cancel_after_secs=None, tag=f"{self.buy_orders_count}")
+
         if (
             price < self.vwap.lower and price_1ago > self.vwap.lower
             # and (price > price_1ago)
@@ -140,7 +153,7 @@ class MomoStrategy(BaseStrategy):
                         self.config.trade_size,
                         price,
                         self.config.stop_loss,
-                        self.config.take_profit,
+                        self.take_profit,
                         tag=f"{self._buy_signals_count}",
                     )
                 elif not self.config.trailing_buy_order:
@@ -182,12 +195,12 @@ class MomoStrategy(BaseStrategy):
                 self.sell_oco(
                     quantity=order_filled.last_qty,
                     stop_price=price - self.config.stop_loss,
-                    take_price=price + self.config.take_profit,
+                    take_price=price + self.take_profit,
                     tag=tag,
                 )
             else:
                 # Set take and stop losses based on order fill price
-                self.take_price = order_filled.last_px + self.config.take_profit
+                self.take_price = order_filled.last_px + self.take_profit
                 new_stop_price = order_filled.last_px - self.config.stop_loss
                 if self.stop_price is not None:
                     if new_stop_price > self.stop_price:
@@ -198,7 +211,7 @@ class MomoStrategy(BaseStrategy):
                     self.stop_price = new_stop_price
 
         if order_filled.is_sell and not self.config.use_oco_sell_orders:
-            self.take_price = order_filled.last_px + self.config.take_profit
+            self.take_price = order_filled.last_px + self.take_profit
 
     def on_start(self) -> None:
         super().on_start()
