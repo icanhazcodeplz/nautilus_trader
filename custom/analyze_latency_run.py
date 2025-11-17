@@ -2,8 +2,6 @@ import json
 import pandas as pd
 from pathlib import Path
 
-from custom.app_utils.viz import load_ticks_and_metrics_file
-
 # Specify the run directory
 # run_dir = Path("data/runs/latency/20251027_TSLA_live")  # TSLA live account 50 trades
 # run_dir = Path("data/runs/latency/20251027_TSLA_paper")  # TSLA paper account 200 trades
@@ -30,7 +28,8 @@ ticks_and_metrics = load_ticks_and_metrics_file(run_dir)
 df = pd.DataFrame(ticks_and_metrics).T
 
 for col in ["ts_event", "ts_recv"]:
-    df[col] = pd.to_datetime(df[col], unit='ns')
+    df[col] = pd.to_datetime(df[col], unit="ns")
+
 
 def order_analysis(order_submissions_df, ws_updates_df):
     updates = ws_updates_df.copy()

@@ -1,7 +1,7 @@
 import warnings
 from typing import Callable, List
 
-from custom.app_utils.viz import load_ticks_and_metrics_file
+from custom.artifacts import load_ticks_and_metrics_file
 from custom.utils.load_catalog_data import get_tbbo_for_viz
 
 

@@ -1,10 +1,11 @@
-from custom.utils import data_subdir
 import json
 import pickle
+import pandas as pd
 
-PRICE_MARKERS_FILE = data_subdir("viz", "price_markers.txt")
-SIGNALS_FILE = data_subdir("viz", "signals.txt")
-TICKS_AND_METRICS_FILE = data_subdir("viz", "ticks_and_metrics.pkl")
+from custom.utils import data_subdir
+
+
+VIZ_ARTIFACTS_PATH = data_subdir("viz")
 
 
 def dict_to_file(dict_, filename):
@@ -15,6 +16,51 @@ def dict_to_file(dict_, filename):
 def load_txt_file_to_dict(filename):
     with open(filename, "r") as f:
         return json.load(f)
+
+
+class ArtifactsIO:
+    def __init__(self, directory):
+        self.directory = directory
+
+    def save_config(self, config):
+        dict_to_file(config, self.directory / "config.json")
+
+    def load_config(self):
+        return load_txt_file_to_dict(self.directory / "config.json")
+
+    def save_orders_events(self, events):
+        dict_to_file(events, self.directory / "orders_events.json")
+
+    def load_orders_events(self):
+        return load_txt_file_to_dict(self.directory / "orders_events.json")
+
+    def save_performance_metrics(self, performance_metrics):
+        dict_to_file(performance_metrics, self.directory / "performance_metrics.json")
+
+    def load_performance_metrics(self):
+        return load_txt_file_to_dict(self.directory / "performance_metrics.json")
+
+    def save_orders_report(self, orders_report_df: pd.DataFrame):
+        orders_report_df.to_pickle(self.directory / "orders_report.pkl")
+
+    def load_orders_report(self):
+        return pd.read_pickle(self.directory / "orders_report.pkl")
+
+    def save_signals(self, signals):
+        dict_to_file(signals, self.directory / "signals.txt")
+
+    def load_signals(self):
+        return load_txt_file_to_dict(self.directory / "signals.txt")
+
+    def save_ticks_and_metrics(self, metrics):
+        filepath = self.directory / "ticks_and_metrics.pkl"
+        with open(filepath, "wb") as f:
+            pickle.dump(metrics, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    def load_ticks_and_metrics_file(self):
+        filepath = self.directory / "ticks_and_metrics.pkl"
+        with open(filepath, "rb") as f:
+            return pickle.load(f)
 
 
 class CreateMarkers:
@@ -71,32 +117,5 @@ class CreateMarkers:
                 )
             )
 
+        price_markers.sort(key=lambda x: x["time"])
         return price_markers
-
-    def create_and_save_markers(self, trades, sell_legs):
-        markers = self.create_trades_markers(trades, sell_legs)
-        markers.sort(key=lambda x: x["time"])
-        dict_to_file(markers, PRICE_MARKERS_FILE)
-
-    def load_markers(self):
-        return load_txt_file_to_dict(PRICE_MARKERS_FILE)
-
-
-def write_to_ticks_and_metrics_pkl_file(metrics, directory=None):
-    filepath = TICKS_AND_METRICS_FILE if directory is None else data_subdir(directory, "ticks_and_metrics.pkl")
-    with open(filepath, "wb") as f:
-        pickle.dump(metrics, f, protocol=pickle.HIGHEST_PROTOCOL)
-
-
-def load_ticks_and_metrics_file(directory=None):
-    filepath = TICKS_AND_METRICS_FILE if directory is None else directory/"ticks_and_metrics.pkl"
-    with open(filepath, "rb") as f:
-        return pickle.load(f)
-
-
-def write_to_signals_file(signals):
-    dict_to_file(signals, SIGNALS_FILE)
-
-
-def load_signals_file():
-    return load_txt_file_to_dict(SIGNALS_FILE)

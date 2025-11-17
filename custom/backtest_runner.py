@@ -5,12 +5,10 @@ import pandas as pd
 
 from custom import BACKTEST_SYMBOL
 from custom.catalog_options import CATALOG_OPTIONS
-from custom.strategies.base import ArtifactsLocation
 from custom.utils.load_catalog_data import VENUE, get_catalog_data
 from custom.nt_extensions.limit_fill_model import LimitFillModel
-from custom.utils.orders_to_trades import orders_to_trades
 from custom.strategies.momo import MomoStrategyConfig, MomoStrategy
-from custom.app_utils.viz import CreateMarkers
+from custom.artifacts import ArtifactsIO, VIZ_ARTIFACTS_PATH
 from custom.strategies.random import RandomConfig, Random
 from nautilus_trader.backtest.engine import BacktestEngine
 from nautilus_trader.backtest.engine import BacktestEngineConfig
@@ -18,6 +16,7 @@ from custom.statistics.trade_avg import AvgTrade
 from custom.statistics.trade_avg_scaled import PnlPer100, TotalBought
 from custom.statistics.trade_counts import Winners, Losers, NumTrades
 from custom.statistics.win_loss_ratio import WinLossRatio
+from custom.utils.run_utils import run_strategy
 from nautilus_trader.backtest.models import LatencyModel
 from nautilus_trader.cache.config import CacheConfig
 from nautilus_trader.config import LoggingConfig
@@ -50,17 +49,21 @@ latency_model = LatencyModel(
     update_latency_nanos=25 * 1e6,
     cancel_latency_nanos=25 * 1e6,
 )
-
-
 # latency_model=LatencyModel()
 
 
-def _calculate_win_ratio(orders_report):
+def _calculate_oco_win_ratio(orders_report):
     """Calculate win/loss ratio based on each buy order."""
-    orders = orders_report[
-        ["side", "quantity", "filled_qty", "price", "trigger_price", "avg_px", "tags", "ts_init", "ts_last"]
-    ].copy()
+    if "trigger_price" in orders_report:
+        cols = ["side", "quantity", "filled_qty", "price", "trigger_price", "avg_px", "tags", "ts_init", "ts_last"]
+    else:
+        cols = ["side", "quantity", "filled_qty", "price", "avg_px", "tags", "ts_init", "ts_last"]
 
+    # FOR DEBUGGING
+    # for col in ["ts_init", "ts_last"]:
+    #     orders_report[col] = orders_report[col].apply(lambda x: pd.Timestamp(x))
+
+    orders = orders_report[cols].copy()
     # Calculate win/loss ratio based on each buy order, instead of each trade.
     orders["order_num"] = orders["tags"].apply(lambda t: t[0])
 
@@ -86,11 +89,26 @@ def _calculate_win_ratio(orders_report):
     return wins, len(pnl_for_each_buy)
 
 
-def run_single_backtest(
-    dataset_name, strategy_name, params, artifacts_location=None, return_engine=False, log_level="ERROR"
-):
+def buy_signal_stats(signals):
+    num_buy_sells = len(signals)
+    if num_buy_sells > 0:
+        signals_df = pd.DataFrame(signals).dropna()
+        wins = len(signals_df[signals_df["win"]])
+        long_wins = len(signals_df[signals_df["win"] & signals_df["win_delay"]])
+        wins_ratio = round(wins / num_buy_sells, 2)
+        long_wins_ratio = round(long_wins / num_buy_sells, 2)
+        # print(f"\nBuySignals:  {num_buy_sells}   {wins}/{num_buy_sells - wins} = {wins_ratio}")
+        print(f"LongWins__:  {num_buy_sells}   {long_wins}/{num_buy_sells - long_wins} = {long_wins_ratio}")
+    else:
+        long_wins = 0
+    return num_buy_sells, long_wins
+
+
+def run_single_backtest(dataset_name, strategy_name, params, artifacts_location=None, log_level="ERROR"):
     params_copy = params.copy()
     random_seed = params_copy.pop("random_seed", None)
+    random.seed(random_seed)
+
     engine = BacktestEngine(
         config=BacktestEngineConfig(
             trader_id=TraderId("M-1"),
@@ -162,50 +180,15 @@ def run_single_backtest(
         config = MomoStrategyConfig(instrument_id=test_instrument.id, **params_copy)
         strategy = MomoStrategy(config=config)
 
-    strategy.artifacts_location = artifacts_location
-
-    engine.add_strategy(strategy=strategy)
-    random.seed(random_seed)
-    engine.run()
-    signals = strategy.buy_sell_signals
-    num_buy_sells = len(signals)
-    if num_buy_sells > 0:
-        signals_df = pd.DataFrame(signals).dropna()
-        signals_df["duration_ms"] = (signals_df["win_time"] - signals_df["time"]) / 1e6
-        signals_df["delay_duration_ms"] = (signals_df["win_delay_time"] - signals_df["time"]) / 1e6
-        wins = len(signals_df[signals_df["win"]])
-        long_wins = len(signals_df[signals_df["win"] & signals_df["win_delay"]])
-        wins_ratio = round(wins / num_buy_sells, 2)
-        long_wins_ratio = round(long_wins / num_buy_sells, 2)
-        # print(f"\nBuySignals:  {num_buy_sells}   {wins}/{num_buy_sells - wins} = {wins_ratio}")
-        print(f"LongWins__:  {num_buy_sells}   {long_wins}/{num_buy_sells - long_wins} = {long_wins_ratio}")
-    else:
-        long_wins = 0
-    orders_report = engine.trader.generate_orders_report()
-    if not orders_report.empty:
-        orders_report = orders_report[orders_report["filled_qty"].astype(int) > 0]
-        wins, total_buys = _calculate_win_ratio(orders_report)
-
-    if return_engine:
-        return engine
-    performance_stats = {
-        **engine.portfolio.analyzer.get_performance_stats_pnls(),
-        **engine.portfolio.analyzer.get_performance_stats_returns(),
-        **engine.portfolio.analyzer.get_performance_stats_general(),
-        "buy_signals": num_buy_sells,
-        "buy_signal_wins": long_wins,
-        "buys": total_buys,
-        "wins": wins,
-    }
+    run_config = {"symbol": symbol, "strategy": config.dict()}
+    performance_stats = run_strategy(strategy, engine, artifacts_location, run_config=run_config)
     return performance_stats
 
 
 def run_multiple_backtests(dataset_names, strategy_name, params, log_level="ERROR"):
     performance_stats = []
     for dataset_name in dataset_names:
-        p_stats = run_single_backtest(
-            dataset_name, strategy_name, params, artifacts_location=None, return_engine=False, log_level=log_level
-        )
+        p_stats = run_single_backtest(dataset_name, strategy_name, params, artifacts_location=None, log_level=log_level)
         performance_stats.append({"name": dataset_name, **p_stats})
     stats_df = pd.DataFrame(performance_stats).round(3)
     return stats_df
@@ -223,15 +206,15 @@ if __name__ == "__main__":
         trade_size=5,
         max_position_multiplier=1,
         stop_loss=0.10,
-        take_profit=0.10,
+        take_profit=None,
         take_ratio=0.8,
         vwap_window=100,
         variance_window_ratio=1.5,
         upper_lower_scaler=0.01,
         trailing_buy_order=False,
         use_bracket_orders=False,
-        use_oco_sell_orders=True,
-        simple_take=False,
+        use_oco_sell_orders=False,
+        simple_take=True,
         allow_trades=True,
         random_buy=True,
         random_seed=11,
@@ -256,28 +239,17 @@ if __name__ == "__main__":
             print(stats)
             pass
     else:
-        engine = run_single_backtest(
-            BACKTEST_SYMBOL, strategy_name, params, artifacts_location=ArtifactsLocation.VIZ, return_engine=True, log_level=log_level
+        run_single_backtest(
+            BACKTEST_SYMBOL,
+            strategy_name,
+            params,
+            artifacts_location=VIZ_ARTIFACTS_PATH,
+            log_level=log_level,
         )
-        order_fills_report = engine.trader.generate_order_fills_report()
-        fills_report = engine.trader.generate_fills_report()
-        positions_report = engine.trader.generate_positions_report()
 
-        trades = pd.DataFrame()
-        sell_legs = []
-        if not positions_report.empty:
-            positions = positions_report[
-                ["peak_qty", "ts_opened", "ts_closed", "avg_px_open", "avg_px_close", "realized_pnl"]
-            ]
+        artifacts_io = ArtifactsIO(VIZ_ARTIFACTS_PATH)
+        orders_report = artifacts_io.load_orders_report()
 
-            orders_report = engine.trader.generate_orders_report()
-            orders_report = orders_report[orders_report["filled_qty"].astype(int) > 0]
-            win_ratio = _calculate_win_ratio(orders_report)
-
-            trades, sell_legs = orders_to_trades(orders_report)
-
-        CreateMarkers().create_and_save_markers(trades, sell_legs)
-
+        num_buy_sells, long_wins = buy_signal_stats(artifacts_io.load_signals())
+        win_ratio = _calculate_oco_win_ratio(orders_report)
         print()
-        # engine.reset()
-        # engine.dispose()

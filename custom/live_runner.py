@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-import json
 
-from custom.strategies.base import ArtifactsLocation
 from custom.strategies.momo import MomoStrategy
 from custom.strategies.momo import MomoStrategyConfig
 from custom.utils import run_artifacts_subdir
+from custom.utils.run_utils import run_strategy
 from nautilus_trader.adapters.alpaca import ALPACA, AlpacaExecClientConfig, AlpacaDataClientConfig
 from nautilus_trader.adapters.alpaca import AlpacaLiveDataClientFactory
 from nautilus_trader.adapters.alpaca import AlpacaLiveExecClientFactory
@@ -27,9 +26,18 @@ instrument_provider_config = InstrumentProviderConfig(
     # FIXME: figure out why all instruments are loaded when load_all=False
     load_all=False,
 )
+log_level = "INFO"
+artifacts_directory = run_artifacts_subdir()
 config_node = TradingNodeConfig(
     trader_id=TraderId("TESTER-001"),
-    logging=LoggingConfig(log_level="INFO", use_pyo3=True),
+    logging=LoggingConfig(
+        log_level=log_level,
+        log_level_file=log_level,
+        log_directory=str(artifacts_directory),
+        log_file_name=log_level,
+        use_pyo3=True,
+        log_file_max_size=int(5e6),
+    ),
     exec_engine=LiveExecEngineConfig(reconciliation=False),
     cache=CacheConfig(
         # database=DatabaseConfig(),
@@ -65,38 +73,24 @@ strategy_config = MomoStrategyConfig(
     trade_size=10,
     max_position_multiplier=1,
     stop_loss=0.20,
-    take_profit=0.20,
+    take_profit=None,
     take_ratio=0.8,
     vwap_window=100,
     variance_window_ratio=1.5,
     upper_lower_scaler=0.01,
     trailing_buy_order=False,
     use_bracket_orders=False,
-    use_oco_sell_orders=True,
+    use_oco_sell_orders=False,
     random_buy=True,
-    simple_take=False,
+    simple_take=True,
     allow_trades=True,
 )
-strategy = MomoStrategy(config=strategy_config)
-strategy.artifacts_location = ArtifactsLocation.RUNS
-
-node.trader.add_strategy(strategy)
-
 node.add_data_client_factory(ALPACA, AlpacaLiveDataClientFactory)
 node.add_exec_client_factory(ALPACA, AlpacaLiveExecClientFactory)
-node.build()
 
 
 if __name__ == "__main__":
-    try:
-        save_config = True
-        if save_config:
-            run_details = {"paper": paper, "symbol": symbol, "strategy": strategy_config.dict()}
-            details_filepath = run_artifacts_subdir("config.json")
-            with open(details_filepath, "w") as f:
-                json.dump(run_details, f, indent=2, default=str)
-
-        node.run()
-    finally:
-        # orders_report = node.trader.generate_orders_report()
-        node.dispose()
+    run_config = {"paper": paper, "symbol": symbol, "strategy": strategy_config.dict()}
+    strategy = MomoStrategy(config=strategy_config)
+    performance_stats = run_strategy(strategy, node, artifacts_directory, run_config=run_config)
+    print()

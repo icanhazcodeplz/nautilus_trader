@@ -16,7 +16,6 @@ class LatencyTestStrategyConfig(BaseStrategyConfig, frozen=True):
 
     trade_size: int = 1
     stop_loss: float = None
-    record_op_speed: bool = True
 
 
 class LatencyTestStrategy(BaseStrategy):

@@ -1,14 +1,12 @@
-from enum import StrEnum, auto
-import json
 from abc import abstractmethod
 from datetime import timedelta
+from pathlib import Path
 from typing import Optional
 
 import pandas as pd
 from pandas import Timestamp
 
-from custom.app_utils.viz import write_to_ticks_and_metrics_pkl_file, write_to_signals_file
-from custom.utils import run_artifacts_subdir
+from custom.artifacts import ArtifactsIO
 from nautilus_trader.common.component import TimeEvent
 from nautilus_trader.config import StrategyConfig
 from nautilus_trader.core.data import Data
@@ -28,23 +26,17 @@ from nautilus_trader.model.orders.list import OrderList
 from nautilus_trader.trading.strategy import Strategy
 
 
-class ArtifactsLocation(StrEnum):
-    VIZ = auto()
-    RUNS = auto()
-
 class BaseStrategyConfig(StrategyConfig, frozen=True):
     instrument_id: InstrumentId
     trade_size: int
     max_position_multiplier: int
     stop_loss: float
-    record_op_speed: bool  # Record operation speed in the "on_trade_tick" method
     allow_trades: bool = True
 
 
 class BaseStrategy(Strategy):
-    artifacts_location: Optional[ArtifactsLocation] = None
     buy_signal_delay_secs: int = 1
-    log_update_every_secs: int = 30
+    log_update_every_secs: int = None
 
     def __init__(self, config: BaseStrategyConfig) -> None:
         super().__init__(config)
@@ -66,6 +58,16 @@ class BaseStrategy(Strategy):
         self._already_cancelled_orders = set()
         self._uncached_orders = set()
         self._last_log_update_dt = 0
+
+        self._initialized = False
+        self._artifacts_io = None
+        self.save_artifacts = False
+
+    def initialize(self, artifacts_location: Optional[Path]):
+        self._initialized = True
+        if artifacts_location is not None:
+            self._artifacts_io = ArtifactsIO(artifacts_location)
+            self.save_artifacts = True
 
     @property
     def position_qty(self):
@@ -122,30 +124,6 @@ class BaseStrategy(Strategy):
         if remaining_qty_to_sell > 0:
             self.sell(quantity=remaining_qty_to_sell, limit_price=new_limit_price, tag="s")
 
-    def stop_out_if_needed(self, tick: TradeTick):
-        if self.position_qty == 0:
-            self.stop_price = None
-            return
-
-        if self.position_qty > 0 and self.stop_price is None:
-            self.stop_price = tick.price - self.config.stop_loss
-            self.log.info(f"Setting stop price to {self.stop_price}")
-
-        if self.stop_price is not None and tick.price <= self.stop_price:
-            # TODO: HARDCODED to set stop price to 0.01 below current price
-            new_limit_price = self.instrument.make_price(tick.price - 0.01)
-
-            # FIXME: this is not a great solution. The fills for selling are more accurate during backtesting
-            # if you use a single order, but during live running it is less buggy to modify existing orders because
-            # trying to cancel existing orders runs async.
-            self.sell_position_at_price(new_limit_price)
-            # FIXME: cancelling all orders sometimes also cancels the subsequent sell order because of the async calls
-            # self.cancel_all_orders(self.config.instrument_id)
-            # self.sell(quantity=self.position_qty, limit_price=new_limit_price, tag="s")
-
-            # Adjust stop price so we don't send repeat orders
-            self.stop_price = tick.price
-
     @property
     def max_position_allowed(self):
         return self.config.max_position_multiplier * self.config.trade_size
@@ -198,7 +176,7 @@ class BaseStrategy(Strategy):
             self._tick_init_dt_adjusted = tick.ts_init
 
         tick_data = {"price": float(tick.price), "size": int(tick.size)}
-        if self.config.record_op_speed:
+        if self.save_artifacts:
             tick_data = {
                 **tick_data,
                 "ts_event": tick.ts_event,
@@ -208,25 +186,29 @@ class BaseStrategy(Strategy):
             }
 
         #  Actual operations of this method
-        # self.stop_out_if_needed(tick)
         self._on_trade_tick(tick)
 
         # Record if needed
-        if self.config.record_op_speed:
+        if self.save_artifacts:
             tick_data["ts_now_after"] = pd.Timestamp.utcnow()
 
         self._update_buy_signals(tick)
 
-        if self.artifacts_location is not None:
+        if self.save_artifacts:
             for metric in self.metrics_to_save:
                 tick_data = {**tick_data, **metric.get_vals()}
             self._tick_data_dicts[self._tick_init_dt_adjusted] = tick_data
 
-        if (self._tick_init_dt_adjusted - self._last_log_update_dt) / 1e9 > self.log_update_every_secs:
+        if (
+            self.log_update_every_secs is not None
+            and (self._tick_init_dt_adjusted - self._last_log_update_dt) / 1e9 > self.log_update_every_secs
+        ):
             timestamp = pd.Timestamp(self._tick_init_dt_adjusted, unit="ns")
             open_buys = len(self.submitted_or_open_orders(side=OrderSide.BUY))
             open_sells = len(self.submitted_or_open_orders(side=OrderSide.SELL))
-            self.log.info(f"Update\nTick {timestamp}: {tick_data}\nPosition {self.position_qty} @ {self.position_avg_px}\nBuy signals: {len(self.buy_sell_signals)} | Buys {self.buy_orders_count} | Open Buys {open_buys} | Open Sells {open_sells}")
+            self.log.info(
+                f"Update\nTick {timestamp}: {tick_data}\nPosition {self.position_qty} @ {self.position_avg_px}\nBuy signals: {len(self.buy_sell_signals)} | Buys {self.buy_orders_count} | Open Buys {open_buys} | Open Sells {open_sells}"
+            )
             self._last_log_update_dt = self._tick_init_dt_adjusted
 
     def _submit_orders_if_allowed(self, order_or_order_list) -> None:
@@ -363,6 +345,8 @@ class BaseStrategy(Strategy):
                     self.cancel_order(order)
 
     def on_start(self) -> None:
+        if not self._initialized:
+            raise RuntimeError("Strategy must be initialized before starting. Call method `initialize` first.")
         self.clock.set_timer(
             name="cancel_orders_timer",
             interval=timedelta(seconds=0.25),
@@ -398,18 +382,6 @@ class BaseStrategy(Strategy):
         # Unsubscribe from data
         self.unsubscribe_trade_ticks(self.config.instrument_id)
 
-        # Record metrics and trade ticks if present
-        # FIXME: this needs cleaning up
-        if len(self._tick_data_dicts) > 0:
-            if self.artifacts_location == ArtifactsLocation.VIZ:
-                directory = None
-            elif self.artifacts_location == ArtifactsLocation.RUNS:
-                directory = run_artifacts_subdir()
-            write_to_ticks_and_metrics_pkl_file(self._tick_data_dicts, directory=directory)
-
-        if len(self.buy_sell_signals) > 0:
-            write_to_signals_file(list(reversed(self.buy_sell_signals)))
-
     @abstractmethod
     def _on_trade_tick(self, tick: TradeTick) -> None:
         pass
@@ -424,8 +396,11 @@ class BaseStrategy(Strategy):
         pass
 
     def on_dispose(self) -> None:
-        if self.config.record_op_speed:
-            # Get all orders for this strategy
+        if self.save_artifacts:
+            self._artifacts_io.save_ticks_and_metrics(self._tick_data_dicts)
+            self._artifacts_io.save_signals(self.buy_sell_signals)
+
+            # Get and save order events
             all_orders = self.cache.orders(strategy_id=self.id)
             all_events = []
             for order in all_orders:
@@ -444,10 +419,7 @@ class BaseStrategy(Strategy):
                             "ts_event": event.ts_event,
                         }
                     )
-
-            with open(run_artifacts_subdir("orders_events.json"), "w") as f:
-                as_json = json.dumps(all_events)
-                f.write(as_json)
+            self._artifacts_io.save_orders_events(all_events)
 
     def on_instrument(self, instrument: Instrument) -> None:
         pass

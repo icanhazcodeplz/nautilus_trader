@@ -2,10 +2,12 @@ from typing import Tuple
 
 import pandas as pd
 
+
 def market_round(price):
     if price < 1.0:
         return round(price, 4)
     return round(price, 2)
+
 
 def _process_nautilus_orders_df(orders_df: pd.DataFrame) -> pd.DataFrame:
     orders = orders_df[["ts_last", "side", "filled_qty", "avg_px", "tags"]].copy()
@@ -16,8 +18,11 @@ def _process_nautilus_orders_df(orders_df: pd.DataFrame) -> pd.DataFrame:
     return orders
 
 
+def orders_to_trades(orders_report: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    if orders_report.empty:
+        return pd.DataFrame(), pd.DataFrame()
+    orders = orders_report[orders_report["filled_qty"].astype(int) > 0]
 
-def orders_to_trades(orders: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
     orders = _process_nautilus_orders_df(orders)
     buys_df = orders[orders["side"] == "BUY"].drop(columns="side")
     sells_df = orders[(orders["side"] == "SELL")].drop(columns="side")
@@ -26,7 +31,6 @@ def orders_to_trades(orders: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
     trades = []
     sell_legs = []
     for buy_id, (buy_dt, buy_qty, buy_price, b_desc) in enumerate(buys, start=1):
-
         qty = buy_qty
         sell_value = 0
         latest_sell_dt = buy_dt  # just to initialize
@@ -73,5 +77,4 @@ def orders_to_trades(orders: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
             )
         ]
 
-    trades_df = pd.DataFrame(trades)
-    return trades_df, pd.DataFrame(sell_legs)
+    return pd.DataFrame(trades), pd.DataFrame(sell_legs)

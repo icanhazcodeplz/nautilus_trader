@@ -11,7 +11,7 @@ from nautilus_trader.model.data import Bar
 from nautilus_trader.model.data import TradeTick
 from nautilus_trader.model.events import OrderFilled
 from nautilus_trader.model.identifiers import InstrumentId
-from nautilus_trader.model.enums import OrderSide, OrderStatus
+from nautilus_trader.model.enums import OrderSide
 
 
 @dataclass
@@ -42,7 +42,6 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     simple_take: bool = False
     random_buy: bool = False
 
-    record_op_speed: bool = False  # Record operation speed
     allow_trades: bool = True
 
 
@@ -88,7 +87,34 @@ class MomoStrategy(BaseStrategy):
 
         self.last_take_ts = None
 
+    def stop_out_if_needed(self, tick: TradeTick):
+        if self.config.use_oco_sell_orders or self.config.use_bracket_orders:
+            return
+        if self.position_qty == 0:
+            self.stop_price = None
+            return
+
+        if self.position_qty > 0 and self.stop_price is None:
+            self.stop_price = tick.price - self.config.stop_loss
+            self.log.info(f"Setting stop price to {self.stop_price}")
+
+        if self.stop_price is not None and tick.price <= self.stop_price:
+            # TODO: HARDCODED to set stop price to 0.01 below current price
+            new_limit_price = self.instrument.make_price(tick.price - 0.01)
+
+            # FIXME: this is not a great solution. The fills for selling are more accurate during backtesting
+            # if you use a single order, but during live running it is less buggy to modify existing orders because
+            # trying to cancel existing orders runs async.
+            self.sell_position_at_price(new_limit_price)
+            # FIXME: cancelling all orders sometimes also cancels the subsequent sell order because of the async calls
+            # self.cancel_all_orders(self.config.instrument_id)
+            # self.sell(quantity=self.position_qty, limit_price=new_limit_price, tag="s")
+
+            # Adjust stop price so we don't send repeat orders
+            self.stop_price = tick.price
+
     def _on_trade_tick(self, tick: TradeTick) -> None:
+        self.stop_out_if_needed(tick)
         # self.log.info(f"Trade tick: {tick}")
         # NOTE: Need to be subscribed to order book deltas to get best bid/ask prices
         # ob = self.cache.order_book(self.config.instrument_id)
@@ -97,14 +123,15 @@ class MomoStrategy(BaseStrategy):
             return
 
         buy_orders = self.submitted_or_open_orders(OrderSide.BUY)
+        position_qty = self.position_qty
         if self.config.random_buy:
             if (
                 len(buy_orders) == 0
                 and (self.clock.utc_now() - self.last_buy_dt).total_seconds() > 20
+                and position_qty == 0
                 and random() < 0.3
             ):
-                self.buy(self.config.trade_size, tick.price, cancel_after_secs=3, tag=f"{self.buy_orders_count}")
-            return
+                self.buy(self.config.trade_size, tick.price, cancel_after_secs=10, tag=f"{self.buy_orders_count}")
 
         initialize_deque_if_needed(self.price_dq, tick.price)
         if self.last_take_ts is None:
@@ -114,7 +141,6 @@ class MomoStrategy(BaseStrategy):
         price = tick.price
 
         self.price_dq.append(tick.price)
-        position_qty = self.position_qty
 
         # BUY LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         if self.config.trailing_buy_order:
@@ -159,8 +185,8 @@ class MomoStrategy(BaseStrategy):
                 elif not self.config.trailing_buy_order:
                     self.buy(self.config.trade_size, price, cancel_after_secs=None, tag=f"{self._buy_signals_count}")
 
+        # TAKE LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         if not self.config.use_bracket_orders and not self.config.use_oco_sell_orders:
-            # TAKE LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
             if (
                 position_qty > 0
                 and price >= self.take_price
@@ -178,8 +204,14 @@ class MomoStrategy(BaseStrategy):
                     self.sell(sell_qty, limit_price=price, cancel_after_secs=10, tag="t")
                     self.last_take_ts = self.clock.utc_now()
 
+        # Cancel buy if price has spiked above vwap
         open_buys = self.submitted_or_open_orders(side=OrderSide.BUY)
-        if not self.config.trailing_buy_order and len(open_buys) > 0 and price > self.vwap.value and tick.size > 1:
+        if (
+            not (self.config.trailing_buy_order or self.config.random_buy)
+            and len(open_buys) > 0
+            and price > self.vwap.value
+            and tick.size > 1
+        ):
             for order in open_buys:
                 self.log.info(
                     f"Canceling order {order.client_order_id}, tags {order.tags} because current price {price} is higher than vwap {self.vwap.value}"
