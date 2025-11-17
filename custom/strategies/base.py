@@ -1,11 +1,13 @@
+from enum import StrEnum, auto
 import json
 from abc import abstractmethod
 from datetime import timedelta
+from typing import Optional
 
 import pandas as pd
 from pandas import Timestamp
 
-from custom.app_utils.viz import write_to_ticks_and_metrics_txt_file, write_to_signals_file
+from custom.app_utils.viz import write_to_ticks_and_metrics_pkl_file, write_to_signals_file
 from custom.utils import run_artifacts_subdir
 from nautilus_trader.common.component import TimeEvent
 from nautilus_trader.config import StrategyConfig
@@ -26,6 +28,10 @@ from nautilus_trader.model.orders.list import OrderList
 from nautilus_trader.trading.strategy import Strategy
 
 
+class ArtifactsLocation(StrEnum):
+    VIZ = auto()
+    RUNS = auto()
+
 class BaseStrategyConfig(StrategyConfig, frozen=True):
     instrument_id: InstrumentId
     trade_size: int
@@ -36,8 +42,9 @@ class BaseStrategyConfig(StrategyConfig, frozen=True):
 
 
 class BaseStrategy(Strategy):
-    save_artifacts: bool = False
+    artifacts_location: Optional[ArtifactsLocation] = None
     buy_signal_delay_secs: int = 1
+    log_update_every_secs: int = 30
 
     def __init__(self, config: BaseStrategyConfig) -> None:
         super().__init__(config)
@@ -58,6 +65,7 @@ class BaseStrategy(Strategy):
         self._last_order_modify_dict = {}
         self._already_cancelled_orders = set()
         self._uncached_orders = set()
+        self._last_log_update_dt = 0
 
     @property
     def position_qty(self):
@@ -67,7 +75,8 @@ class BaseStrategy(Strategy):
     def position_avg_px(self):
         positions_open = self.cache.positions_open(instrument_id=self.config.instrument_id)
         if len(positions_open) == 0:
-            raise RuntimeError("No position open")
+            return 0
+            # raise RuntimeError("No position open")
         if len(positions_open) == 1:
             position = positions_open[0]
             position_average = position.avg_px_open
@@ -208,10 +217,17 @@ class BaseStrategy(Strategy):
 
         self._update_buy_signals(tick)
 
-        if self.save_artifacts:
+        if self.artifacts_location is not None:
             for metric in self.metrics_to_save:
                 tick_data = {**tick_data, **metric.get_vals()}
             self._tick_data_dicts[self._tick_init_dt_adjusted] = tick_data
+
+        if (self._tick_init_dt_adjusted - self._last_log_update_dt) / 1e9 > self.log_update_every_secs:
+            timestamp = pd.Timestamp(self._tick_init_dt_adjusted, unit="ns")
+            open_buys = len(self.submitted_or_open_orders(side=OrderSide.BUY))
+            open_sells = len(self.submitted_or_open_orders(side=OrderSide.SELL))
+            self.log.info(f"Update\nTick {timestamp}: {tick_data}\nPosition {self.position_qty} @ {self.position_avg_px}\nBuy signals: {len(self.buy_sell_signals)} | Buys {self.buy_orders_count} | Open Buys {open_buys} | Open Sells {open_sells}")
+            self._last_log_update_dt = self._tick_init_dt_adjusted
 
     def _submit_orders_if_allowed(self, order_or_order_list) -> None:
         buy_included = False
@@ -383,8 +399,13 @@ class BaseStrategy(Strategy):
         self.unsubscribe_trade_ticks(self.config.instrument_id)
 
         # Record metrics and trade ticks if present
+        # FIXME: this needs cleaning up
         if len(self._tick_data_dicts) > 0:
-            write_to_ticks_and_metrics_txt_file(self._tick_data_dicts)
+            if self.artifacts_location == ArtifactsLocation.VIZ:
+                directory = None
+            elif self.artifacts_location == ArtifactsLocation.RUNS:
+                directory = run_artifacts_subdir()
+            write_to_ticks_and_metrics_pkl_file(self._tick_data_dicts, directory=directory)
 
         if len(self.buy_sell_signals) > 0:
             write_to_signals_file(list(reversed(self.buy_sell_signals)))

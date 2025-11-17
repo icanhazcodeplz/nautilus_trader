@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 
+from custom.strategies.base import ArtifactsLocation
 from custom.strategies.latency_test import LatencyTestStrategyConfig, LatencyTestStrategy
 from custom.utils import run_artifacts_subdir
 from nautilus_trader.adapters.alpaca import AlpacaExecClientConfig, AlpacaDataClientConfig
@@ -36,7 +37,7 @@ config_node = TradingNodeConfig(
     data_clients={
         ALPACA: AlpacaDataClientConfig(
             paper=paper,
-            feed="iex",
+            feed="sip",
             instrument_provider=instrument_provider_config,
         ),
     },
@@ -58,6 +59,7 @@ strategy_config = LatencyTestStrategyConfig(
     order_count=order_count,
 )
 strategy = LatencyTestStrategy(config=strategy_config)
+strategy.artifacts_location = ArtifactsLocation.RUNS
 
 node.trader.add_strategy(strategy)
 node.add_data_client_factory(ALPACA, AlpacaLiveDataClientFactory)

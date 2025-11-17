@@ -2,9 +2,12 @@ import json
 import pandas as pd
 from pathlib import Path
 
+from custom.app_utils.viz import load_ticks_and_metrics_file
+
 # Specify the run directory
-run_dir = Path("data/runs/latency/20251027_TSLA_live")  # TSLA live account 50 trades
+# run_dir = Path("data/runs/latency/20251027_TSLA_live")  # TSLA live account 50 trades
 # run_dir = Path("data/runs/latency/20251027_TSLA_paper")  # TSLA paper account 200 trades
+run_dir = Path("data/runs/20251114_093405")
 
 
 with open(run_dir / "config.json", "r") as f:
@@ -23,10 +26,11 @@ ws_updates_df = pd.DataFrame(_ws_updates)
 order_events_df = pd.DataFrame(_order_events)
 
 # Load ticks_with_orders.pkl
-df = pd.read_pickle(run_dir / "ticks_with_orders.pkl")
-for col in ["ts_event", "ts_recv"]:
-    df[col] = df[col].apply(lambda s: pd.Timestamp(s, tz="UTC"))
+ticks_and_metrics = load_ticks_and_metrics_file(run_dir)
+df = pd.DataFrame(ticks_and_metrics).T
 
+for col in ["ts_event", "ts_recv"]:
+    df[col] = pd.to_datetime(df[col], unit='ns')
 
 def order_analysis(order_submissions_df, ws_updates_df):
     updates = ws_updates_df.copy()

@@ -1,7 +1,7 @@
 import warnings
 from typing import Callable, List
 
-from custom.app_utils.viz import load_ticks_and_metrics_from_txt_file
+from custom.app_utils.viz import load_ticks_and_metrics_file
 from custom.utils.load_catalog_data import get_tbbo_for_viz
 
 
@@ -72,7 +72,7 @@ def get_and_convert_tbbo():
 
 def get_metrics_data():
     warnings.warn("round_time_to_ms_and_increment_dup_times is deprecated.", DeprecationWarning, stacklevel=2)
-    mets = load_ticks_and_metrics_from_txt_file()
+    mets = load_ticks_and_metrics_file()
     return round_time_to_ms_and_increment_dup_times(mets)
 
 

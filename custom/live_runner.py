@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 
+from custom.strategies.base import ArtifactsLocation
 from custom.strategies.momo import MomoStrategy
 from custom.strategies.momo import MomoStrategyConfig
 from custom.utils import run_artifacts_subdir
@@ -34,12 +35,12 @@ config_node = TradingNodeConfig(
         # database=DatabaseConfig(),
         encoding="msgpack",
         timestamps_as_iso8601=True,
-        buffer_interval_ms=100,
+        buffer_interval_ms=None,
     ),
     data_clients={
         ALPACA: AlpacaDataClientConfig(
             paper=paper,
-            feed="iex",  # 'iex' or 'sip' (SIP requires paid subscription)
+            feed="sip",  # 'iex' or 'sip' (SIP requires paid subscription)
             instrument_provider=instrument_provider_config,
         ),
     },
@@ -68,13 +69,16 @@ strategy_config = MomoStrategyConfig(
     take_ratio=0.8,
     vwap_window=100,
     variance_window_ratio=1.5,
-    upper_lower_scaler=0.05,
-    use_oco_sell_orders=True,
+    upper_lower_scaler=0.01,
+    trailing_buy_order=False,
     use_bracket_orders=False,
+    use_oco_sell_orders=True,
+    random_buy=True,
     simple_take=False,
     allow_trades=True,
 )
 strategy = MomoStrategy(config=strategy_config)
+strategy.artifacts_location = ArtifactsLocation.RUNS
 
 node.trader.add_strategy(strategy)
 

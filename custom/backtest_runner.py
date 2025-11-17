@@ -5,6 +5,7 @@ import pandas as pd
 
 from custom import BACKTEST_SYMBOL
 from custom.catalog_options import CATALOG_OPTIONS
+from custom.strategies.base import ArtifactsLocation
 from custom.utils.load_catalog_data import VENUE, get_catalog_data
 from custom.nt_extensions.limit_fill_model import LimitFillModel
 from custom.utils.orders_to_trades import orders_to_trades
@@ -86,7 +87,7 @@ def _calculate_win_ratio(orders_report):
 
 
 def run_single_backtest(
-    dataset_name, strategy_name, params, save_artifacts=False, return_engine=False, log_level="ERROR"
+    dataset_name, strategy_name, params, artifacts_location=None, return_engine=False, log_level="ERROR"
 ):
     params_copy = params.copy()
     random_seed = params_copy.pop("random_seed", None)
@@ -161,7 +162,7 @@ def run_single_backtest(
         config = MomoStrategyConfig(instrument_id=test_instrument.id, **params_copy)
         strategy = MomoStrategy(config=config)
 
-    strategy.save_artifacts = save_artifacts
+    strategy.artifacts_location = artifacts_location
 
     engine.add_strategy(strategy=strategy)
     random.seed(random_seed)
@@ -203,7 +204,7 @@ def run_multiple_backtests(dataset_names, strategy_name, params, log_level="ERRO
     performance_stats = []
     for dataset_name in dataset_names:
         p_stats = run_single_backtest(
-            dataset_name, strategy_name, params, save_artifacts=False, return_engine=False, log_level=log_level
+            dataset_name, strategy_name, params, artifacts_location=None, return_engine=False, log_level=log_level
         )
         performance_stats.append({"name": dataset_name, **p_stats})
     stats_df = pd.DataFrame(performance_stats).round(3)
@@ -214,6 +215,7 @@ if __name__ == "__main__":
     log_level = "INFO"
     # log_level = "DEBUG"
     # log_level = "ERROR"
+    # log_level = "WARNING"
 
     strategy_name = "momo"
 
@@ -225,14 +227,22 @@ if __name__ == "__main__":
         take_ratio=0.8,
         vwap_window=100,
         variance_window_ratio=1.5,
-        upper_lower_scaler=0.10,
+        upper_lower_scaler=0.01,
+        trailing_buy_order=False,
         use_bracket_orders=False,
         use_oco_sell_orders=True,
         simple_take=False,
         allow_trades=True,
-        random_seed=4,
+        random_buy=True,
+        random_seed=11,
     )
-    datasets = ["zooz"]
+    datasets = [
+    "aapl1103",
+    "aapl1104",
+    "aapl1105",
+    "aapl1106",
+    "aapl1107",
+    ]
     run_BACKTEST_SYMBOL = True
 
     all_stats = []
@@ -247,7 +257,7 @@ if __name__ == "__main__":
             pass
     else:
         engine = run_single_backtest(
-            BACKTEST_SYMBOL, strategy_name, params, save_artifacts=True, return_engine=True, log_level=log_level
+            BACKTEST_SYMBOL, strategy_name, params, artifacts_location=ArtifactsLocation.VIZ, return_engine=True, log_level=log_level
         )
         order_fills_report = engine.trader.generate_order_fills_report()
         fills_report = engine.trader.generate_fills_report()

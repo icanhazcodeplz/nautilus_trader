@@ -1,5 +1,7 @@
 from datetime import timedelta
 
+import pandas as pd
+
 from custom.strategies.base import BaseStrategy, BaseStrategyConfig
 from nautilus_trader.common.component import TimeEvent
 from nautilus_trader.model.data import TradeTick
@@ -28,8 +30,16 @@ class LatencyTestStrategy(BaseStrategy):
         self._order_count = 0
 
     def _on_trade_tick(self, tick: TradeTick) -> None:
+        # USE FOR STREAMING TRADES
+        # init_dt = pd.Timestamp(tick.ts_init, unit='ns').tz_localize('UTC').tz_convert('US/Eastern').strftime('%H:%M:%S.%f')
+        # ts_event = pd.Timestamp(tick.ts_event, unit='ns').tz_localize('UTC').tz_convert('US/Eastern').strftime('%H:%M:%S.%f')
+        # print(f"{ts_event}  {init_dt}  {tick.price}  {tick.size}")
+
         if self.config.buy_on_tick:
-            if len(self.submitted_or_open_orders()) == 0 and (self.clock.utc_now() - self.last_buy_dt).total_seconds() > self.min_secs_between_buys:
+            if (
+                len(self.submitted_or_open_orders()) == 0
+                and (self.clock.utc_now() - self.last_buy_dt).total_seconds() > self.min_secs_between_buys
+            ):
                 self.buy(quantity=1, limit_price=tick.price * 0.85, tag="b")
 
     def _modify_or_cancel(self, _: TimeEvent):
@@ -39,14 +49,19 @@ class LatencyTestStrategy(BaseStrategy):
             raise RuntimeError(f"More than one order open. Raising")
 
         if not self.config.buy_on_tick:
-            if len(open_orders) == 0 and (self.clock.utc_now() - self.last_buy_dt).total_seconds() > self.min_secs_between_buys:
+            if (
+                len(open_orders) == 0
+                and (self.clock.utc_now() - self.last_buy_dt).total_seconds() > self.min_secs_between_buys
+            ):
                 self.buy(quantity=1, limit_price=0.5, tag="b")
 
         for order in open_orders:
             event_names = [str(event.__class__.__name__) for event in order.events]
             if "OrderPendingUpdate" not in event_names:
                 new_price = order.price * 0.95
-                self.modify_order(order, quantity=self.instrument.make_qty(1), price=self.instrument.make_price(new_price))
+                self.modify_order(
+                    order, quantity=self.instrument.make_qty(1), price=self.instrument.make_price(new_price)
+                )
             elif "OrderUpdated" in event_names and "OrderPendingCancel" not in event_names:
                 self.cancel_order(order)
                 self._order_count += 1
@@ -54,11 +69,7 @@ class LatencyTestStrategy(BaseStrategy):
                     self.stop()
 
     def on_start(self) -> None:
-        self.clock.set_timer(
-            name="modify_or_cancel_order",
-            interval=timedelta(seconds=3),
-            callback=self._modify_or_cancel,
-        )
+        self.clock.set_timer(name="modify_or_cancel", interval=timedelta(seconds=3), callback=self._modify_or_cancel)
 
         self.instrument = self.cache.instrument(self.config.instrument_id)
         self.subscribe_trade_ticks(self.config.instrument_id)

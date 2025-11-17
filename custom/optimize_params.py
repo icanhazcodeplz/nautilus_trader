@@ -109,7 +109,7 @@ def optimize(trial):
             return previous_trail_value
 
     performance_stats = run_single_backtest(
-        dataset, strategy_name, params, save_artifacts=False, return_engine=False, log_level="ERROR"
+        dataset, strategy_name, params, artifacts_location=None, return_engine=False, log_level="ERROR"
     )
     try:
         if OPTIMIZE_BUY_SIGNALS:

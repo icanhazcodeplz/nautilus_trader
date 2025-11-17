@@ -4,7 +4,7 @@ import pickle
 
 PRICE_MARKERS_FILE = data_subdir("viz", "price_markers.txt")
 SIGNALS_FILE = data_subdir("viz", "signals.txt")
-TICKS_AND_METRICS_FILE = data_subdir("viz", "ticks_and_metrics.txt")
+TICKS_AND_METRICS_FILE = data_subdir("viz", "ticks_and_metrics.pkl")
 
 
 def dict_to_file(dict_, filename):
@@ -82,13 +82,15 @@ class CreateMarkers:
         return load_txt_file_to_dict(PRICE_MARKERS_FILE)
 
 
-def write_to_ticks_and_metrics_txt_file(metrics):
-    with open(TICKS_AND_METRICS_FILE, "wb") as f:
+def write_to_ticks_and_metrics_pkl_file(metrics, directory=None):
+    filepath = TICKS_AND_METRICS_FILE if directory is None else data_subdir(directory, "ticks_and_metrics.pkl")
+    with open(filepath, "wb") as f:
         pickle.dump(metrics, f, protocol=pickle.HIGHEST_PROTOCOL)
 
 
-def load_ticks_and_metrics_from_txt_file():
-    with open(TICKS_AND_METRICS_FILE, "rb") as f:
+def load_ticks_and_metrics_file(directory=None):
+    filepath = TICKS_AND_METRICS_FILE if directory is None else directory/"ticks_and_metrics.pkl"
+    with open(filepath, "rb") as f:
         return pickle.load(f)
 
 

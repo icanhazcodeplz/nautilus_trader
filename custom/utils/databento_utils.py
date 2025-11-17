@@ -155,12 +155,8 @@ if __name__ == "__main__":
     """
     Candidates
 
-    10/14 - NVA
-    10/14 - JDZG
-    10/14 - GWAV
     10/13 - ELAB after hours
     10/13 - AQMS after hours
-    10/13 - CHNR
     10/13 - NDRA
     10/13 - STI
     10/13 - PMAX
@@ -200,27 +196,17 @@ if __name__ == "__main__":
     9/29 - MSS
 
     pulled already
+    10/14 - JDZG
+    10/14 - GWAV
+    10/14 - NVA
+    10/13 - CHNR
     9/19 - ZOOZ
     9/19 - AGMH
     """
 
-    symbol = "tsla"
+    symbol = "CHNR"
     for start_dt in [
-        pd.Timestamp("2025-10-20", tz="America/New_York"),
-        pd.Timestamp("2025-10-21", tz="America/New_York"),
-        pd.Timestamp("2025-10-22", tz="America/New_York"),
-        pd.Timestamp("2025-10-23", tz="America/New_York"),
-        pd.Timestamp("2025-10-24", tz="America/New_York"),
-        pd.Timestamp("2025-10-27", tz="America/New_York"),
-        pd.Timestamp("2025-10-28", tz="America/New_York"),
-        pd.Timestamp("2025-10-29", tz="America/New_York"),
-        pd.Timestamp("2025-10-30", tz="America/New_York"),
-        pd.Timestamp("2025-10-31", tz="America/New_York"),
-        pd.Timestamp("2025-11-03", tz="America/New_York"),
-        pd.Timestamp("2025-11-04", tz="America/New_York"),
-        pd.Timestamp("2025-11-05", tz="America/New_York"),
-        pd.Timestamp("2025-11-06", tz="America/New_York"),
-        pd.Timestamp("2025-11-07", tz="America/New_York"),
+        pd.Timestamp("2025-10-13", tz="America/New_York"),
     ]:
 
         end_dt = start_dt + pd.Timedelta(days=1)

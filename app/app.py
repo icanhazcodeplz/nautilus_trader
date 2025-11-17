@@ -7,7 +7,7 @@ from flask import Flask, render_template, jsonify
 from flask_restful import Api
 from flask_cors import CORS
 
-from custom.app_utils.viz import CreateMarkers, load_signals_file, load_ticks_and_metrics_from_txt_file
+from custom.app_utils.viz import CreateMarkers, load_signals_file, load_ticks_and_metrics_file
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, expose_headers=["Content-Range"])
@@ -33,7 +33,7 @@ def index():
 
 @app.route("/api/data")
 def get_data():
-    ticks_dict = load_ticks_and_metrics_from_txt_file()
+    ticks_dict = load_ticks_and_metrics_file()
     markers = CreateMarkers().load_markers()
     signals = load_signals_file()
 
