@@ -2,8 +2,6 @@ import traceback
 
 from custom.artifacts import ArtifactsIO
 from nautilus_trader.backtest.engine import BacktestEngine
-
-from custom.artifacts import ArtifactsIO
 from nautilus_trader.live.node import TradingNode
 
 
@@ -17,6 +15,10 @@ def run_strategy(strategy, node_or_engine, artifacts_location=None, run_config=N
 
     try:
         node_or_engine.run()
+    except Exception as e:
+        # Log the error to NautilusTrader logger
+        node_or_engine.logger.error(f"Exception during run: {e}")
+        node_or_engine.logger.error(f"Traceback:\n{traceback.format_exc()}")
     finally:
         orders_report = node_or_engine.trader.generate_orders_report()
         performance_stats = {

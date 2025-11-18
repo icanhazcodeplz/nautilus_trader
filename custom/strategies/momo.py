@@ -12,7 +12,7 @@ from nautilus_trader.model.data import Bar
 from nautilus_trader.model.data import TradeTick
 from nautilus_trader.model.events import OrderFilled
 from nautilus_trader.model.identifiers import InstrumentId
-from nautilus_trader.model.enums import OrderSide
+from nautilus_trader.model.enums import OrderSide, OrderStatus
 
 
 @dataclass
@@ -146,7 +146,7 @@ class MomoStrategy(BaseStrategy):
         # BUY LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         if self.config.trailing_buy_order:
             vwap_lower = self.instrument.make_price(self.vwap.lower)
-            for order in buy_orders:
+            for order in copy(self.open_buys):
                 if order.price != vwap_lower:
                     self.modify_order(order, quantity=order.quantity, price=vwap_lower)
                 if order.filled_qty > 0:
@@ -184,21 +184,21 @@ class MomoStrategy(BaseStrategy):
                         tag=f"{self._buy_signals_count}",
                     )
                 elif not self.config.trailing_buy_order:
-                    self.buy(self.config.trade_size, price, cancel_after_secs=None, tag=f"{self._buy_signals_count}")
+                    self.buy(self.config.trade_size, price, cancel_after_secs=10, tag=f"{self._buy_signals_count}")
 
         # TAKE LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         if not self.config.use_bracket_orders and not self.config.use_oco_sell_orders:
             if (
-                position_qty > 0
+                self.open_sell_qty < position_qty
                 and price >= self.take_price
                 and (self.clock.utc_now() - self.last_take_ts).total_seconds() > 1
             ):
                 if self.config.simple_take:
                     self.sell(position_qty, limit_price=price, cancel_after_secs=10, tag="simple")
                 elif (
-                    price > (self.vwap.value + self.config.vwap_sell_threshold)
-                    and price <= price_1ago
-                    and tick.size > 1
+                    # price > self.vwap.upper
+                    # and price <= price_1ago
+                    tick.size > 1
                 ):
                     # and price > self.vwap.upper
                     sell_qty = max(int(position_qty * self.config.take_ratio), int(self.config.trade_size / 10), 1)

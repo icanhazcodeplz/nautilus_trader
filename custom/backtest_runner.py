@@ -5,7 +5,7 @@ import pandas as pd
 
 from custom import BACKTEST_SYMBOL
 from custom.catalog_options import CATALOG_OPTIONS
-from custom.utils.load_catalog_data import VENUE, get_catalog_data
+from custom.utils.load_catalog_data import get_catalog_data
 from custom.nt_extensions.limit_fill_model import LimitFillModel
 from custom.strategies.momo import MomoStrategyConfig, MomoStrategy
 from custom.artifacts import ArtifactsIO, VIZ_ARTIFACTS_PATH
@@ -16,7 +16,10 @@ from custom.statistics.trade_avg import AvgTrade
 from custom.statistics.trade_avg_scaled import PnlPer100, TotalBought
 from custom.statistics.trade_counts import Winners, Losers, NumTrades
 from custom.statistics.win_loss_ratio import WinLossRatio
+from custom.utils.orders_to_trades import orders_to_trades
 from custom.utils.run_utils import run_strategy
+from nautilus_trader.adapters.alpaca import ALPACA
+from nautilus_trader.adapters.databento import DATABENTO
 from nautilus_trader.backtest.models import LatencyModel
 from nautilus_trader.cache.config import CacheConfig
 from nautilus_trader.config import LoggingConfig
@@ -51,8 +54,11 @@ latency_model = LatencyModel(
 )
 # latency_model=LatencyModel()
 
+DATA_VENUE = DATABENTO
+DATA_VENUE = ALPACA
 
-def _calculate_oco_win_ratio(orders_report):
+
+def _calculate_oco_win_ratio_DEPRECATED(orders_report):
     """Calculate win/loss ratio based on each buy order."""
     if "trigger_price" in orders_report:
         cols = ["side", "quantity", "filled_qty", "price", "trigger_price", "avg_px", "tags", "ts_init", "ts_last"]
@@ -80,13 +86,17 @@ def _calculate_oco_win_ratio(orders_report):
     orders["price"] = orders["price"].astype(float)
     orders["filled_qty"] = orders["filled_qty"].astype(int)
     pnl_for_each_buy = orders.groupby("order_num")[["side", "filled_qty", "price"]].apply(pnl)
+    trade_count = len(pnl_for_each_buy)
+    if trade_count == 0:
+        return 0, 0
     wins = len(pnl_for_each_buy[pnl_for_each_buy > 0])
     losses = len(pnl_for_each_buy[pnl_for_each_buy < 0])
-    win_ratio = round(wins / (wins + losses), 3)
 
-    print(f"{len(pnl_for_each_buy)} buys. W/L {wins}|{losses} = {win_ratio}\n")
+    win_ratio = round(wins / trade_count, 3)
 
-    return wins, len(pnl_for_each_buy)
+    print(f"{trade_count} buys. W/L {wins}|{losses} = {win_ratio}\n")
+
+    return wins, trade_count
 
 
 def buy_signal_stats(signals):
@@ -128,7 +138,7 @@ def run_single_backtest(dataset_name, strategy_name, params, artifacts_location=
     )
 
     engine.add_venue(
-        venue=Venue(VENUE),
+        venue=Venue(DATA_VENUE),
         # book_type=BookType.L3_MBO,
         book_type=BookType.L1_MBP,
         oms_type=OmsType.NETTING,
@@ -144,11 +154,15 @@ def run_single_backtest(dataset_name, strategy_name, params, artifacts_location=
     dataset_params = CATALOG_OPTIONS[dataset_name.lower()]
     symbol = dataset_params["symbol"]
 
-    test_instrument = TestInstrumentProvider.equity(symbol=symbol, venue=VENUE)
+    test_instrument = TestInstrumentProvider.equity(symbol=symbol, venue=DATA_VENUE)
     engine.add_instrument(test_instrument)
 
-    engine.add_data(get_catalog_data(symbol, dataset_params["start"], dataset_params["end"], data_cls=TradeTick))
-    engine.add_data(get_catalog_data(symbol, dataset_params["start"], dataset_params["end"], data_cls=QuoteTick))
+    engine.add_data(
+        get_catalog_data(symbol, dataset_params["start"], dataset_params["end"], data_cls=TradeTick, venue=DATA_VENUE)
+    )
+    engine.add_data(
+        get_catalog_data(symbol, dataset_params["start"], dataset_params["end"], data_cls=QuoteTick, venue=DATA_VENUE)
+    )
 
     avg_trade_scaled = PnlPer100()
 
@@ -192,6 +206,18 @@ def run_multiple_backtests(dataset_names, strategy_name, params, log_level="ERRO
         performance_stats.append({"name": dataset_name, **p_stats})
     stats_df = pd.DataFrame(performance_stats).round(3)
     return stats_df
+
+
+def analyze_trades(trades, print_report=False):
+    wins = len(trades[trades["pnl"] > 0])
+    losses = len(trades[trades["pnl"] < 0])
+    scratches = len(trades[trades["pnl"] == 0])
+    trade_count = len(trades)
+    win_ratio = round(wins / trade_count, 3)
+    if print_report:
+        print(f"\nTrades:  {trade_count}   {wins}|{losses}|{scratches} = {win_ratio}")
+        print(f"Total PnL: ${round(trades['pnl'].sum(), 2)} | Per trade: ${round(trades['pnl'].mean(), 3)}\n")
+    return win_ratio
 
 
 if __name__ == "__main__":
@@ -248,8 +274,15 @@ if __name__ == "__main__":
         )
 
         artifacts_io = ArtifactsIO(VIZ_ARTIFACTS_PATH)
-        orders_report = artifacts_io.load_orders_report()
-
         num_buy_sells, long_wins = buy_signal_stats(artifacts_io.load_signals())
-        win_ratio = _calculate_oco_win_ratio(orders_report)
+
+        orders_report = artifacts_io.load_orders_report()
+        df = orders_report.copy()
+        df = df[df["filled_qty"].astype(int) > 0]
+
+        # win_ratio = _calculate_oco_win_ratio_DEPRECATED(df)
+        trades, sell_legs = orders_to_trades(df)
+        analyze_trades(trades, print_report=True)
+
+        buys = df[df["side"] == "BUY"]
         print()

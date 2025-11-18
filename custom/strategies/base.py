@@ -66,6 +66,9 @@ class BaseStrategy(Strategy):
         self._artifacts_io = None
         self.save_artifacts = False
 
+        self.open_buys = set()
+        self.open_sells = set()
+
     def initialize(self, artifacts_location: Optional[Path]):
         self._initialized = True
         if artifacts_location is not None:
@@ -90,31 +93,53 @@ class BaseStrategy(Strategy):
             raise RuntimeError("Multiple positions open")
 
     def submitted_or_open_orders(self, side=OrderSide.NO_ORDER_SIDE):
-        inflight_or_open = set(self.cache.orders_inflight(side=side) + self.cache.orders_open(side=side))
-        removed_pending_cancel = [order for order in inflight_or_open if order.status != OrderStatus.PENDING_CANCEL]
-        return removed_pending_cancel
+        if side == OrderSide.NO_ORDER_SIDE:
+            return self.open_buys.union(self.open_sells)
+        elif side == OrderSide.BUY:
+            return self.open_buys
+        elif side == OrderSide.SELL:
+            return self.open_sells
+        else:
+            raise ValueError(f"Unexpected side: {side}")
+        # inflight_or_open = set(self.cache.orders_inflight(side=side) + self.cache.orders_open(side=side))
+        # removed_pending_cancel = [order for order in inflight_or_open if order.status != OrderStatus.PENDING_CANCEL]
+        # return removed_pending_cancel
+
+    @property
+    def open_buy_qty(self):
+        return sum(int(order.leaves_qty) for order in self.open_buys)
+
+    @property
+    def open_sell_qty(self):
+        return sum(int(order.leaves_qty) for order in self.open_sells)
 
     def modify_order(self, order, quantity, price):
-        last_mod = self._last_order_modify_dict.get(order.client_order_id, None)
-        mod_vals = (quantity, price)
-        if last_mod is not None and last_mod == mod_vals:
-            self.log.debug(
-                f"Not modifying order {order.client_order_id}. Request has already been sent with values {mod_vals}."
+        if order.venue_order_id is not None:
+            last_mod = self._last_order_modify_dict.get(order.client_order_id, None)
+            mod_vals = (quantity, price)
+            if last_mod is not None and last_mod == mod_vals:
+                self.log.debug(
+                    f"Not modifying order {order.client_order_id}. Request has already been sent with values {mod_vals}."
+                )
+                return
+            self._last_order_modify_dict[order.client_order_id] = mod_vals
+            super().modify_order(
+                order, quantity=self.instrument.make_qty(quantity), price=self.instrument.make_price(price)
             )
-            return
-        self._last_order_modify_dict[order.client_order_id] = mod_vals
-        super().modify_order(
-            order, quantity=self.instrument.make_qty(quantity), price=self.instrument.make_price(price)
-        )
 
     def cancel_order(self, order, client_id=None, params=None):
-        if order in self._already_cancelled_orders:
-            self.log.debug(
-                f"Not cancelling order {order.client_order_id} because cancellation request has already been sent."
-            )
-            return
-        self._already_cancelled_orders.add(order)
-        super().cancel_order(order=order, client_id=client_id, params=params)
+        # if order in self._already_cancelled_orders:
+        #     self.log.debug(
+        #         f"Not cancelling order {order.client_order_id}, venue:{order.venue_order_id} because cancellation request has already been sent."
+        #     )
+        #     return
+        # self._already_cancelled_orders.add(order)
+        if order in (self.open_sells or self.open_buys):
+            if order.venue_order_id is not None:
+                self.open_buys.discard(order)
+                self.open_sells.discard(order)
+
+                super().cancel_order(order=order, client_id=client_id, params=params)
 
     def sell_position_at_price(self, new_limit_price):
         remaining_qty_to_sell = self.position_qty
@@ -220,18 +245,20 @@ class BaseStrategy(Strategy):
             # For OrderList type, submit all at once, but parse through each to check for a buy order (from bracket)
             # and to add to uncached
             if isinstance(order_or_order_list, OrderList):
+                raise ValueError("Need to figure out how to update open_buys and open_sells")
                 self.submit_order_list(order_or_order_list)
                 for order in order_or_order_list.orders:
                     if order.side == OrderSide.BUY:
                         buy_included = True
-                    # self._uncached_orders.add(order)
 
             # If single item, submit and add to uncached
             elif isinstance(order_or_order_list, Order):
                 self.submit_order(order_or_order_list)
                 if order_or_order_list.side == OrderSide.BUY:
                     buy_included = True
-                # self._uncached_orders.add(order_or_order_list)
+                    self.open_buys.add(order_or_order_list)
+                if order_or_order_list.side == OrderSide.SELL:
+                    self.open_sells.add(order_or_order_list)
             else:
                 raise ValueError(f"Unexpected order type: {type(order_or_order_list)}")
         if buy_included:
@@ -334,14 +361,18 @@ class BaseStrategy(Strategy):
 
     def on_order_filled(self, order) -> None:
         self._on_order_filled(order)
+        cached_order = self.cache.order(order.client_order_id)
 
+        if cached_order.leaves_qty == 0:
+            self.open_buys.discard(cached_order)
+            self.open_sells.discard(cached_order)
         # Clean up order modify dict to reduce memory usage
         self._last_order_modify_dict.pop(order.client_order_id, None)
 
     def _cancel_orders_past_timeout(self, event: TimeEvent):
         # Cancel open orders if they have reached their expiration time
         open_orders = self.submitted_or_open_orders(OrderSide.BUY)
-        for order in open_orders:
+        for order in copy(open_orders):
             if len(order.tags) > 1:
                 expire_time = order.tags[1]  # FIXME: hardcoded to look at second item
                 if self.clock.utc_now() > expire_time:
@@ -390,6 +421,8 @@ class BaseStrategy(Strategy):
         pass
 
     def on_order_event(self, order) -> None:
+        if isinstance(order, OrderRejected):
+            print()
         # Check if this order was submitted but not yet cached
         # if self.cache.order(order.client_order_id) is None:
         #     # self.cache.add_order(order)
