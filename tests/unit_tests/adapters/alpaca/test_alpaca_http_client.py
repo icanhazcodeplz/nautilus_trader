@@ -14,6 +14,7 @@
 # -------------------------------------------------------------------------------------------------
 
 """Tests for AlpacaHttpClient."""
+from time import sleep
 
 import pytest
 
@@ -44,13 +45,26 @@ async def test_submit_order():
         },
         "stop_loss": {
             "stop_price": "259",
-            "limit_price": "258.5"
         }
     }
 
     alpaca_http_client = AlpacaHttpClient(paper=True, timeout=30, record_orders=False)
     # Act
     result = await alpaca_http_client.submit_order(order_request)
+    # MONDAY TODO: test to see if updating order works
+    sleep(4)
+    order_id = result["id"]
+    json_data = {
+        "limit_price":"261",
+        "take_profit": {
+            "limit_price": "301"
+        },
+        "stop_loss": {
+            "stop_price": "250",
+        }
+    }
+    update = await alpaca_http_client._request("PATCH", f"/v2/orders/{order_id}", json_data=json_data)  # type: ignore
+    print(update)
 
     # Assert
     # assert result is not None

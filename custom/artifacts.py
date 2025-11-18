@@ -10,7 +10,7 @@ VIZ_ARTIFACTS_PATH = data_subdir("viz")
 
 def dict_to_file(dict_, filename):
     with open(filename, "w") as f:
-        json.dump(dict_, f)
+        json.dump(dict_, f, indent=2, default=str)
 
 
 def load_txt_file_to_dict(filename):

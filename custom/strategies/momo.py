@@ -1,4 +1,5 @@
 from collections import deque
+from copy import copy
 from dataclasses import dataclass
 from random import random
 

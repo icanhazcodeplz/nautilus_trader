@@ -1,4 +1,5 @@
 from abc import abstractmethod
+from copy import copy
 from datetime import timedelta
 from pathlib import Path
 from typing import Optional
@@ -20,6 +21,8 @@ from nautilus_trader.model.enums import OrderSide, ContingencyType, OrderStatus
 from nautilus_trader.model.enums import OrderType
 from nautilus_trader.model.enums import TimeInForce
 from nautilus_trader.model.identifiers import InstrumentId
+
+from nautilus_trader.model.events import OrderRejected
 from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.model.orders import LimitOrder, Order
 from nautilus_trader.model.orders.list import OrderList

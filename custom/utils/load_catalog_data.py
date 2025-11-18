@@ -3,6 +3,7 @@ from custom.catalog_options import CATALOG_OPTIONS
 from custom.nt_extensions.tbbo_data import TBBOData
 
 from nautilus_trader import PACKAGE_ROOT
+from nautilus_trader.adapters.databento import DATABENTO
 from nautilus_trader.persistence.catalog import ParquetDataCatalog
 
 CATALOG_PATH = PACKAGE_ROOT / "catalog"
@@ -10,7 +11,7 @@ BACKTESTING_CATALOG = ParquetDataCatalog(CATALOG_PATH)
 # VENUE = "SIM"
 VENUE = "DATABENTO"
 
-def get_tbbo_for_viz():
+def get_tbbo_for_viz(venue=DATABENTO):
     params = CATALOG_OPTIONS[BACKTEST_SYMBOL]
     tbbo =  BACKTESTING_CATALOG.query(
         data_cls=TBBOData,

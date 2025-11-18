@@ -6,7 +6,7 @@ import pandas as pd
 def market_round(price):
     if price < 1.0:
         return round(price, 4)
-    return round(price, 2)
+    return round(price, 3)
 
 
 def _process_nautilus_orders_df(orders_df: pd.DataFrame) -> pd.DataFrame:
@@ -15,6 +15,7 @@ def _process_nautilus_orders_df(orders_df: pd.DataFrame) -> pd.DataFrame:
     orders["avg_px"] = orders["avg_px"].astype(float)
     orders["tags"] = orders["tags"].apply(lambda s: s[0] if s is not None else "Missing")
     orders["filled_qty"] = orders["filled_qty"].astype(int)
+    orders = orders.sort_values(by="ts_last")
     return orders
 
 

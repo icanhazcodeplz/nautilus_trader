@@ -14,7 +14,7 @@ from nautilus_trader import ENV
 from custom.nt_extensions.tbbo_data import TBBOData
 from custom.utils import data_subdir
 from custom.utils.load_catalog_data import BACKTESTING_CATALOG
-from nautilus_trader.adapters.databento import DatabentoDataLoader
+from nautilus_trader.adapters.databento import DatabentoDataLoader, DATABENTO
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
 
 # dataset = "EQUS.MINI"
@@ -80,7 +80,7 @@ class _DatabentoClient:
         )
         print(f"DataBento get_range request {params}")
         cost = self.check_data_cost(symbol, schema, start_dt, end_dt, dataset)
-        print(f"Estimated cost: ${round(cost,3)}")
+        print(f"Estimated cost: ${round(cost, 3)}")
         data = self.client.timeseries.get_range(**params)
         return data.to_df()
 
@@ -132,7 +132,9 @@ class _DatabentoClient:
             all_tbbo.append(tbbo_df)
 
             data = loader.from_dbn_file(
-                path=self.raw_file_path(symbol, schema, start_dt, end_dt, dset), instrument_id=self._instument_id(symbol), include_trades=True
+                path=self.raw_file_path(symbol, schema, start_dt, end_dt, dset),
+                instrument_id=self._instument_id(symbol),
+                include_trades=True,
             )
             all_data.append(data)
 
@@ -146,55 +148,13 @@ class _DatabentoClient:
         BACKTESTING_CATALOG.write_data(sorted_mbp_data)
 
     def _instument_id(self, symbol):
-        return TestInstrumentProvider.equity(symbol=symbol, venue="DATABENTO").id
+        return TestInstrumentProvider.equity(symbol=symbol, venue=DATABENTO).id
 
 
 DatabentoClient = _DatabentoClient()
 
 if __name__ == "__main__":
     """
-    Candidates
-
-    10/13 - ELAB after hours
-    10/13 - AQMS after hours
-    10/13 - NDRA
-    10/13 - STI
-    10/13 - PMAX
-    10/13 - GWH
-    10/10 - GWH
-    10/10 - SGBX
-    10/9 - YDDL after hours
-    10/9 - LFS after hours
-    10/9 - BJDX
-    10/9 - TTRX (ipo 10/8)
-    10/9 - BAOS
-    10/8 - AMBO (after hours)
-    10/8 - XBIO
-    10/8 - ACXB
-    10/8 - XTLB
-    10/8 - BIAF
-    10/7 - BJDX
-    10/7 - CISS
-    10/7 - GLTO
-    10/6 - SPRB
-    10/6 - CRML
-    10/6 - SOPA
-    10/2 - IVDA
-    10/2 - CIGL
-    10/1 - AKAN
-    10/1 - PALI
-    10/1 - LAC
-    9/30 - LAC (after hours)
-    9/30 - SPRC
-    9/29 - POAI
-    9/25 - SPRC
-    9/25 - EVAX
-    9/24 - TNFA
-    9/24 - SHFS
-    9/23 - SHFS (after hours)
-    9/23 - FLD
-    9/29 - MSS
-
     pulled already
     10/14 - JDZG
     10/14 - GWAV
@@ -208,7 +168,6 @@ if __name__ == "__main__":
     for start_dt in [
         pd.Timestamp("2025-10-13", tz="America/New_York"),
     ]:
-
         end_dt = start_dt + pd.Timedelta(days=1)
 
         # https://databento.com/docs/schemas-and-data-formats?historical=python&live=python&reference=python

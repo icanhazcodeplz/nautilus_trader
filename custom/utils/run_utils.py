@@ -1,3 +1,6 @@
+import traceback
+
+from custom.artifacts import ArtifactsIO
 from nautilus_trader.backtest.engine import BacktestEngine
 
 from custom.artifacts import ArtifactsIO
