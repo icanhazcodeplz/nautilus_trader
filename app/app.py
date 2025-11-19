@@ -43,6 +43,7 @@ def get_data():
 
     orders_report = artifacts_io.load_orders_report()
     trades, sell_legs = orders_to_trades(orders_report)
+    trades = trades[trades["avg_sell_price"] > 0]
     markers = CreateMarkers().create_trades_markers(trades, sell_legs)
 
     # Markers may not have same time as a tick

@@ -57,26 +57,27 @@ class LimitFillModel(FillModel):
             book.add(at_last_trade_order, 0, 0)
 
         # If the ask is less than the order price, fill half qty of the ask
-        if order.side == OrderSide.BUY and quote.ask_price <= order.price:
-            order = BookOrder(
-                side=OrderSide.SELL,
-                price=quote.ask_price,
-                # HARDCODE: only fill 50% of quote ask size
-                size=Quantity(int(quote.ask_size / 2), instrument.size_precision),
-                order_id=2,
-            )
-            book.add(order, 0, 0)
+        if quote is not None:
+            if order.side == OrderSide.BUY and quote.ask_price <= order.price:
+                order = BookOrder(
+                    side=OrderSide.SELL,
+                    price=quote.ask_price,
+                    # HARDCODE: only fill 50% of quote ask size
+                    size=Quantity(int(quote.ask_size / 2), instrument.size_precision),
+                    order_id=2,
+                )
+                book.add(order, 0, 0)
 
-        # If the bid is more than the order price, fill half qty of the bid
-        if order.side == OrderSide.SELL and quote.bid_price >= order.price:
-            order = BookOrder(
-                side=OrderSide.BUY,
-                price=quote.bid_price,
-                # HARDCODE: only fill 50% of quote bid size
-                size=Quantity(int(quote.bid_size / 2), instrument.size_precision),
-                order_id=2,
-            )
-            book.add(order, 0, 0)
+            # If the bid is more than the order price, fill half qty of the bid
+            if order.side == OrderSide.SELL and quote.bid_price >= order.price:
+                order = BookOrder(
+                    side=OrderSide.BUY,
+                    price=quote.bid_price,
+                    # HARDCODE: only fill 50% of quote bid size
+                    size=Quantity(int(quote.bid_size / 2), instrument.size_precision),
+                    order_id=2,
+                )
+                book.add(order, 0, 0)
 
         if book.update_count == 0:
             return None

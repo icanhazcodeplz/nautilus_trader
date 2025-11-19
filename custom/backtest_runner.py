@@ -209,6 +209,8 @@ def run_multiple_backtests(dataset_names, strategy_name, params, log_level="ERRO
 
 
 def analyze_trades(trades, print_report=False):
+    trades = trades.copy()
+    trades = trades[trades["avg_sell_price"] > 0]
     wins = len(trades[trades["pnl"] > 0])
     losses = len(trades[trades["pnl"] < 0])
     scratches = len(trades[trades["pnl"] == 0])

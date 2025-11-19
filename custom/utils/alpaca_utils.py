@@ -61,12 +61,14 @@ def get_trades_and_save_to_catalog(symbol, start_dt_str, end_dt_str):
     # Fetch the tick data
     trades = client.get_stock_trades(request)
     df = trades.df
-    print(f"Fetched {len(df)} trades")
     df = df.reset_index()
+    print(f"Fetched {len(df)} trades")
+    df = df[df["exchange"] != "D"]
+    print(f"Fetched {len(df)} trades")
 
     # Convert each row in df into a TradeTick object and then save to the catalog `BACKTESTING_CATALOG`
     trade_ticks = []
-    for _, row in df.iterrows():
+    for i, row in df.iterrows():
         # Convert timestamp to Unix nanoseconds
         ts_event = dt_to_unix_nanos(row["timestamp"])
         ts_init = ts_event  # Use same timestamp for initialization
@@ -77,10 +79,10 @@ def get_trades_and_save_to_catalog(symbol, start_dt_str, end_dt_str):
             continue
         trade_tick = TradeTick(
             instrument_id=instrument_id,
-            price=Price.from_str(str(row["price"])),
+            price=Price(float(row["price"]), precision=precision),
             size=Quantity.from_str(str(size_)),
             aggressor_side=AggressorSide.NO_AGGRESSOR,  # Alpaca doesn't provide aggressor side
-            trade_id=TradeId(str(row["id"])),
+            trade_id=TradeId(str(i)),
             ts_event=ts_event,
             ts_init=ts_init,
         )
@@ -199,6 +201,7 @@ if __name__ == "__main__":
        9/29 - MSS
 
        pulled already
+       11/13 - SGBX
        10/14 - JDZG
        10/14 - GWAV
        10/14 - NVA
