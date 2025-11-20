@@ -81,8 +81,9 @@ strategy_config = MomoStrategyConfig(
     trailing_buy_order=False,
     use_bracket_orders=False,
     use_oco_sell_orders=False,
-    random_buy=True,
-    simple_take=True,
+    trailing_take=True,
+    random_buy=False,
+    simple_take=False,
     allow_trades=True,
 )
 node.add_data_client_factory(ALPACA, AlpacaLiveDataClientFactory)

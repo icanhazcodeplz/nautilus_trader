@@ -265,7 +265,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
             ts_event=self._clock.timestamp_ns(),
         )
 
-        self._log.info(f"Updated account state: Equity=${equity}", LogColor.BLUE)
+        self._log.debug(f"Updated account state: Equity=${equity}", LogColor.BLUE)
         # except Exception as e:
         #     self._log.error(f"Failed to update account state: {e}")
 
@@ -560,7 +560,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
             self._log.warning(f"Order {order} is already closed")
             return
 
-        self._log.info(f"Submitting order: {order}")
+        self._log.debug(f"Submitting order: {order}")
 
         # Generate order submitted event
         self.generate_order_submitted(
@@ -645,7 +645,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
             The command to modify the order.
 
         """
-        self._log.info(f"Modifying order: {command.client_order_id}")
+        self._log.debug(f"Modifying order: {command.client_order_id}")
 
         try:
             # Get order from cache
@@ -712,8 +712,10 @@ class AlpacaExecutionClient(LiveExecutionClient):
                     new_order = await self._http_client.get_order(venue_order_id.value)
                     if float(new_order["limit_price"]) != float(limit_price):
                         self._log.warning(f"Order already replaced, but limit price has changed. {venue_order_id}")
-                elif msg == "order parameters are not changed":
-                    self._log.info(f"Order {command.client_order_id} is already in desired state, skipping")
+                # elif msg == "order parameters are not changed":
+                #     self._log.info(f"Order {command.client_order_id} is already in desired state, skipping")
+                # elif msg.startswith("qty must be"):
+
                 else:
                     raise Exception from e
 
@@ -738,7 +740,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
             The command to cancel the order.
 
         """
-        self._log.info(f"Canceling order: {command.client_order_id}")
+        self._log.debug(f"Canceling order: {command.client_order_id}")
 
         try:
             # Get order from cache
@@ -898,14 +900,14 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 filled_qty = int(order_data.get("filled_qty"))
                 filled_avg_price = float(order_data.get("filled_avg_price"))
 
-                previous_qty, previous_value = self.order_previous_qty_and_value.get(venue_order_id, (0, 0.0))
+                previous_qty, previous_value = self.order_previous_qty_and_value.get(client_order_id, (0, 0.0))
 
                 this_fill_qty = filled_qty - previous_qty
                 current_total_value = round(filled_qty * filled_avg_price, 4)
                 this_fill_value = current_total_value - previous_value
                 this_fill_px = round(this_fill_value / this_fill_qty, 4)
 
-                self.order_previous_qty_and_value[venue_order_id] = (filled_qty, current_total_value)
+                self.order_previous_qty_and_value[client_order_id] = (filled_qty, current_total_value)
 
                 alpaca_event_id = msg["data"]["event_id"]  # This is a unique id for the trade event
                 currency = Currency.from_str("USD")
@@ -946,16 +948,18 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 )
 
             elif event == "replaced":  # AKA modified
-                self._log.info(f"Order {client_order_id} replaced")
+                self._log.debug(f"Order {client_order_id} replaced")
 
                 replaced_by = msg["data"]["order"]["replaced_by"]
+                qty = msg["data"]["order"]["qty"]
+                limit_price = msg["data"]["order"]["limit_price"]
                 self.generate_order_updated(
                     strategy_id=order.strategy_id,
                     instrument_id=instrument_id,
                     client_order_id=client_order_id,
                     venue_order_id=VenueOrderId(replaced_by),
-                    quantity=order.quantity,
-                    price=order.price,
+                    quantity=Quantity.from_str(qty),
+                    price=Price(float(limit_price), precision=order.price.precision),
                     trigger_price=order.trigger_price if order.has_trigger_price else None,
                     ts_event=ts_event,
                     venue_order_id_modified=True,

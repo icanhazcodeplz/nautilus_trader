@@ -17,12 +17,11 @@ from nautilus_trader.model.data import Bar
 from nautilus_trader.model.data import OrderBookDeltas
 from nautilus_trader.model.data import QuoteTick
 from nautilus_trader.model.data import TradeTick
-from nautilus_trader.model.enums import OrderSide, ContingencyType, OrderStatus
+from nautilus_trader.model.enums import OrderSide, ContingencyType
 from nautilus_trader.model.enums import OrderType
 from nautilus_trader.model.enums import TimeInForce
 from nautilus_trader.model.identifiers import InstrumentId
-
-from nautilus_trader.model.events import OrderRejected
+from nautilus_trader.model.events import OrderRejected, OrderFilled
 from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.model.orders import LimitOrder, Order
 from nautilus_trader.model.orders.list import OrderList
@@ -40,6 +39,8 @@ class BaseStrategyConfig(StrategyConfig, frozen=True):
 class BaseStrategy(Strategy):
     buy_signal_delay_secs: int = 1
     log_update_every_secs: int = None
+    only_modify_every_ns = 60e6  # e6 converts to ms
+    cancel_partial_fills_after_secs = 3
 
     def __init__(self, config: BaseStrategyConfig) -> None:
         super().__init__(config)
@@ -57,7 +58,7 @@ class BaseStrategy(Strategy):
         self.last_buy_signal_dt = 0
 
         # Used to track order modifications to avoid sending duplicate modify orders when the cache is slow
-        self._last_order_modify_dict = {}
+        self._order_modify_dict = {}
         self._already_cancelled_orders = set()
         self._uncached_orders = set()
         self._last_log_update_dt = 0
@@ -115,17 +116,21 @@ class BaseStrategy(Strategy):
 
     def modify_order(self, order, quantity, price):
         if order.venue_order_id is not None:
-            last_mod = self._last_order_modify_dict.get(order.client_order_id, None)
-            mod_vals = (quantity, price)
-            if last_mod is not None and last_mod == mod_vals:
+            qty_obj = self.instrument.make_qty(quantity)
+            price_obj = self.instrument.make_price(price)
+            now_ns = self.clock.timestamp_ns()
+            last_mod_qty, last_mod_price, modify_ns = self._order_modify_dict.get(order.client_order_id, [None] * 3)
+
+            price_or_qty_changed = (last_mod_price != price_obj or last_mod_qty != qty_obj)
+            if last_mod_qty is None or (price_or_qty_changed and (now_ns - modify_ns) > self.only_modify_every_ns):
+                self.log.debug(f"Modifying order {order.client_order_id} with values {qty_obj} @ {price_obj}.")
+                self._order_modify_dict[order.client_order_id] = (qty_obj, price_obj, now_ns)
+                super().modify_order(order, quantity=qty_obj, price=price_obj)
+            else:
                 self.log.debug(
-                    f"Not modifying order {order.client_order_id}. Request has already been sent with values {mod_vals}."
+                    f"Not modifying order {order.client_order_id}. Price {last_mod_price} -> {price_obj} | Qty {last_mod_qty} -> {qty_obj} | Time {round((now_ns - modify_ns) / 1e9, 9)} < 100ms."
                 )
                 return
-            self._last_order_modify_dict[order.client_order_id] = mod_vals
-            super().modify_order(
-                order, quantity=self.instrument.make_qty(quantity), price=self.instrument.make_price(price)
-            )
 
     def cancel_order(self, order, client_id=None, params=None):
         # if order in self._already_cancelled_orders:
@@ -367,9 +372,9 @@ class BaseStrategy(Strategy):
             self.open_buys.discard(cached_order)
             self.open_sells.discard(cached_order)
         # Clean up order modify dict to reduce memory usage
-        self._last_order_modify_dict.pop(order.client_order_id, None)
+        self._order_modify_dict.pop(order.client_order_id, None)
 
-    def _cancel_orders_past_timeout(self, event: TimeEvent):
+    def _cancel_orders_past_timeout_or_partial_fills(self, event: TimeEvent):
         # Cancel open orders if they have reached their expiration time
         open_orders = self.submitted_or_open_orders(OrderSide.BUY)
         for order in copy(open_orders):
@@ -378,13 +383,23 @@ class BaseStrategy(Strategy):
                 if self.clock.utc_now() > expire_time:
                     self.cancel_order(order)
 
+        for order in copy(self.submitted_or_open_orders()):
+            if order.filled_qty > 0:
+                earliest_fill_time_ns = min(fill.ts_event for fill in order.events if isinstance(fill, OrderFilled))
+                ns_since_earliest_fill = self.clock.timestamp_ns() - earliest_fill_time_ns
+                if (ns_since_earliest_fill / 1e9) > self.cancel_partial_fills_after_secs:
+                    self.log.info(
+                        f"Canceling order {order.client_order_id}, because first fill occurred more than {self.cancel_partial_fills_after_secs} secs ago"
+                    )
+                    self.cancel_order(order)
+
     def on_start(self) -> None:
         if not self._initialized:
             raise RuntimeError("Strategy must be initialized before starting. Call method `initialize` first.")
         self.clock.set_timer(
             name="cancel_orders_timer",
             interval=timedelta(seconds=0.25),
-            callback=self._cancel_orders_past_timeout,
+            callback=self._cancel_orders_past_timeout_or_partial_fills,
         )
 
         self.instrument = self.cache.instrument(self.config.instrument_id)

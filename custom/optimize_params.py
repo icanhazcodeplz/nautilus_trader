@@ -84,6 +84,7 @@ def optimize(trial):
         use_bracket_orders=False,
         use_oco_sell_orders=True,
         simple_take=False,
+        trailing_take=True,
         allow_trades=not OPTIMIZE_BUY_SIGNALS,
         random_buy=RANDOM_BUY,
         random_seed=None,

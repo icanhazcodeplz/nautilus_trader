@@ -10,9 +10,8 @@ from custom.strategies.base import BaseStrategy, BaseStrategyConfig
 from nautilus_trader.indicators import VolumeWeightedAveragePrice
 from nautilus_trader.model.data import Bar
 from nautilus_trader.model.data import TradeTick
-from nautilus_trader.model.events import OrderFilled
 from nautilus_trader.model.identifiers import InstrumentId
-from nautilus_trader.model.enums import OrderSide, OrderStatus
+from nautilus_trader.model.enums import OrderSide
 
 
 @dataclass
@@ -41,6 +40,7 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     use_bracket_orders: bool = False
     use_oco_sell_orders: bool = False
     simple_take: bool = False
+    trailing_take: bool = False
     random_buy: bool = False
 
     allow_trades: bool = True
@@ -63,9 +63,11 @@ def is_market_open(now_utc: pd.Timestamp) -> bool:
 class MomoStrategy(BaseStrategy):
     def __init__(self, config: MomoStrategyConfig) -> None:
         super().__init__(config)
-        if sum([self.config.simple_take, self.config.use_bracket_orders, self.config.use_oco_sell_orders]) > 1:
+        if sum([self.config.trailing_take, self.config.simple_take, self.config.use_bracket_orders, self.config.use_oco_sell_orders]) > 1:
             raise ValueError("Cannot use more than one of simple_take, use_bracket_orders, use_oco_sell_orders")
 
+        if sum([self.config.trailing_buy_order, self.config.random_buy]) > 1:
+            raise ValueError("Cannot use more than one of trailing_buy_order, random_buy")
         # FIXME: This is temporary
         self.take_profit = self.config.take_profit if self.config.take_profit is not None else self.config.stop_loss
         self.market_open_only = self.config.use_bracket_orders or self.config.use_oco_sell_orders
@@ -147,17 +149,9 @@ class MomoStrategy(BaseStrategy):
         if self.config.trailing_buy_order:
             vwap_lower = self.instrument.make_price(self.vwap.lower)
             for order in copy(self.open_buys):
+
                 if order.price != vwap_lower:
                     self.modify_order(order, quantity=order.quantity, price=vwap_lower)
-                if order.filled_qty > 0:
-                    earliest_fill_time_ns = min(up.ts_event for up in order.events if isinstance(up, OrderFilled))
-                    ns_since_earliest_fill = self.clock.timestamp_ns() - earliest_fill_time_ns
-                    partial_fill_time_threshold = 0.5
-                    if (ns_since_earliest_fill / 1e9) > partial_fill_time_threshold:
-                        self.log.warning(
-                            f"Canceling order {order.client_order_id}, tag {order.tags[0]} because first fill occurred more than {partial_fill_time_threshold} secs ago"
-                        )
-                        self.cancel_order(order)
 
             if len(buy_orders) == 0 and (self.clock.utc_now() - self.last_buy_dt).total_seconds() > 1:
                 # FIXME: Clunky to add buy orders count tag here. Should be handled in buy()
@@ -184,10 +178,19 @@ class MomoStrategy(BaseStrategy):
                         tag=f"{self._buy_signals_count}",
                     )
                 elif not self.config.trailing_buy_order:
-                    self.buy(self.config.trade_size, price, cancel_after_secs=10, tag=f"{self._buy_signals_count}")
+                    self.buy(self.config.trade_size, price, cancel_after_secs=1, tag=f"{self._buy_signals_count}")
 
         # TAKE LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-        if not self.config.use_bracket_orders and not self.config.use_oco_sell_orders:
+        if self.config.trailing_take and position_qty > 0:
+            vwap_upper = self.instrument.make_price(self.vwap.upper)
+            for order in copy(self.open_sells):
+                if order.price != vwap_upper:
+                    self.modify_order(order, quantity=position_qty, price=vwap_upper)
+
+            if len(self.open_sells) == 0:
+                self.sell(position_qty, vwap_upper, cancel_after_secs=None, tag=f"{self.buy_orders_count}")
+
+        if not self.config.use_bracket_orders and not self.config.use_oco_sell_orders and not self.config.trailing_take:
             if (
                 self.open_sell_qty < position_qty
                 and price >= self.take_price
@@ -206,18 +209,19 @@ class MomoStrategy(BaseStrategy):
                     self.last_take_ts = self.clock.utc_now()
 
         # Cancel buy if price has spiked above vwap
-        open_buys = self.submitted_or_open_orders(side=OrderSide.BUY)
-        if (
-            not (self.config.trailing_buy_order or self.config.random_buy)
-            and len(open_buys) > 0
-            and price > self.vwap.value
-            and tick.size > 1
-        ):
-            for order in open_buys:
-                self.log.info(
-                    f"Canceling order {order.client_order_id}, tags {order.tags} because current price {price} is higher than vwap {self.vwap.value}"
-                )
-                self.cancel_order(order)
+        # open_buys = self.submitted_or_open_orders(side=OrderSide.BUY)
+        # if (
+        #     not (self.config.trailing_buy_order or self.config.random_buy)
+        #     and len(open_buys) > 0
+        #     and price > self.vwap.value
+        #     and tick.size > 1
+        # ):
+        #     for order in copy(open_buys):
+        #         if order.status != OrderStatus.SUBMITTED:
+        #             self.log.info(
+        #                 f"Canceling order {order.client_order_id}, tags {order.tags} because current price {price} is higher than vwap {self.vwap.value}"
+        #             )
+        #             self.cancel_order(order)
 
     def _on_order_filled(self, order_filled) -> None:
         if order_filled.is_buy:
@@ -243,8 +247,9 @@ class MomoStrategy(BaseStrategy):
                     self.log.info(f"Setting stop price to {new_stop_price}")
                     self.stop_price = new_stop_price
 
-        if order_filled.is_sell and not self.config.use_oco_sell_orders:
-            self.take_price = order_filled.last_px + self.take_profit
+        # FIXME: NEed to figure out tiered take prices
+        # if order_filled.is_sell and not self.config.use_oco_sell_orders:
+        #     self.take_price = order_filled.last_px + self.take_profit
 
     def on_start(self) -> None:
         super().on_start()

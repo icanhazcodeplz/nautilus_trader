@@ -64,22 +64,26 @@ def get_trades_and_save_to_catalog(symbol, start_dt_str, end_dt_str):
     df = df.reset_index()
     print(f"Fetched {len(df)} trades")
     df = df[df["exchange"] != "D"]
-    print(f"Fetched {len(df)} trades")
+    print(f"Drop Finra {len(df)} trades")
 
     # Convert each row in df into a TradeTick object and then save to the catalog `BACKTESTING_CATALOG`
     trade_ticks = []
     for i, row in df.iterrows():
-        # Convert timestamp to Unix nanoseconds
         ts_event = dt_to_unix_nanos(row["timestamp"])
         ts_init = ts_event  # Use same timestamp for initialization
 
-        # Create TradeTick
         size_ = int(row["size"])
         if size_ == 0:
             continue
+        # price_from_str = Price.from_str(str(row["price"]))
+
+        precision = 2
+        price_float = float(row["price"])
+        if price_float < 1:
+            raise ValueError(f"Penny stocks not yet supported")
         trade_tick = TradeTick(
             instrument_id=instrument_id,
-            price=Price(float(row["price"]), precision=precision),
+            price=Price(price_float, precision=precision),
             size=Quantity.from_str(str(size_)),
             aggressor_side=AggressorSide.NO_AGGRESSOR,  # Alpaca doesn't provide aggressor side
             trade_id=TradeId(str(i)),
@@ -88,7 +92,6 @@ def get_trades_and_save_to_catalog(symbol, start_dt_str, end_dt_str):
         )
         trade_ticks.append(trade_tick)
 
-    # Write to catalog
     BACKTESTING_CATALOG.write_data(trade_ticks)
 
 
@@ -103,13 +106,13 @@ def get_quotes_and_save_to_catalog(symbol, start_dt_str, end_dt_str):
     )
 
     instrument_id = TestInstrumentProvider.equity(symbol=symbol, venue=ALPACA).id
-    # Fetch the quote data
     start_at = pd.Timestamp.now()
     quotes = client.get_stock_quotes(request)
     print(f"Downloading took {(pd.Timestamp.now() - start_at).total_seconds()} seconds")
     df = quotes.df
     print(f"Fetched {len(df)} quotes")
     df = df.reset_index()
+
     # Convert each row in df into a QuoteTick object and then save to the catalog
     start_at = pd.Timestamp.now()
     quote_ticks = []
@@ -130,6 +133,9 @@ def get_quotes_and_save_to_catalog(symbol, start_dt_str, end_dt_str):
         bid_price_Price = Price.from_str(str(bid_price))
         ask_price_Price = Price.from_str(str(ask_price))
         precision = max(ask_price_Price.precision, bid_price_Price.precision, 2)
+        # if precision > 2:
+        #     print(f"WARNING: precision {precision} is greater than 2, setting to 2")
+        precision = 2
         quote_tick = QuoteTick(
             instrument_id=instrument_id,
             bid_price=Price(float(bid_price), precision=precision),
@@ -200,22 +206,26 @@ if __name__ == "__main__":
        9/23 - FLD
        9/29 - MSS
 
+       9/19 - ZOOZ
+       9/19 - AGMH
+       
        pulled already
+       10/13 - CHNR
        11/13 - SGBX
        10/14 - JDZG
        10/14 - GWAV
        10/14 - NVA
-       10/13 - CHNR
-       9/19 - ZOOZ
-       9/19 - AGMH
        """
 
-    symbol = "AGMH"
-    start_dt_str = "2025-09-19"
+    symbol = "chnr".upper()
+    start_dt_str = "2025-10-13"
 
     prepare_alpaca_data(symbol, start_dt_str)
 
     if False:
+        end_dt_str = pd.Timestamp(start_dt_str) + pd.Timedelta(days=1)
+        end_dt_str = end_dt_str.strftime("%Y-%m-%d")
+
         # COMPARE DATABENTO AND ALPACAA
         # Convert TradeTick objects to DataFrame
         def trade_ticks_to_df(data):
@@ -256,8 +266,8 @@ if __name__ == "__main__":
             return pd.DataFrame(data_records)
 
         # Print first 20 lines with full terminal width
-        # data_cls = TradeTick
-        data_cls = QuoteTick
+        data_cls = TradeTick
+        # data_cls = QuoteTick
         a_data = get_catalog_data(
             symbol, f"{start_dt_str}T00:00:00Z", f"{end_dt_str}T00:00:00Z", data_cls=data_cls, venue=ALPACA
         )

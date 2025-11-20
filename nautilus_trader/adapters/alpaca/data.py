@@ -237,6 +237,10 @@ class AlpacaDataClient(LiveMarketDataClient):
     def _handle_trade_message(self, msg: dict[str, Any]) -> None:
         """Parse and handle a trade message."""
         try:
+            # Skip FINRA market data messages
+            if msg['x'] == 'D':
+                return
+
             # Extract symbol and create instrument ID
             symbol = msg["S"]
             instrument_id = InstrumentId.from_str(f"{symbol}.ALPACA")
@@ -507,12 +511,15 @@ class AlpacaDataClient(LiveMarketDataClient):
         trades = []
         for trade_data in trades_data:
             try:
+                # FIXME: consolidate this logic with `_handle_trade_message` above
+                if trade_data['x'] == 'D':
+                    raise Exception("FINRA trade TEST THIS")
+                    continue
                 # Parse timestamp (RFC-3339 format)
                 timestamp_str = trade_data["t"]
                 timestamp_dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
                 ts_event = dt_to_unix_nanos(timestamp_dt)
                 ts_init = self._clock.timestamp_ns()
-
                 # Create TradeTick
                 trade = TradeTick(
                     instrument_id=request.instrument_id,
