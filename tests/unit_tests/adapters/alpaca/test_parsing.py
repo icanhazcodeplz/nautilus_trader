@@ -17,7 +17,6 @@
 
 import pytest
 
-from nautilus_trader.adapters.alpaca.enums import AlpacaOrderSide
 from nautilus_trader.adapters.alpaca.enums import AlpacaOrderStatus
 from nautilus_trader.adapters.alpaca.enums import AlpacaOrderType
 from nautilus_trader.adapters.alpaca.enums import AlpacaTimeInForce
@@ -36,14 +35,14 @@ class TestAlpacaEnumParser:
 
     def test_parse_alpaca_order_side_buy(self):
         # Arrange, Act
-        result = AlpacaEnumParser.parse_alpaca_order_side(AlpacaOrderSide.BUY)
+        result = AlpacaEnumParser.parse_alpaca_order_side("buy")
 
         # Assert
         assert result == OrderSide.BUY
 
     def test_parse_alpaca_order_side_sell(self):
         # Arrange, Act
-        result = AlpacaEnumParser.parse_alpaca_order_side(AlpacaOrderSide.SELL)
+        result = AlpacaEnumParser.parse_alpaca_order_side("sell")
 
         # Assert
         assert result == OrderSide.SELL
@@ -53,14 +52,14 @@ class TestAlpacaEnumParser:
         result = AlpacaEnumParser.parse_nautilus_order_side(OrderSide.BUY)
 
         # Assert
-        assert result == AlpacaOrderSide.BUY
+        assert result == "buy"
 
     def test_parse_nautilus_order_side_sell(self):
         # Arrange, Act
         result = AlpacaEnumParser.parse_nautilus_order_side(OrderSide.SELL)
 
         # Assert
-        assert result == AlpacaOrderSide.SELL
+        assert result == "sell"
 
     def test_parse_alpaca_order_type_market(self):
         # Arrange, Act

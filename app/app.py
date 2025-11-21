@@ -7,6 +7,7 @@ from flask import Flask, render_template, jsonify
 from flask_restful import Api
 from flask_cors import CORS
 
+from custom.backtest_runner import analyze_trades
 from custom.utils import data_subdir
 from custom.utils.orders_to_trades import orders_to_trades
 from custom.artifacts import CreateMarkers, ArtifactsIO, VIZ_ARTIFACTS_PATH
@@ -43,7 +44,8 @@ def get_data():
 
     orders_report = artifacts_io.load_orders_report()
     trades, sell_legs = orders_to_trades(orders_report)
-    trades = trades[trades["avg_sell_price"] > 0]
+    analyze_trades(trades, print_report=True)
+
     markers = CreateMarkers().create_trades_markers(trades, sell_legs)
 
     # Markers may not have same time as a tick

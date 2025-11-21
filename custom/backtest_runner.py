@@ -54,7 +54,7 @@ latency_model = LatencyModel(
 )
 # latency_model=LatencyModel()
 
-DATA_VENUE = DATABENTO
+# DATA_VENUE = DATABENTO
 DATA_VENUE = ALPACA
 
 
@@ -133,7 +133,7 @@ def run_single_backtest(dataset_name, strategy_name, params, artifacts_location=
                 ),
                 use_pyo3=False,
             ),
-            cache=CacheConfig(tick_capacity=10_000, bar_capacity=1000),
+            cache=CacheConfig(tick_capacity=1000, bar_capacity=1000),
         )
     )
 
@@ -209,6 +209,8 @@ def run_multiple_backtests(dataset_names, strategy_name, params, log_level="ERRO
 
 
 def analyze_trades(trades, print_report=False):
+    if len(trades) == 0:
+        return 0
     trades = trades.copy()
     trades = trades[trades["avg_sell_price"] > 0]
     wins = len(trades[trades["pnl"] > 0])
@@ -225,7 +227,7 @@ def analyze_trades(trades, print_report=False):
 if __name__ == "__main__":
     log_level = "INFO"
     # log_level = "DEBUG"
-    # log_level = "ERROR"
+    log_level = "ERROR"
     # log_level = "WARNING"
 
     strategy_name = "momo"
@@ -238,7 +240,8 @@ if __name__ == "__main__":
         take_ratio=0.8,
         vwap_window=100,
         variance_window_ratio=1.5,
-        upper_lower_scaler=0.01,
+        lower_scalar=0.10,
+        upper_scalar=0.05,
         trailing_buy_order=False,
         use_bracket_orders=False,
         use_oco_sell_orders=False,
@@ -249,11 +252,11 @@ if __name__ == "__main__":
         random_seed=11,
     )
     datasets = [
-    "aapl1103",
-    "aapl1104",
-    "aapl1105",
-    "aapl1106",
-    "aapl1107",
+        "aapl1103",
+        "aapl1104",
+        "aapl1105",
+        "aapl1106",
+        "aapl1107",
     ]
     run_BACKTEST_SYMBOL = True
 

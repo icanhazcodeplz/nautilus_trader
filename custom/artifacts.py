@@ -72,6 +72,8 @@ class CreateMarkers:
         if trades.empty:
             print("No trades to create markers for")
             return []
+        trades = trades[trades["avg_sell_price"] > 0]
+
         price_markers = []
 
         for _, ser in trades.iterrows():

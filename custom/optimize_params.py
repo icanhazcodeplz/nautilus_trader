@@ -79,7 +79,7 @@ def optimize(trial):
         take_ratio=0.8,
         vwap_window=200,
         variance_window_ratio=1.5,
-        upper_lower_scaler=0.40,
+        lower_scalar=0.40,
         trailing_buy_order=False,
         use_bracket_orders=False,
         use_oco_sell_orders=True,
@@ -167,7 +167,7 @@ if __name__ == "__main__":
             # take_ratio=linspace_float(low=0.5, high=1.0, step=0.50),
             vwap_window=linspace_int(low=150, high=250, step=50),
             variance_window_ratio=linspace_float(low=1.5, high=2.5, step=0.5),
-            upper_lower_scaler=linspace_float(low=0.04, high=0.12, step=0.02),
+            lower_scalar=linspace_float(low=0.04, high=0.12, step=0.02),
         )
 
     sampler = optuna.samplers.GridSampler(search_space={**search_space, "dataset": DATASET_NAMES})

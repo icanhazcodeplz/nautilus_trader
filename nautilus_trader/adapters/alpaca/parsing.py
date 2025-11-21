@@ -20,7 +20,6 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
-from nautilus_trader.adapters.alpaca.enums import AlpacaOrderSide
 from nautilus_trader.adapters.alpaca.enums import AlpacaOrderStatus
 from nautilus_trader.adapters.alpaca.enums import AlpacaOrderType
 from nautilus_trader.adapters.alpaca.enums import AlpacaTimeInForce
@@ -62,9 +61,9 @@ class AlpacaEnumParser:
         OrderSide
 
         """
-        if side == AlpacaOrderSide.BUY:
+        if side == "buy":
             return OrderSide.BUY
-        elif side == AlpacaOrderSide.SELL:
+        elif side == "sell":
             return OrderSide.SELL
         else:
             raise ValueError(f"Unknown Alpaca order side: {side}")
@@ -85,9 +84,9 @@ class AlpacaEnumParser:
 
         """
         if side == OrderSide.BUY:
-            return AlpacaOrderSide.BUY
+            return "buy"
         elif side == OrderSide.SELL:
-            return AlpacaOrderSide.SELL
+            return "sell"
         else:
             raise ValueError(f"Unknown Nautilus order side: {side}")
 

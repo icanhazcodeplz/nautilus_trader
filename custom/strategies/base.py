@@ -39,7 +39,7 @@ class BaseStrategyConfig(StrategyConfig, frozen=True):
 class BaseStrategy(Strategy):
     buy_signal_delay_secs: int = 1
     log_update_every_secs: int = None
-    only_modify_every_ns = 60e6  # e6 converts to ms
+    only_modify_every_ns = 80e6  # e6 converts to ms
     cancel_partial_fills_after_secs = 3
 
     def __init__(self, config: BaseStrategyConfig) -> None:
@@ -128,7 +128,7 @@ class BaseStrategy(Strategy):
                 super().modify_order(order, quantity=qty_obj, price=price_obj)
             else:
                 self.log.debug(
-                    f"Not modifying order {order.client_order_id}. Price {last_mod_price} -> {price_obj} | Qty {last_mod_qty} -> {qty_obj} | Time {round((now_ns - modify_ns) / 1e9, 9)} < 100ms."
+                    f"Not modifying order {order.client_order_id}. Price {last_mod_price} -> {price_obj} | Qty {last_mod_qty} -> {qty_obj} | Time {round((now_ns - modify_ns) / 1e6,1)} < {self.only_modify_every_ns / 1e6} ms."
                 )
                 return
 

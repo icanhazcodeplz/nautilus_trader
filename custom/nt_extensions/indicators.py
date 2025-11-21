@@ -1,24 +1,32 @@
 from collections import deque
+from typing import Optional
 
 from nautilus_trader.indicators import Indicator
 from nautilus_trader.model import TradeTick
 
 
 class RollingVWAP(Indicator):
-    def __init__(self, rolling_window: int, variance_window_ratio: float = 1, upper_lower_scaler: float = 0.0):
-        super().__init__(params=[rolling_window, variance_window_ratio, upper_lower_scaler])
+    def __init__(
+        self,
+        rolling_window: int,
+        variance_window_ratio: float = 1,
+        lower_scalar: float = 0.0,
+        upper_scalar: Optional[float] = None,
+    ):
+        super().__init__(params=[rolling_window, variance_window_ratio, lower_scalar, upper_scalar])
 
         self.rolling_window = rolling_window
         self.variance_window_ratio = variance_window_ratio
-        self.upper_lower_scaler = upper_lower_scaler
+        self.lower_scalar = lower_scalar
+        self.upper_scalar = upper_scalar if upper_scalar is not None else lower_scalar
 
         self._trade_values = deque(maxlen=rolling_window)
         self._volumes = deque(maxlen=rolling_window)
         self._variances = deque(maxlen=int(rolling_window * variance_window_ratio))
 
         self.value = 0
-        self.upper = 0
         self.lower = 0
+        self.upper = 0
 
     def handle_trade_tick(self, tick: TradeTick):
         self.update_raw(price=float(tick.price), volume=float(tick.size))
@@ -44,8 +52,8 @@ class RollingVWAP(Indicator):
             variance_from_val = abs(price - self.value)
             self._variances.append(variance_from_val)
             mean_var = sum(self._variances) / len(self._variances)
-            self.upper = self.value + mean_var + self.upper_lower_scaler
-            self.lower = self.value - mean_var - self.upper_lower_scaler
+            self.lower = self.value - mean_var - self.lower_scalar
+            self.upper = self.value + mean_var + self.upper_scalar
 
         self.value = sum(self._trade_values) / sum(self._volumes)
 

@@ -27,13 +27,6 @@ class AlpacaOrderType(str, Enum):
     TRAILING_STOP = "trailing_stop"
 
 
-class AlpacaOrderSide(str, Enum):
-    """Alpaca order side."""
-
-    BUY = "buy"
-    SELL = "sell"
-
-
 class AlpacaTimeInForce(str, Enum):
     """Alpaca time in force options."""
 

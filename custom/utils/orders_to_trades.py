@@ -35,9 +35,11 @@ def orders_to_trades(orders_report: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Data
         qty = buy_qty
         sell_value = 0
         latest_sell_dt = buy_dt  # just to initialize
+        record_trade = True  # Only record trades that get completely close
         while qty > 0:
             if not sells:
                 print(f"No more sells. Ignoring last buy: {buy_dt} qty {buy_qty} at ${buy_price}.")
+                record_trade = False
                 break
             sell_dt, sell_qty, sell_price, s_desc = sells.pop(0)
 
@@ -61,21 +63,21 @@ def orders_to_trades(orders_report: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Data
                     pnl=market_round((sell_price - buy_price) * sell_qty),
                 )
             ]
-
-        sell_price = market_round(sell_value / buy_qty)
-        price_diff = market_round(sell_price - buy_price)
-        trades += [
-            dict(
-                buy_id=buy_id,
-                desc=b_desc,
-                buy_dt=buy_dt,
-                sell_dt=latest_sell_dt,
-                duration=(latest_sell_dt - buy_dt),
-                qty=buy_qty,
-                buy_price=buy_price,
-                avg_sell_price=sell_price,
-                pnl=market_round(price_diff * buy_qty),
-            )
-        ]
+        if record_trade:
+            sell_price = market_round(sell_value / buy_qty)
+            price_diff = market_round(sell_price - buy_price)
+            trades += [
+                dict(
+                    buy_id=buy_id,
+                    desc=b_desc,
+                    buy_dt=buy_dt,
+                    sell_dt=latest_sell_dt,
+                    duration=(latest_sell_dt - buy_dt),
+                    qty=buy_qty,
+                    buy_price=buy_price,
+                    avg_sell_price=sell_price,
+                    pnl=market_round(price_diff * buy_qty),
+                )
+            ]
 
     return pd.DataFrame(trades), pd.DataFrame(sell_legs)

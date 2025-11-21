@@ -34,7 +34,8 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     take_ratio: float
     vwap_window: int
     variance_window_ratio: float
-    upper_lower_scaler: float
+    lower_scalar: float
+    upper_scalar: float
 
     trailing_buy_order: bool = False
     use_bracket_orders: bool = False
@@ -61,6 +62,8 @@ def is_market_open(now_utc: pd.Timestamp) -> bool:
 
 
 class MomoStrategy(BaseStrategy):
+    rolling_take_tiers = 3  # TODO: Not implemented yet
+
     def __init__(self, config: MomoStrategyConfig) -> None:
         super().__init__(config)
         if sum([self.config.trailing_take, self.config.simple_take, self.config.use_bracket_orders, self.config.use_oco_sell_orders]) > 1:
@@ -74,7 +77,8 @@ class MomoStrategy(BaseStrategy):
         self.vwap = RollingVWAP(
             rolling_window=self.config.vwap_window,
             variance_window_ratio=self.config.variance_window_ratio,
-            upper_lower_scaler=self.config.upper_lower_scaler,
+            lower_scalar=self.config.lower_scalar,
+            upper_scalar=self.config.upper_scalar,
         )
         # self.vwap_day = VolumeWeightedAveragePrice()
 
@@ -134,7 +138,15 @@ class MomoStrategy(BaseStrategy):
                 and position_qty == 0
                 and random() < 0.3
             ):
-                self.buy(self.config.trade_size, tick.price, cancel_after_secs=10, tag=f"{self.buy_orders_count}")
+                # Only send buy command if it has been at least 10 seconds of flat
+                all_positions = self.cache.positions(instrument_id=self.config.instrument_id)
+                if len(all_positions) > 0:
+                    most_recent_close = all_positions[0].ts_closed
+                else:
+                    most_recent_close = 0
+
+                if (self.clock.timestamp_ns() - most_recent_close) / 1e9 > 10:
+                    self.buy(self.config.trade_size, tick.price, cancel_after_secs=10, tag=f"{self.buy_orders_count}")
 
         initialize_deque_if_needed(self.price_dq, tick.price)
         if self.last_take_ts is None:
@@ -181,14 +193,8 @@ class MomoStrategy(BaseStrategy):
                     self.buy(self.config.trade_size, price, cancel_after_secs=1, tag=f"{self._buy_signals_count}")
 
         # TAKE LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-        if self.config.trailing_take and position_qty > 0:
-            vwap_upper = self.instrument.make_price(self.vwap.upper)
-            for order in copy(self.open_sells):
-                if order.price != vwap_upper:
-                    self.modify_order(order, quantity=position_qty, price=vwap_upper)
-
-            if len(self.open_sells) == 0:
-                self.sell(position_qty, vwap_upper, cancel_after_secs=None, tag=f"{self.buy_orders_count}")
+        if self.config.trailing_take:
+            self._rolling_tiered_take()
 
         if not self.config.use_bracket_orders and not self.config.use_oco_sell_orders and not self.config.trailing_take:
             if (
@@ -222,6 +228,17 @@ class MomoStrategy(BaseStrategy):
         #                 f"Canceling order {order.client_order_id}, tags {order.tags} because current price {price} is higher than vwap {self.vwap.value}"
         #             )
         #             self.cancel_order(order)
+    def _rolling_tiered_take(self):
+        position_qty = self.position_qty
+        vwap_upper = self.instrument.make_price(self.vwap.upper)
+        for order in copy(self.open_sells):
+            if order.price != vwap_upper:
+                # If order has not started to fill yet, update quantity to the position_qty
+                new_qty = position_qty if order.filled_qty == 0 else order.quantity
+                self.modify_order(order, quantity=new_qty, price=vwap_upper)
+
+        if len(self.open_sells) == 0:
+            self.sell(position_qty, vwap_upper, cancel_after_secs=None, tag=f"{self.buy_orders_count}")
 
     def _on_order_filled(self, order_filled) -> None:
         if order_filled.is_buy:

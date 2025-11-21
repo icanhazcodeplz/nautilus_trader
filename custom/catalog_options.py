@@ -42,4 +42,5 @@ CATALOG_OPTIONS = dict(
     aapl1105=dict(symbol="AAPL", start="2025-11-05T14:15:00Z", end="2025-11-05T21:00:00Z"),
     aapl1106=dict(symbol="AAPL", start="2025-11-06T14:15:00Z", end="2025-11-06T21:00:00Z"),
     aapl1107=dict(symbol="AAPL", start="2025-11-07T14:15:00Z", end="2025-11-07T21:00:00Z"),
+    aapl1118=dict(symbol="AAPL", start="2025-11-18T14:15:00Z", end="2025-11-18T21:00:00Z"),
 )

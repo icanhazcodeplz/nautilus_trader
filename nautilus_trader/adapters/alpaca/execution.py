@@ -909,6 +909,25 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
                 self.order_previous_qty_and_value[client_order_id] = (filled_qty, current_total_value)
 
+                # In an effort to prevent an order qty mismatch, adjust order qty and create OrderUpdated event
+                alpaca_order_qty = order_data["qty"]
+                limit_price = order_data["limit_price"]
+                if int(alpaca_order_qty) != int(order.quantity):
+                    self._log.warning(
+                        f"Order qty mismatch: Alpaca {alpaca_order_qty} != NT {order.quantity}. Sending `generate_order_updated` with new info"
+                    )
+                    self.generate_order_updated(
+                        strategy_id=order.strategy_id,
+                        instrument_id=instrument_id,
+                        client_order_id=client_order_id,
+                        venue_order_id=venue_order_id,
+                        quantity=Quantity.from_str(alpaca_order_qty),
+                        price=Price(float(limit_price), precision=order.price.precision),
+                        trigger_price=order.trigger_price if order.has_trigger_price else None,
+                        ts_event=ts_event,
+                        venue_order_id_modified=False,
+                    )
+
                 alpaca_event_id = msg["data"]["event_id"]  # This is a unique id for the trade event
                 currency = Currency.from_str("USD")
                 self.generate_order_filled(

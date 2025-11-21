@@ -17,7 +17,7 @@ from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.identifiers import TraderId
 
 
-symbol = "TSLA"
+symbol = "foxx".upper()
 instrument_id = InstrumentId.from_str(f"{symbol}.{ALPACA}")
 paper = True
 
@@ -27,6 +27,7 @@ instrument_provider_config = InstrumentProviderConfig(
     load_all=False,
 )
 log_level = "INFO"
+log_level = "DEBUG"
 artifacts_directory = run_artifacts_subdir()
 config_node = TradingNodeConfig(
     trader_id=TraderId("TESTER-001"),
@@ -38,7 +39,11 @@ config_node = TradingNodeConfig(
         use_pyo3=True,
         log_file_max_size=int(5e6),
     ),
-    exec_engine=LiveExecEngineConfig(reconciliation=False),
+    exec_engine=LiveExecEngineConfig(
+        reconciliation=True,
+        reconciliation_lookback_mins=60,
+        reconciliation_instrument_ids=[instrument_id],
+    ),
     cache=CacheConfig(
         # database=DatabaseConfig(),
         encoding="msgpack",
