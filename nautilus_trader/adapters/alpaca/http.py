@@ -228,6 +228,8 @@ class AlpacaHttpClient:
         return await self._request("DELETE", f"/v2/orders/{order_id}")
 
     async def cancel_all_orders(self) -> list[dict[str, Any]]:
+        # You probably don't actually want this. This cancels for all symbols, not just the one you're trading.
+        raise NotImplementedError
         return await self._request("DELETE", "/v2/orders")
 
     async def replace_order(

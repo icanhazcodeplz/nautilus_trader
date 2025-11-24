@@ -99,8 +99,19 @@ node.add_data_client_factory(ALPACA, AlpacaLiveDataClientFactory)
 node.add_exec_client_factory(ALPACA, AlpacaLiveExecClientFactory)
 
 
+def place_orders_for_testing(paper: bool = True):
+    client = AlpacaTraderHttpClient(paper=paper)
+    symbol = "ENLV"
+    client.limit_order(side="buy", symbol=symbol, qty=1000, price=2.50)
+    sleep(3)
+    client.limit_order(side="sell", symbol=symbol, qty=100, price=3.00)
+    sleep(1)
+
+
 if __name__ == "__main__":
-    run_config = {"paper": paper, "symbol": symbol, "strategy": strategy_config.dict()}
+    # place_orders_for_testing(paper=paper)
+
+    run_config = {"symbol": symbol, "strategy": strategy_config.dict()}
     strategy = MomoStrategy(config=strategy_config)
     performance_stats = run_strategy(strategy, node, artifacts_directory, run_config=run_config, paper=paper)
     print()

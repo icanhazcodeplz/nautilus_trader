@@ -24,6 +24,8 @@ from nautilus_trader.adapters.alpaca.enums import AlpacaOrderStatus
 from nautilus_trader.adapters.alpaca.enums import AlpacaOrderType
 from nautilus_trader.adapters.alpaca.enums import AlpacaTimeInForce
 from nautilus_trader.core.uuid import UUID4
+
+from nautilus_trader.adapters.alpaca.utils import alpaca_date_str_to_nanos
 from nautilus_trader.execution.reports import FillReport
 from nautilus_trader.execution.reports import OrderStatusReport
 from nautilus_trader.model.enums import LiquiditySide
@@ -185,20 +187,12 @@ def parse_order_status_report(
     """
     parser = AlpacaEnumParser()
 
-    # Parse order identifiers
     venue_order_id = VenueOrderId(alpaca_order["id"])
     client_order_id = ClientOrderId(alpaca_order.get("client_order_id", alpaca_order["id"]))
 
-    # Parse order status
     order_status = parser.parse_alpaca_order_status(alpaca_order["status"])
-
-    # Parse order side
     order_side = parser.parse_alpaca_order_side(alpaca_order["side"])
-
-    # Parse order type
     order_type = parser.parse_alpaca_order_type(alpaca_order["order_type"])
-
-    # Parse time in force
     time_in_force = parser.parse_alpaca_time_in_force(alpaca_order["time_in_force"])
 
     # Parse quantities
@@ -222,10 +216,9 @@ def parse_order_status_report(
         avg_px = Decimal(alpaca_order["filled_avg_price"])
 
     # Parse timestamps
-    # Alpaca timestamps are in RFC3339 format, need to convert to nanoseconds
-    # For now, use ts_init as placeholder
-    ts_accepted = ts_init
-    ts_last = ts_init
+    submitted_at = alpaca_order["submitted_at"]
+    ts_accepted = alpaca_date_str_to_nanos(submitted_at)
+    ts_last = alpaca_date_str_to_nanos(alpaca_order["updated_at"])
 
     return OrderStatusReport(
         account_id=account_id,

@@ -2,6 +2,8 @@ import traceback
 from functools import wraps
 from time import sleep
 
+import pandas as pd
+
 from custom.artifacts import ArtifactsIO
 from nautilus_trader.backtest.engine import BacktestEngine
 
@@ -62,6 +64,8 @@ def cancel_open_orders_and_close_position(client, symbol):
         Returns True if there were open orders or positions that needed canceling or selling,
         and False otherwise.
     """
+    fill_wait_max_secs = 10
+
     canceling_or_selling_needed = False
     open_orders = client.get_orders(symbol=symbol, status="open")
     for open_order in open_orders:
@@ -74,9 +78,13 @@ def cancel_open_orders_and_close_position(client, symbol):
         canceling_or_selling_needed = True
         limit_price = round(float(position.current_price) * 0.90, 2)
         log.warning(f"Existing position for {symbol} of {qty}. Selling at {limit_price}")
+        fill_order_sent_at = pd.Timestamp.now()
         limit_sell_order = client.limit_order("sell", symbol, qty, price=limit_price)
+
         while limit_sell_order.status != "filled":
-            # FIXME: Handle case when order never fills
+            if (pd.Timestamp.now() - fill_order_sent_at) > pd.Timedelta(seconds=fill_wait_max_secs):
+                log.error(f"Sell order for {symbol} never filled after {fill_wait_max_secs} seconds")
+                break
             limit_sell_order = client.get_order(limit_sell_order.id)
             log.info(f"Waiting for sell order {limit_sell_order.id} to fill")
             sleep(0.2)

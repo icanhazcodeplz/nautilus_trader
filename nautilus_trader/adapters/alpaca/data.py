@@ -18,16 +18,15 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from nautilus_trader.adapters.alpaca.constants import ALPACA_VENUE
 from nautilus_trader.adapters.alpaca.http import AlpacaHttpClient
 from nautilus_trader.adapters.alpaca.providers import AlpacaInstrumentProvider
+from nautilus_trader.adapters.alpaca.utils import alpaca_date_str_to_nanos
 from nautilus_trader.adapters.alpaca.websocket import AlpacaMarketDataWebSocketClient
 from nautilus_trader.common.config import PositiveInt
 from nautilus_trader.common.enums import LogColor
-from nautilus_trader.core.datetime import dt_to_unix_nanos
 from nautilus_trader.core.datetime import ensure_pydatetime_utc
 
 from nautilus_trader.live.config import LiveDataClientConfig
@@ -73,6 +72,7 @@ class AlpacaDataClientConfig(LiveDataClientConfig, frozen=True):
         The interval (minutes) between reloading instruments from the venue.
 
     """
+
     paper: bool = True
     feed: str = "iex"
     http_timeout: PositiveInt = 30
@@ -238,7 +238,7 @@ class AlpacaDataClient(LiveMarketDataClient):
         """Parse and handle a trade message."""
         try:
             # Skip FINRA market data messages
-            if msg['x'] == 'D':
+            if msg["x"] == "D":
                 return
 
             # Extract symbol and create instrument ID
@@ -251,10 +251,7 @@ class AlpacaDataClient(LiveMarketDataClient):
                 self._log.warning(f"Received trade for unknown instrument: {instrument_id}")
                 return
 
-            # Parse timestamp (RFC-3339 format)
-            timestamp_str = msg["t"]
-            timestamp_dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-            ts_event = dt_to_unix_nanos(timestamp_dt)
+            ts_event = alpaca_date_str_to_nanos(msg["t"])
             ts_init = self._clock.timestamp_ns()
 
             # Create TradeTick
@@ -287,10 +284,7 @@ class AlpacaDataClient(LiveMarketDataClient):
                 self._log.warning(f"Received quote for unknown instrument: {instrument_id}")
                 return
 
-            # Parse timestamp (RFC-3339 format)
-            timestamp_str = msg["t"]
-            timestamp_dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-            ts_event = dt_to_unix_nanos(timestamp_dt)
+            ts_event = alpaca_date_str_to_nanos(msg["t"])
             ts_init = self._clock.timestamp_ns()
 
             # Create QuoteTick
@@ -512,13 +506,10 @@ class AlpacaDataClient(LiveMarketDataClient):
         for trade_data in trades_data:
             try:
                 # FIXME: consolidate this logic with `_handle_trade_message` above
-                if trade_data['x'] == 'D':
+                if trade_data["x"] == "D":
                     raise Exception("FINRA trade TEST THIS")
                     continue
-                # Parse timestamp (RFC-3339 format)
-                timestamp_str = trade_data["t"]
-                timestamp_dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-                ts_event = dt_to_unix_nanos(timestamp_dt)
+                ts_event = alpaca_date_str_to_nanos(trade_data["t"])
                 ts_init = self._clock.timestamp_ns()
                 # Create TradeTick
                 trade = TradeTick(
@@ -551,4 +542,3 @@ class AlpacaDataClient(LiveMarketDataClient):
             request.end,
             request.params,
         )
-

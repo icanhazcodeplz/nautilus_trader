@@ -26,6 +26,7 @@ from nautilus_trader.model.orders import StopLimitOrder
 from custom.utils import run_artifacts_subdir
 from nautilus_trader.adapters.alpaca.http import AlpacaHttpClient
 from nautilus_trader.adapters.alpaca.constants import ALPACA_VENUE
+from nautilus_trader.core.datetime import ensure_pydatetime_utc
 from nautilus_trader.adapters.alpaca.enums import AlpacaOrderType, AlpacaTimeInForce
 from nautilus_trader.adapters.alpaca.parsing import AlpacaEnumParser
 from nautilus_trader.adapters.alpaca.parsing import parse_order_status_report
@@ -50,7 +51,6 @@ from nautilus_trader.model.identifiers import AccountId
 from nautilus_trader.model.identifiers import ClientId
 from nautilus_trader.model.identifiers import ClientOrderId
 from nautilus_trader.model.identifiers import InstrumentId
-from nautilus_trader.model.identifiers import Venue
 from nautilus_trader.model.identifiers import VenueOrderId
 from nautilus_trader.model.orders.limit import LimitOrder
 from nautilus_trader.model.objects import Money, AccountBalance, MarginBalance, Currency
@@ -62,7 +62,7 @@ if TYPE_CHECKING:
     from nautilus_trader.cache.cache import Cache
     from nautilus_trader.common.component import LiveClock
     from nautilus_trader.common.component import MessageBus
-    from nautilus_trader.execution.messages import CancelAllOrders
+    from nautilus_trader.execution.messages import CancelAllOrders, QueryOrder
     from nautilus_trader.execution.messages import CancelOrder
     from nautilus_trader.execution.messages import GenerateFillReports
     from nautilus_trader.execution.messages import GenerateOrderStatusReport
@@ -187,9 +187,6 @@ class AlpacaExecutionClient(LiveExecutionClient):
             handler=self._handle_ws_message,
             logger=self._log,
         )
-
-        self._instrument_provider.load_all()
-        #     BRENT. Instruments loaded here
 
         self.order_previous_qty_and_value = dict()
 
@@ -346,7 +343,13 @@ class AlpacaExecutionClient(LiveExecutionClient):
             status = "open" if command.open_only else "all"
 
             # Query Alpaca API for orders
-            alpaca_orders = await self._http_client.get_orders(status=status, limit=500)
+            # Convert start time to RFC-3339 format if provided
+            after = None
+            if command.start is not None:
+                # TODO: This code is duplicated a few times. Refactor
+                start_dt = ensure_pydatetime_utc(command.start)
+                after = start_dt.isoformat()
+            alpaca_orders = await self._http_client.get_orders(status=status, after=after)
 
             # Parse responses into OrderStatusReport objects
             for alpaca_order in alpaca_orders:
@@ -787,18 +790,13 @@ class AlpacaExecutionClient(LiveExecutionClient):
         self._log.info(f"Canceling all orders for {command.instrument_id}")
 
         try:
-            # Cancel all orders via HTTP API
-            # Note: Alpaca cancels ALL orders, not just for a specific instrument
-            results = await self._http_client.cancel_all_orders()
+            open_orders = await self._http_client.get_orders(status="open", symbols=command.instrument_id.symbol.value)
 
-            self._log.info(f"Canceled {len(results)} orders")
-
-            # Generate events for each canceled order
-            for result in results:
+            for open_order in open_orders:
                 try:
-                    venue_order_id = VenueOrderId(result["id"])
-                    client_order_id_str = result.get("client_order_id")
-
+                    venue_order_id = VenueOrderId(open_order["id"])
+                    client_order_id_str = open_order.get("client_order_id")
+                    cancelation_response = await self._http_client.cancel_order(open_order["id"])
                     if client_order_id_str:
                         client_order_id = ClientOrderId(client_order_id_str)
                         order = self._cache.order(client_order_id)
@@ -812,7 +810,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
                                 ts_event=self._clock.timestamp_ns(),
                             )
                 except Exception as e:
-                    self._log.error(f"Failed to generate cancel event for order {result.get('id')}: {e}")
+                    self._log.error(f"Failed to generate cancel event for order {open_order.get('id')}: {e}")
 
         except Exception as e:
             self._log.error(f"Failed to cancel all orders: {e}")
@@ -831,6 +829,10 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
         # Query account via HTTP API and update account state
         await self._update_account_state()
+
+    async def _query_order(self, command: QueryOrder) -> None:
+        order_status_report = await self.generate_order_status_report(command)
+        self._send_order_status_report(order_status_report)
 
     # -- WEBSOCKET HANDLERS -------------------------------------------------------------------
 

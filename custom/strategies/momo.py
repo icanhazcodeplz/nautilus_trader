@@ -156,7 +156,8 @@ class MomoStrategy(BaseStrategy):
                     most_recent_close = 0
 
                 if (self.clock.timestamp_ns() - most_recent_close) / 1e9 > 10:
-                    self.buy(self.config.trade_size, tick.price, cancel_after_secs=10, tag=f"{self.buy_orders_count}")
+                    buy_limit = tick.price + 0.00
+                    self.buy(self.config.trade_size, buy_limit, cancel_after_secs=10, tag=f"{self.buy_orders_count}")
 
         initialize_deque_if_needed(self.price_dq, tick.price)
         if self.last_take_ts is None:
