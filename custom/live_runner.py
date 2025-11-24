@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
+from time import sleep
 
 from custom.strategies.momo import MomoStrategy
 from custom.strategies.momo import MomoStrategyConfig
 from custom.utils import run_artifacts_subdir
 from custom.utils.run_utils import run_strategy
-from nautilus_trader.adapters.alpaca import ALPACA, AlpacaExecClientConfig, AlpacaDataClientConfig
+from custom.utils.alpaca_trader_http_client import AlpacaTraderHttpClient
+from nautilus_trader.adapters.alpaca import ALPACA, AlpacaExecClientConfig, AlpacaDataClientConfig, AlpacaHttpClient
 from nautilus_trader.adapters.alpaca import AlpacaLiveDataClientFactory
 from nautilus_trader.adapters.alpaca import AlpacaLiveExecClientFactory
 from nautilus_trader.cache.config import CacheConfig
@@ -41,8 +43,10 @@ config_node = TradingNodeConfig(
     ),
     exec_engine=LiveExecEngineConfig(
         reconciliation=True,
-        reconciliation_lookback_mins=60,
+        reconciliation_lookback_mins=0,
         reconciliation_instrument_ids=[instrument_id],
+        inflight_check_interval_ms=5000,
+        reconciliation_startup_delay_secs=3.0,
     ),
     cache=CacheConfig(
         # database=DatabaseConfig(),
@@ -98,5 +102,5 @@ node.add_exec_client_factory(ALPACA, AlpacaLiveExecClientFactory)
 if __name__ == "__main__":
     run_config = {"paper": paper, "symbol": symbol, "strategy": strategy_config.dict()}
     strategy = MomoStrategy(config=strategy_config)
-    performance_stats = run_strategy(strategy, node, artifacts_directory, run_config=run_config)
+    performance_stats = run_strategy(strategy, node, artifacts_directory, run_config=run_config, paper=paper)
     print()

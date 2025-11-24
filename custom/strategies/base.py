@@ -102,7 +102,6 @@ class BaseStrategy(Strategy):
             return self.open_sells
         else:
             raise ValueError(f"Unexpected side: {side}")
-        # inflight_or_open = set(self.cache.orders_inflight(side=side) + self.cache.orders_open(side=side))
         # removed_pending_cancel = [order for order in inflight_or_open if order.status != OrderStatus.PENDING_CANCEL]
         # return removed_pending_cancel
 
@@ -366,12 +365,14 @@ class BaseStrategy(Strategy):
 
     def on_order_filled(self, order) -> None:
         self._on_order_filled(order)
-        cached_order = self.cache.order(order.client_order_id)
 
+        cached_order = self.cache.order(order.client_order_id)
         if cached_order.leaves_qty == 0:
             self.open_buys.discard(cached_order)
             self.open_sells.discard(cached_order)
+
         # Clean up order modify dict to reduce memory usage
+        # TODO: Test if this actually does anything
         self._order_modify_dict.pop(order.client_order_id, None)
 
     def _cancel_orders_past_timeout_or_partial_fills(self, event: TimeEvent):
@@ -437,14 +438,9 @@ class BaseStrategy(Strategy):
 
     def on_order_event(self, order) -> None:
         if isinstance(order, OrderRejected):
-            print()
-        # Check if this order was submitted but not yet cached
-        # if self.cache.order(order.client_order_id) is None:
-        #     # self.cache.add_order(order)
-        #     self.log.info(f"Added uncached order to cache: {order.client_order_id}")
-        #     order = self.cache.order(order.client_order_id)
-        #     order
-        pass
+            order = self.cache.order(order.client_order_id)
+            self.open_buys.discard(order)
+            self.open_sells.discard(order)
 
     def on_dispose(self) -> None:
         if self.save_artifacts:

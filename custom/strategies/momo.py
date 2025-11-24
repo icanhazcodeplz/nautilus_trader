@@ -66,7 +66,17 @@ class MomoStrategy(BaseStrategy):
 
     def __init__(self, config: MomoStrategyConfig) -> None:
         super().__init__(config)
-        if sum([self.config.trailing_take, self.config.simple_take, self.config.use_bracket_orders, self.config.use_oco_sell_orders]) > 1:
+        if (
+            sum(
+                [
+                    self.config.trailing_take,
+                    self.config.simple_take,
+                    self.config.use_bracket_orders,
+                    self.config.use_oco_sell_orders,
+                ]
+            )
+            > 1
+        ):
             raise ValueError("Cannot use more than one of simple_take, use_bracket_orders, use_oco_sell_orders")
 
         if sum([self.config.trailing_buy_order, self.config.random_buy]) > 1:
@@ -161,7 +171,6 @@ class MomoStrategy(BaseStrategy):
         if self.config.trailing_buy_order:
             vwap_lower = self.instrument.make_price(self.vwap.lower)
             for order in copy(self.open_buys):
-
                 if order.price != vwap_lower:
                     self.modify_order(order, quantity=order.quantity, price=vwap_lower)
 
@@ -228,6 +237,7 @@ class MomoStrategy(BaseStrategy):
         #                 f"Canceling order {order.client_order_id}, tags {order.tags} because current price {price} is higher than vwap {self.vwap.value}"
         #             )
         #             self.cancel_order(order)
+
     def _rolling_tiered_take(self):
         position_qty = self.position_qty
         vwap_upper = self.instrument.make_price(self.vwap.upper)
@@ -237,7 +247,7 @@ class MomoStrategy(BaseStrategy):
                 new_qty = position_qty if order.filled_qty == 0 else order.quantity
                 self.modify_order(order, quantity=new_qty, price=vwap_upper)
 
-        if len(self.open_sells) == 0:
+        if position_qty > 0 and len(self.open_sells) == 0:
             self.sell(position_qty, vwap_upper, cancel_after_secs=None, tag=f"{self.buy_orders_count}")
 
     def _on_order_filled(self, order_filled) -> None:
