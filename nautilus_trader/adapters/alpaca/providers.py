@@ -67,7 +67,6 @@ class AlpacaInstrumentProvider(InstrumentProvider):
         # Add USD currency
         self.add_currency(Currency.from_str("USD"))
 
-
     async def load_all_async(self, filters: dict | None = None) -> None:
         """
         Load all tradeable instruments from Alpaca.
@@ -82,6 +81,7 @@ class AlpacaInstrumentProvider(InstrumentProvider):
             - tradable: True (default), False
 
         """
+        raise Exception("avoiding this")
         filters_str = "..." if not filters else f" with filters {filters}..."
         self._log.info(f"Loading all instruments{filters_str}")
 
@@ -110,7 +110,7 @@ class AlpacaInstrumentProvider(InstrumentProvider):
             # Parse each asset into a Nautilus instrument
             for asset_data in assets:
                 try:
-                    self._parse_asset(asset_data)
+                    self._parse_and_add_asset(asset_data)
                 except Exception as e:
                     if self._log_warnings:
                         self._log.warning(
@@ -151,11 +151,9 @@ class AlpacaInstrumentProvider(InstrumentProvider):
                 "instrument_id.venue",
                 "ALPACA",
             )
+            asset_data = await self._client.get_asset(str(instrument_id.symbol))
+            self._parse_and_add_asset(asset_data)
 
-        # Load all instruments first
-        await self.load_all_async(filters)
-
-        # Filter to only requested instruments
         for instrument_id in instrument_ids:
             if instrument_id not in self._instruments:
                 self._log.warning(f"Instrument {instrument_id} not found")
@@ -179,7 +177,7 @@ class AlpacaInstrumentProvider(InstrumentProvider):
         PyCondition.not_none(instrument_id, "instrument_id")
         await self.load_ids_async([instrument_id], filters)
 
-    def _parse_asset(self, asset_data: dict) -> None:
+    def _parse_and_add_asset(self, asset_data: dict) -> None:
         """
         Parse an Alpaca asset into a Nautilus Equity instrument.
 
@@ -236,7 +234,6 @@ class AlpacaInstrumentProvider(InstrumentProvider):
             # size_increment=size_increment,
             # multiplier=Quantity.from_int(1),
             lot_size=min_quantity,
-            isin=asset_data.get("isin"),
             margin_init=margin_init,
             margin_maint=margin_maint,
             maker_fee=Decimal("0"),  # Alpaca is commission-free

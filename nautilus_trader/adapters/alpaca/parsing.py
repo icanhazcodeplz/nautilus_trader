@@ -48,19 +48,6 @@ class AlpacaEnumParser:
 
     @staticmethod
     def parse_alpaca_order_side(side: str) -> OrderSide:
-        """
-        Parse Alpaca order side to Nautilus order side.
-
-        Parameters
-        ----------
-        side : str
-            The Alpaca order side string.
-
-        Returns
-        -------
-        OrderSide
-
-        """
         if side == "buy":
             return OrderSide.BUY
         elif side == "sell":
@@ -70,19 +57,6 @@ class AlpacaEnumParser:
 
     @staticmethod
     def parse_nautilus_order_side(side: OrderSide) -> str:
-        """
-        Parse Nautilus order side to Alpaca order side string.
-
-        Parameters
-        ----------
-        side : OrderSide
-            The Nautilus order side.
-
-        Returns
-        -------
-        str
-
-        """
         if side == OrderSide.BUY:
             return "buy"
         elif side == OrderSide.SELL:
@@ -92,19 +66,6 @@ class AlpacaEnumParser:
 
     @staticmethod
     def parse_alpaca_order_type(order_type: str) -> OrderType:
-        """
-        Parse Alpaca order type to Nautilus order type.
-
-        Parameters
-        ----------
-        order_type : str
-            The Alpaca order type string.
-
-        Returns
-        -------
-        OrderType
-
-        """
         if order_type == AlpacaOrderType.MARKET:
             return OrderType.MARKET
         elif order_type == AlpacaOrderType.LIMIT:
@@ -118,24 +79,6 @@ class AlpacaEnumParser:
 
     @staticmethod
     def parse_nautilus_order_type(order_type: OrderType) -> str:
-        """
-        Parse Nautilus order type to Alpaca order type string.
-
-        Parameters
-        ----------
-        order_type : OrderType
-            The Nautilus order type.
-
-        Returns
-        -------
-        str
-
-        Raises
-        ------
-        ValueError
-            If the order type is not supported by Alpaca.
-
-        """
         if order_type == OrderType.MARKET:
             return AlpacaOrderType.MARKET
         elif order_type == OrderType.LIMIT:
@@ -149,19 +92,6 @@ class AlpacaEnumParser:
 
     @staticmethod
     def parse_alpaca_time_in_force(tif: str) -> TimeInForce:
-        """
-        Parse Alpaca time in force to Nautilus time in force.
-
-        Parameters
-        ----------
-        tif : str
-            The Alpaca time in force string.
-
-        Returns
-        -------
-        TimeInForce
-
-        """
         if tif == AlpacaTimeInForce.DAY:
             return TimeInForce.DAY
         elif tif == AlpacaTimeInForce.GTC:
@@ -181,24 +111,6 @@ class AlpacaEnumParser:
 
     @staticmethod
     def parse_nautilus_time_in_force(tif: TimeInForce) -> str:
-        """
-        Parse Nautilus time in force to Alpaca time in force string.
-
-        Parameters
-        ----------
-        tif : TimeInForce
-            The Nautilus time in force.
-
-        Returns
-        -------
-        str
-
-        Raises
-        ------
-        ValueError
-            If the time in force is not supported by Alpaca.
-
-        """
         if tif == TimeInForce.DAY:
             return AlpacaTimeInForce.DAY
         elif tif == TimeInForce.GTC:
@@ -218,19 +130,6 @@ class AlpacaEnumParser:
 
     @staticmethod
     def parse_alpaca_order_status(status: str) -> OrderStatus:
-        """
-        Parse Alpaca order status to Nautilus order status.
-
-        Parameters
-        ----------
-        status : str
-            The Alpaca order status string.
-
-        Returns
-        -------
-        OrderStatus
-
-        """
         if status in (AlpacaOrderStatus.NEW, AlpacaOrderStatus.ACCEPTED, AlpacaOrderStatus.PENDING_NEW):
             return OrderStatus.ACCEPTED
         elif status == AlpacaOrderStatus.PARTIALLY_FILLED:
@@ -243,7 +142,11 @@ class AlpacaEnumParser:
             return OrderStatus.CANCELED
         elif status in (AlpacaOrderStatus.EXPIRED, AlpacaOrderStatus.DONE_FOR_DAY):
             return OrderStatus.EXPIRED
-        elif status in (AlpacaOrderStatus.REJECTED, AlpacaOrderStatus.CANCEL_REJECTED, AlpacaOrderStatus.REPLACE_REJECTED):
+        elif status in (
+            AlpacaOrderStatus.REJECTED,
+            AlpacaOrderStatus.CANCEL_REJECTED,
+            AlpacaOrderStatus.REPLACE_REJECTED,
+        ):
             return OrderStatus.REJECTED
         elif status == AlpacaOrderStatus.PENDING_REPLACE:
             return OrderStatus.PENDING_UPDATE

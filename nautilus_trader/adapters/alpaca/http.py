@@ -14,7 +14,6 @@ from nautilus_trader.adapters.alpaca.utils import get_alpaca_key_and_secret
 
 
 class AlpacaHttpClient:
-
     def __init__(
         self,
         paper: bool,
@@ -182,6 +181,7 @@ class AlpacaHttpClient:
         self,
         status: str | None = None,
         limit: int | None = None,
+        after: str | None = None,
         symbols: str | None = None,
     ) -> list[dict[str, Any]]:
         """
@@ -201,6 +201,8 @@ class AlpacaHttpClient:
             params["status"] = status
         if limit:
             params["limit"] = limit
+        if after:
+            params["after"] = after
         if symbols:
             params["symbols"] = symbols
 
@@ -209,20 +211,20 @@ class AlpacaHttpClient:
     async def get_order(self, order_id: str) -> dict[str, Any]:
         return await self._request("GET", f"/v2/orders/{order_id}")  # type: ignore
 
-    def _record_order(self, order_type:str, submit_dt, order_params: dict[str, Any]) -> None:
+    def _record_order(self, order_type: str, submit_dt, order_params: dict[str, Any]) -> None:
         if self.record_orders:
-            full_order = {"type":order_type, "submit_dt":str(submit_dt), **order_params}
+            full_order = {"type": order_type, "submit_dt": str(submit_dt), **order_params}
             with open(run_artifacts_subdir("order_submissions.json"), "a") as f:
                 f.write(f"{json.dumps(full_order)}\n")
 
     async def submit_order(self, order_request: dict[str, Any]) -> dict[str, Any]:
         submit_dt = pd.Timestamp.utcnow()
         response = await self._request("POST", "/v2/orders", json_data=order_request)
-        self._record_order("submit", submit_dt=submit_dt, order_params={**order_request, "order_id":response["id"]})
+        self._record_order("submit", submit_dt=submit_dt, order_params={**order_request, "order_id": response["id"]})
         return response
 
     async def cancel_order(self, order_id: str) -> dict[str, Any]:
-        self._record_order("cancel", pd.Timestamp.utcnow(), {"order_id":order_id})
+        self._record_order("cancel", pd.Timestamp.utcnow(), {"order_id": order_id})
         return await self._request("DELETE", f"/v2/orders/{order_id}")
 
     async def cancel_all_orders(self) -> list[dict[str, Any]]:
@@ -268,7 +270,7 @@ class AlpacaHttpClient:
         if trail:
             json_data["trail"] = trail
 
-        self._record_order("replace", pd.Timestamp.utcnow(), {"order_id": order_id,**json_data})
+        self._record_order("replace", pd.Timestamp.utcnow(), {"order_id": order_id, **json_data})
         return await self._request("PATCH", f"/v2/orders/{order_id}", json_data=json_data)  # type: ignore
 
     # Positions API
@@ -356,6 +358,7 @@ class AlpacaHttpClient:
                 raise Exception(f"HTTP {response.status}: {text}")
 
             return await response.json()  # type: ignore
+
 
 #
 # @lru_cache(1)
