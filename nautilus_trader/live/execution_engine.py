@@ -1255,10 +1255,9 @@ class LiveExecutionEngine(ExecutionEngine):
 
             results: list[bool] = []
 
+            self._log.info("Reconciling execution state...")
             # Request execution mass status report from clients
-            reconciliation_lookback_mins: int | None = (
-                self.reconciliation_lookback_mins if self.reconciliation_lookback_mins > 0 else None
-            )
+            reconciliation_lookback_mins: int | None = self.reconciliation_lookback_mins
             mass_status_coros = [
                 c.generate_mass_status(reconciliation_lookback_mins) for c in self._clients.values()
             ]
