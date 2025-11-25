@@ -3,7 +3,7 @@ import json
 
 from custom.strategies.base import ArtifactsLocation
 from custom.strategies.latency_test import LatencyTestStrategyConfig, LatencyTestStrategy
-from custom.utils import run_artifacts_subdir
+from custom.utils.paths import run_artifacts_subdir
 from nautilus_trader.adapters.alpaca import AlpacaExecClientConfig, AlpacaDataClientConfig
 from nautilus_trader.adapters.alpaca import AlpacaLiveDataClientFactory
 from nautilus_trader.adapters.alpaca import AlpacaLiveExecClientFactory

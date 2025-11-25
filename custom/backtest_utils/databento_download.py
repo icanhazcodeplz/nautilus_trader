@@ -12,8 +12,8 @@ import pandas as pd
 
 from nautilus_trader import ENV
 from custom.nt_extensions.tbbo_data import TBBOData
-from custom.utils import data_subdir
-from custom.utils.load_catalog_data import BACKTESTING_CATALOG
+from custom.utils.paths import data_subdir
+from custom.backtest_utils.load_catalog_data import BACKTESTING_CATALOG
 from nautilus_trader.adapters.databento import DatabentoDataLoader, DATABENTO
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
 

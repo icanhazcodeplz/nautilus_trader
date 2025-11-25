@@ -1,4 +1,4 @@
-from custom import BACKTEST_SYMBOL
+from custom.backtest_utils import BACKTEST_SYMBOL
 from custom.catalog_options import CATALOG_OPTIONS
 from custom.nt_extensions.tbbo_data import TBBOData
 

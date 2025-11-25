@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 from nautilus_trader.model.orders import StopLimitOrder
 
-from custom.utils import run_artifacts_subdir
+from custom.utils.paths import run_artifacts_subdir
 from nautilus_trader.adapters.alpaca.http import AlpacaHttpClient
 from nautilus_trader.adapters.alpaca.constants import ALPACA_VENUE
 from nautilus_trader.core.datetime import ensure_pydatetime_utc
@@ -715,15 +715,14 @@ class AlpacaExecutionClient(LiveExecutionClient):
                     new_order = await self._http_client.get_order(venue_order_id.value)
                     if float(new_order["limit_price"]) != float(limit_price):
                         self._log.warning(f"Order already replaced, but limit price has changed. {venue_order_id}")
-                # elif msg == "order parameters are not changed":
-                #     self._log.info(f"Order {command.client_order_id} is already in desired state, skipping")
+                elif msg == "order parameters are not changed":
+                    self._log.info(f"Order {command.client_order_id} order parameters are not changed, skipping")
                 # elif msg.startswith("qty must be"):
 
                 else:
                     raise Exception from e
 
         except Exception as e:
-            self._log.error(f"Failed to modify order: {e}")
             self.generate_order_modify_rejected(
                 strategy_id=command.strategy_id,
                 instrument_id=command.instrument_id,

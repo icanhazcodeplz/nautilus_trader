@@ -3,9 +3,9 @@ import random
 
 import pandas as pd
 
-from custom import BACKTEST_SYMBOL
+from custom.backtest_utils import BACKTEST_SYMBOL
 from custom.catalog_options import CATALOG_OPTIONS
-from custom.utils.load_catalog_data import get_catalog_data
+from custom.backtest_utils.load_catalog_data import get_catalog_data
 from custom.nt_extensions.limit_fill_model import LimitFillModel
 from custom.strategies.momo import MomoStrategyConfig, MomoStrategy
 from custom.artifacts import ArtifactsIO, VIZ_ARTIFACTS_PATH
@@ -19,7 +19,6 @@ from custom.statistics.win_loss_ratio import WinLossRatio
 from custom.utils.orders_to_trades import orders_to_trades
 from custom.utils.run_utils import run_strategy
 from nautilus_trader.adapters.alpaca import ALPACA
-from nautilus_trader.adapters.databento import DATABENTO
 from nautilus_trader.backtest.models import LatencyModel
 from nautilus_trader.cache.config import CacheConfig
 from nautilus_trader.config import LoggingConfig

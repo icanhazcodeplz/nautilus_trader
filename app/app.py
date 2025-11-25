@@ -8,7 +8,7 @@ from flask_restful import Api
 from flask_cors import CORS
 
 from custom.backtest_runner import analyze_trades
-from custom.utils import data_subdir
+from custom.utils.paths import data_subdir
 from custom.utils.orders_to_trades import orders_to_trades
 from custom.artifacts import CreateMarkers, ArtifactsIO, VIZ_ARTIFACTS_PATH
 

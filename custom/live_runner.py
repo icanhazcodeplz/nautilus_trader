@@ -3,7 +3,7 @@ from time import sleep
 
 from custom.strategies.momo import MomoStrategy
 from custom.strategies.momo import MomoStrategyConfig
-from custom.utils import run_artifacts_subdir
+from custom.utils.paths import run_artifacts_subdir
 from custom.utils.run_utils import run_strategy
 from custom.utils.alpaca_trader_http_client import AlpacaTraderHttpClient
 from nautilus_trader.adapters.alpaca import ALPACA, AlpacaExecClientConfig, AlpacaDataClientConfig, AlpacaHttpClient

@@ -2,8 +2,7 @@ import json
 import pickle
 import pandas as pd
 
-from custom.utils import data_subdir
-
+from custom.utils.paths import data_subdir
 
 VIZ_ARTIFACTS_PATH = data_subdir("viz")
 

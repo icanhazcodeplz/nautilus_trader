@@ -2,11 +2,10 @@ import pandas as pd
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockTradesRequest, StockQuotesRequest
 
-from custom.utils.load_catalog_data import get_catalog_data, BACKTESTING_CATALOG
+from custom.backtest_utils.load_catalog_data import BACKTESTING_CATALOG
 from nautilus_trader.adapters.alpaca import ALPACA
 from nautilus_trader.adapters.alpaca.utils import get_alpaca_key_and_secret
 from nautilus_trader.core.datetime import dt_to_unix_nanos
-from nautilus_trader.adapters.databento import DATABENTO
 from nautilus_trader.model import TradeTick
 from nautilus_trader.model.data import QuoteTick
 from nautilus_trader.model.enums import AggressorSide

@@ -9,7 +9,7 @@ import pandas as pd
 
 from nautilus_trader.common.component import Logger
 
-from custom.utils import run_artifacts_subdir
+from custom.utils.paths import run_artifacts_subdir
 from nautilus_trader.adapters.alpaca.utils import get_alpaca_key_and_secret
 
 
