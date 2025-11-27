@@ -18,7 +18,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Dict, Any
 
 import pandas as pd
 from nautilus_trader.model.orders import StopLimitOrder
@@ -28,7 +28,7 @@ from nautilus_trader.adapters.alpaca.http import AlpacaHttpClient
 from nautilus_trader.adapters.alpaca.constants import ALPACA_VENUE
 from nautilus_trader.core.datetime import ensure_pydatetime_utc
 from nautilus_trader.adapters.alpaca.enums import AlpacaOrderType, AlpacaTimeInForce
-from nautilus_trader.adapters.alpaca.parsing import AlpacaEnumParser
+from nautilus_trader.adapters.alpaca.parsing import AlpacaEnumParser, client_order_id_populated_by_alpaca
 from nautilus_trader.adapters.alpaca.parsing import parse_order_status_report
 from nautilus_trader.adapters.alpaca.websocket import AlpacaWebSocketClient
 from nautilus_trader.common.config import PositiveInt
@@ -316,6 +316,30 @@ class AlpacaExecutionClient(LiveExecutionClient):
             self._log.error(f"Failed to generate OrderStatusReport: {e}")
             return None
 
+    @staticmethod
+    def _replaced_or_no_client_order_id(alpaca_order: Dict[str, Any]) -> bool:
+        return alpaca_order["replaced_by"] is not None or not client_order_id_populated_by_alpaca(alpaca_order)
+
+    def filter_replaced_and_incomplete_orders(self, orders_list):
+        new_orders_list = [order for order in orders_list if not self._replaced_or_no_client_order_id(order)]
+        return new_orders_list
+
+        # TODO: The first update from a new order does not include the correct client_order_id, Alpaca is still populating it. Do we care about mapping this to an old order? Or just wait for the next update?
+        # replaced_by__client_id_map = {o['replaced_by']:o['client_order_id'] for o in orders_list if o['replaced_by'] is not None and len(o['client_order_id']) != 36}
+
+        filtered_and_modified_orders_list = []
+        for order in orders_list:
+            if order["replaced_by"] is None:
+                # if order['id'] in replaced_by__client_id_map.keys():
+                #     order['client_order_id'] = replaced_by__client_id_map[order['id']]
+                if len(order["client_order_id"]) == 36:
+                    # Wait for alpaca to populate the client_order_id. It takes a few seconds.
+                    continue
+                filtered_and_modified_orders_list.append(order)
+
+        # FIXME: Only return the latest report for replaced orders.
+        return filtered_and_modified_orders_list
+
     async def generate_order_status_reports(
         self,
         command: GenerateOrderStatusReports,
@@ -350,15 +374,13 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 start_dt = ensure_pydatetime_utc(command.start)
                 after = start_dt.isoformat()
             alpaca_orders = await self._http_client.get_orders(status=status, after=after)
-
+            alpaca_orders = self.filter_replaced_and_incomplete_orders(alpaca_orders)
             # Parse responses into OrderStatusReport objects
             for alpaca_order in alpaca_orders:
                 try:
                     # Get instrument ID from symbol
                     symbol = alpaca_order["symbol"]
                     instrument_id = InstrumentId.from_str(f"{symbol}.{ALPACA_VENUE}")
-
-                    # Parse order
                     report = parse_order_status_report(
                         alpaca_order=alpaca_order,
                         account_id=self.account_id,

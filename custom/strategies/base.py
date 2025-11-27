@@ -8,6 +8,7 @@ import pandas as pd
 from pandas import Timestamp
 
 from custom.artifacts import ArtifactsIO
+from custom.utils.alpaca_trader_http_client import AlpacaTraderHelper
 from nautilus_trader.common.component import TimeEvent
 from nautilus_trader.config import StrategyConfig
 from nautilus_trader.core.data import Data
@@ -17,7 +18,7 @@ from nautilus_trader.model.data import Bar
 from nautilus_trader.model.data import OrderBookDeltas
 from nautilus_trader.model.data import QuoteTick
 from nautilus_trader.model.data import TradeTick
-from nautilus_trader.model.enums import OrderSide, ContingencyType
+from nautilus_trader.model.enums import OrderSide, ContingencyType, OrderStatus
 from nautilus_trader.model.enums import OrderType
 from nautilus_trader.model.enums import TimeInForce
 from nautilus_trader.model.identifiers import InstrumentId
@@ -26,6 +27,15 @@ from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.model.orders import LimitOrder, Order
 from nautilus_trader.model.orders.list import OrderList
 from nautilus_trader.trading.strategy import Strategy
+
+CLOSED_STATUS_LIST = {
+    OrderStatus.DENIED,
+    OrderStatus.FILLED,
+    OrderStatus.REJECTED,
+    OrderStatus.CANCELED,
+    OrderStatus.EXPIRED,
+    # OrderStatus.PENDING_CANCEL,
+}
 
 
 class BaseStrategyConfig(StrategyConfig, frozen=True):
@@ -41,6 +51,7 @@ class BaseStrategy(Strategy):
     log_update_every_secs: int = None
     only_modify_every_ns = 80e6  # e6 converts to ms
     cancel_partial_fills_after_secs = 3
+    position_discrepancy_allow_secs = 10
 
     def __init__(self, config: BaseStrategyConfig) -> None:
         super().__init__(config)
@@ -66,12 +77,15 @@ class BaseStrategy(Strategy):
         self._initialized = False
         self._artifacts_io = None
         self.save_artifacts = False
+        self._trader_helper = None
 
-        self.open_buys = set()
-        self.open_sells = set()
+        self._open_buys = set()
+        self._open_sells = set()
+        self._position_discrepancy_start_ns = None
 
-    def initialize(self, artifacts_location: Optional[Path]):
+    def initialize(self, artifacts_location: Optional[Path], trader_helper: Optional[AlpacaTraderHelper] = None):
         self._initialized = True
+        self._trader_helper = trader_helper
         if artifacts_location is not None:
             self._artifacts_io = ArtifactsIO(artifacts_location)
             self.save_artifacts = True
@@ -79,6 +93,28 @@ class BaseStrategy(Strategy):
     @property
     def position_qty(self):
         return int(self.portfolio.net_position(self.config.instrument_id))
+
+    @property
+    def open_buys(self) -> set:
+        for order in copy(self._open_buys):
+            if order.status in CLOSED_STATUS_LIST:
+                self._open_buys.discard(order)
+        return copy(self._open_buys)
+
+    @property
+    def open_sells(self) -> set:
+        for order in copy(self._open_sells):
+            if order.status in CLOSED_STATUS_LIST:
+                self._open_sells.discard(order)
+        return copy(self._open_sells)
+
+    @property
+    def open_orders(self) -> set:
+        return self.open_buys.union(self.open_sells)
+
+    def _remove_open_order(self, order):
+        self._open_buys.discard(order)
+        self._open_sells.discard(order)
 
     @property
     def position_avg_px(self):
@@ -93,25 +129,13 @@ class BaseStrategy(Strategy):
         else:
             raise RuntimeError("Multiple positions open")
 
-    def submitted_or_open_orders(self, side=OrderSide.NO_ORDER_SIDE):
-        if side == OrderSide.NO_ORDER_SIDE:
-            return self.open_buys.union(self.open_sells)
-        elif side == OrderSide.BUY:
-            return self.open_buys
-        elif side == OrderSide.SELL:
-            return self.open_sells
-        else:
-            raise ValueError(f"Unexpected side: {side}")
-        # removed_pending_cancel = [order for order in inflight_or_open if order.status != OrderStatus.PENDING_CANCEL]
-        # return removed_pending_cancel
-
     @property
     def open_buy_qty(self):
-        return sum(int(order.leaves_qty) for order in self.open_buys)
+        return sum(int(order.leaves_qty) for order in self._open_buys)
 
     @property
     def open_sell_qty(self):
-        return sum(int(order.leaves_qty) for order in self.open_sells)
+        return sum(int(order.leaves_qty) for order in self._open_sells)
 
     def modify_order(self, order, quantity, price):
         if order.venue_order_id is not None:
@@ -120,15 +144,15 @@ class BaseStrategy(Strategy):
             now_ns = self.clock.timestamp_ns()
             last_mod_qty, last_mod_price, modify_ns = self._order_modify_dict.get(order.client_order_id, [None] * 3)
 
-            price_or_qty_changed = (last_mod_price != price_obj or last_mod_qty != qty_obj)
+            price_or_qty_changed = last_mod_price != price_obj or last_mod_qty != qty_obj
             if last_mod_qty is None or (price_or_qty_changed and (now_ns - modify_ns) > self.only_modify_every_ns):
                 self.log.debug(f"Modifying order {order.client_order_id} with values {qty_obj} @ {price_obj}.")
                 self._order_modify_dict[order.client_order_id] = (qty_obj, price_obj, now_ns)
                 super().modify_order(order, quantity=qty_obj, price=price_obj)
             else:
-                self.log.debug(
-                    f"Not modifying order {order.client_order_id}. Price {last_mod_price} -> {price_obj} | Qty {last_mod_qty} -> {qty_obj} | Time {round((now_ns - modify_ns) / 1e6,1)} < {self.only_modify_every_ns / 1e6} ms."
-                )
+                # self.log.debug(
+                #     f"Not modifying order {order.client_order_id}. Price {last_mod_price} -> {price_obj} | Qty {last_mod_qty} -> {qty_obj} | Time {round((now_ns - modify_ns) / 1e6,1)} < {self.only_modify_every_ns / 1e6} ms."
+                # )
                 return
 
     def cancel_order(self, order, client_id=None, params=None):
@@ -138,17 +162,14 @@ class BaseStrategy(Strategy):
         #     )
         #     return
         # self._already_cancelled_orders.add(order)
-        if order in (self.open_sells or self.open_buys):
+        if order in self.open_orders:
             if order.venue_order_id is not None:
-                self.open_buys.discard(order)
-                self.open_sells.discard(order)
-
+                self._remove_open_order(order)
                 super().cancel_order(order=order, client_id=client_id, params=params)
 
     def sell_position_at_price(self, new_limit_price):
         remaining_qty_to_sell = self.position_qty
-        open_orders = self.submitted_or_open_orders(side=OrderSide.SELL)
-        for order in open_orders:
+        for order in self.open_sells:
             order_qty = order.quantity
             remaining_qty_to_sell -= order_qty
             if order.price != new_limit_price:
@@ -161,14 +182,10 @@ class BaseStrategy(Strategy):
         return self.config.max_position_multiplier * self.config.trade_size
 
     def _max_buy_qty_allowed(self):
-        open_orders = self.submitted_or_open_orders(side=OrderSide.BUY)
-        buy_qty_open_orders = sum(order.quantity for order in open_orders)
-        return self.max_position_allowed - buy_qty_open_orders - self.position_qty
+        return self.max_position_allowed - self.open_buy_qty - self.position_qty
 
     def _max_sell_qty_allowed(self):
-        open_orders = self.submitted_or_open_orders(side=OrderSide.SELL)
-        sell_qty_open_orders = sum(order.quantity for order in open_orders)
-        return self.position_qty - sell_qty_open_orders
+        return self.position_qty - self.open_sell_qty
 
     def log_buy_signal(self, tick, tag=None):
         if (self._tick_init_dt_adjusted - self.last_buy_signal_dt) / 1e9 < self.buy_signal_delay_secs:
@@ -236,10 +253,8 @@ class BaseStrategy(Strategy):
             and (self._tick_init_dt_adjusted - self._last_log_update_dt) / 1e9 > self.log_update_every_secs
         ):
             timestamp = pd.Timestamp(self._tick_init_dt_adjusted, unit="ns")
-            open_buys = len(self.submitted_or_open_orders(side=OrderSide.BUY))
-            open_sells = len(self.submitted_or_open_orders(side=OrderSide.SELL))
             self.log.info(
-                f"Update\nTick {timestamp}: {tick_data}\nPosition {self.position_qty} @ {self.position_avg_px}\nBuy signals: {len(self.buy_sell_signals)} | Buys {self.buy_orders_count} | Open Buys {open_buys} | Open Sells {open_sells}"
+                f"Update\nTick {timestamp}: {tick_data}\nPosition {self.position_qty} @ {self.position_avg_px}\nBuy signals: {len(self.buy_sell_signals)} | Buys {self.buy_orders_count} | Open Buys {len(self.open_buys)} | Open Sells {len(self.open_sells)}"
             )
             self._last_log_update_dt = self._tick_init_dt_adjusted
 
@@ -260,9 +275,9 @@ class BaseStrategy(Strategy):
                 self.submit_order(order_or_order_list)
                 if order_or_order_list.side == OrderSide.BUY:
                     buy_included = True
-                    self.open_buys.add(order_or_order_list)
+                    self._open_buys.add(order_or_order_list)
                 if order_or_order_list.side == OrderSide.SELL:
-                    self.open_sells.add(order_or_order_list)
+                    self._open_sells.add(order_or_order_list)
             else:
                 raise ValueError(f"Unexpected order type: {type(order_or_order_list)}")
         if buy_included:
@@ -368,23 +383,90 @@ class BaseStrategy(Strategy):
 
         cached_order = self.cache.order(order.client_order_id)
         if cached_order.leaves_qty == 0:
-            self.open_buys.discard(cached_order)
-            self.open_sells.discard(cached_order)
+            self._remove_open_order(cached_order)
 
         # Clean up order modify dict to reduce memory usage
         # TODO: Test if this actually does anything
         self._order_modify_dict.pop(order.client_order_id, None)
 
-    def _cancel_orders_past_timeout_or_partial_fills(self, event: TimeEvent):
+    @abstractmethod
+    def _on_trade_tick(self, tick: TradeTick) -> None:
+        pass
+
+    def on_order_event(self, order) -> None:
+        if isinstance(order, OrderRejected):
+            order = self.cache.order(order.client_order_id)
+            self._remove_open_order(order)
+
+            if order.side == OrderSide.BUY:
+                if "insufficient qty available" in order.last_event.reason:
+                    self.log.warning(
+                        f"Buy order rejected for insufficient quantity. Accidental shorting is likely. Running reconciliation."
+                    )
+                    self._reconcile()
+
+    def close_position_limit_order(self):
+        last_trade = self.cache.trade_tick(self.config.instrument_id)
+        limit_price = self.position_avg_px if last_trade is None else last_trade.price
+        self.sell_position_at_price(self.instrument.make_price(limit_price * 0.8))
+
+    def _reconcile(self, event: TimeEvent = None):
+        self._log.info("Reconciling")
+        if self._trader_helper is None:
+            return
+        position = self._trader_helper.get_position_obj()
+        if self._trader_helper.flatten_if_short_with_retry(position):
+            # Need to get position again after if flattening occurred
+            position = self._trader_helper.get_position_obj()
+
+        position_at_broker = int(position.qty)
+        if position_at_broker < 0:
+            raise RuntimeError(
+                f"Position is negative. Cache Position: {self.position_qty}, Alpaca Position: {position_at_broker}."
+            )
+
+        if self.position_qty != position_at_broker:
+            now_ns = self.clock.timestamp_ns()
+            if self._position_discrepancy_start_ns is None:
+                self._position_discrepancy_start_ns = now_ns
+            elif (now_ns - self._position_discrepancy_start_ns) / 1e9 > self.position_discrepancy_allow_secs:
+                # TODO: Figure out how to manage this situation!
+                # FIXME: Test this if/else block
+                self._log.error(f"Position discrepancy detected. Raising")
+                raise RuntimeError(
+                    f"Position discrepancy detected. Cache Position: {self.position_qty}, Alpaca Position: {position_at_broker}."
+                )
+        else:
+            self._position_discrepancy_start_ns = None
+
+        self_open_orders = self.open_orders
+
+        if len(self_open_orders) > 0:
+            cache_open_orders = set(self.cache.orders_open() + self.cache.orders_inflight())
+
+            for order in cache_open_orders - self_open_orders:
+                self.log.error(f"Cache open order, venue_id {order.venue_order_id} not found in self.open_orders.")
+
+            for order in self_open_orders - cache_open_orders:
+                self.log.warning(f"Self open order {order} not found in cache.")
+                try:
+                    # Try to retrieve order and see if status is closed. If so, remove from self.open_orders
+                    cache_order = self.cache.order(order.client_order_id)
+                    if cache_order.status in CLOSED_STATUS_LIST:
+                        self._remove_open_order(order)
+                except Exception as e:
+                    # check if self_order was just recently opened
+                    print()
+
+    def _cancel_orders_past_timeout_and_partial_fills(self, event: TimeEvent):
         # Cancel open orders if they have reached their expiration time
-        open_orders = self.submitted_or_open_orders(OrderSide.BUY)
-        for order in copy(open_orders):
+        for order in self.open_buys:
             if len(order.tags) > 1:
                 expire_time = order.tags[1]  # FIXME: hardcoded to look at second item
                 if self.clock.utc_now() > expire_time:
                     self.cancel_order(order)
 
-        for order in copy(self.submitted_or_open_orders()):
+        for order in self.open_orders:
             if order.filled_qty > 0:
                 earliest_fill_time_ns = min(fill.ts_event for fill in order.events if isinstance(fill, OrderFilled))
                 ns_since_earliest_fill = self.clock.timestamp_ns() - earliest_fill_time_ns
@@ -400,7 +482,12 @@ class BaseStrategy(Strategy):
         self.clock.set_timer(
             name="cancel_orders_timer",
             interval=timedelta(seconds=0.25),
-            callback=self._cancel_orders_past_timeout_or_partial_fills,
+            callback=self._cancel_orders_past_timeout_and_partial_fills,
+        )
+        self.clock.set_timer(
+            name="reconcile_internal_fn",
+            interval=timedelta(seconds=1),
+            callback=self._reconcile,
         )
 
         self.instrument = self.cache.instrument(self.config.instrument_id)
@@ -416,11 +503,6 @@ class BaseStrategy(Strategy):
         # self.subscribe_order_book_deltas(self.config.instrument_id, depth=20)  # For debugging
         # self.subscribe_order_book_at_interval(self.config.instrument_id, depth=20)  # For debugging
 
-    def close_position_limit_order(self):
-        last_trade = self.cache.trade_tick(self.config.instrument_id)
-        limit_price = self.position_avg_px if last_trade is None else last_trade.price
-        self.sell_position_at_price(self.instrument.make_price(limit_price * 0.8))
-
     def on_stop(self) -> None:
         if self.position_qty > 0:
             # Cancel BUY orders, but use "close_position_limit_order" to modify sell orders
@@ -431,16 +513,6 @@ class BaseStrategy(Strategy):
 
         # Unsubscribe from data
         self.unsubscribe_trade_ticks(self.config.instrument_id)
-
-    @abstractmethod
-    def _on_trade_tick(self, tick: TradeTick) -> None:
-        pass
-
-    def on_order_event(self, order) -> None:
-        if isinstance(order, OrderRejected):
-            order = self.cache.order(order.client_order_id)
-            self.open_buys.discard(order)
-            self.open_sells.discard(order)
 
     def on_dispose(self) -> None:
         if self.save_artifacts:

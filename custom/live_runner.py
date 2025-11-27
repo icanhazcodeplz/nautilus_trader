@@ -47,6 +47,11 @@ config_node = TradingNodeConfig(
         reconciliation_instrument_ids=[instrument_id],
         inflight_check_interval_ms=5000,
         reconciliation_startup_delay_secs=3.0,
+        open_check_interval_secs=5,
+        purge_closed_orders_interval_mins=10,
+        open_check_open_only=False,
+        open_check_lookback_mins=10,  # TODO: Reduce this?
+        open_check_threshold_ms=2000,
     ),
     cache=CacheConfig(
         # database=DatabaseConfig(),

@@ -10,14 +10,15 @@ log = Logger(name="run_utils")
 
 
 def run_strategy(strategy, node_or_engine, artifacts_location=None, run_config=None, paper=True):
-    strategy.initialize(artifacts_location=artifacts_location)
     if isinstance(node_or_engine, TradingNode):
-        alpaca_helper = AlpacaTraderHelper(paper=paper)
-        alpaca_helper.flatten_symbol(symbol=strategy.config.instrument_id.symbol.value)
+        alpaca_helper = AlpacaTraderHelper(symbol=strategy.config.instrument_id.symbol.value, paper=paper)
+        alpaca_helper.cancel_orders_and_flatten_position_with_retry()
 
+        strategy.initialize(artifacts_location=artifacts_location, trader_helper=alpaca_helper)
         node_or_engine.trader.add_strategy(strategy=strategy)
         node_or_engine.build()
     elif isinstance(node_or_engine, BacktestEngine):
+        strategy.initialize(artifacts_location=artifacts_location, trader_helper=None)
         node_or_engine.add_strategy(strategy=strategy)
 
     try:
@@ -27,7 +28,7 @@ def run_strategy(strategy, node_or_engine, artifacts_location=None, run_config=N
         log.error(f"Traceback:\n{traceback.format_exc()}")
     finally:
         if isinstance(node_or_engine, TradingNode):
-            alpaca_helper.flatten_symbol(symbol=strategy.config.instrument_id.symbol.value)
+            alpaca_helper.cancel_orders_and_flatten_position_with_retry()
 
         orders_report = node_or_engine.trader.generate_orders_report()
         performance_stats = {

@@ -42,6 +42,8 @@ from nautilus_trader.model.objects import Money
 from nautilus_trader.model.objects import Price
 from nautilus_trader.model.objects import Quantity
 
+def client_order_id_populated_by_alpaca(alpaca_order: dict[str, Any]) -> bool:
+    return len(alpaca_order["client_order_id"]) != 36
 
 class AlpacaEnumParser:
     """

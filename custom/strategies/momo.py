@@ -139,7 +139,7 @@ class MomoStrategy(BaseStrategy):
         if self.market_open_only and not is_market_open(self.clock.utc_now()):
             return
 
-        buy_orders = self.submitted_or_open_orders(OrderSide.BUY)
+        buy_orders = self.open_buys
         position_qty = self.position_qty
         if self.config.random_buy:
             if (
@@ -171,7 +171,7 @@ class MomoStrategy(BaseStrategy):
         # BUY LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         if self.config.trailing_buy_order:
             vwap_lower = self.instrument.make_price(self.vwap.lower)
-            for order in copy(self.open_buys):
+            for order in self.open_buys:
                 if order.price != vwap_lower:
                     self.modify_order(order, quantity=order.quantity, price=vwap_lower)
 
@@ -225,7 +225,7 @@ class MomoStrategy(BaseStrategy):
                     self.last_take_ts = self.clock.utc_now()
 
         # Cancel buy if price has spiked above vwap
-        # open_buys = self.submitted_or_open_orders(side=OrderSide.BUY)
+        # open_buys = self.open_buys
         # if (
         #     not (self.config.trailing_buy_order or self.config.random_buy)
         #     and len(open_buys) > 0
@@ -242,7 +242,7 @@ class MomoStrategy(BaseStrategy):
     def _rolling_tiered_take(self):
         position_qty = self.position_qty
         vwap_upper = self.instrument.make_price(self.vwap.upper)
-        for order in copy(self.open_sells):
+        for order in self.open_sells:
             if order.price != vwap_upper:
                 # If order has not started to fill yet, update quantity to the position_qty
                 new_qty = position_qty if order.filled_qty == 0 else order.quantity

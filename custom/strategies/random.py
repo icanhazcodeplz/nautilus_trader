@@ -35,7 +35,7 @@ class Random(BaseStrategy):
 
     def _on_trade_tick(self, tick: TradeTick) -> None:
         price = tick.price
-        open_orders = self.submitted_or_open_orders()
+        open_orders = self.open_orders
         if len(open_orders) == 0:
             if self.position_qty == 0:
                 self.trades_since_flat += 1
