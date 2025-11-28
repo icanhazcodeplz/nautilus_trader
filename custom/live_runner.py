@@ -106,7 +106,6 @@ node.add_exec_client_factory(ALPACA, AlpacaLiveExecClientFactory)
 
 def place_orders_for_testing(paper: bool = True):
     client = AlpacaTraderHttpClient(paper=paper)
-    symbol = "ENLV"
     client.limit_order(side="buy", symbol=symbol, qty=1000, price=2.50)
     sleep(3)
     client.limit_order(side="sell", symbol=symbol, qty=100, price=3.00)

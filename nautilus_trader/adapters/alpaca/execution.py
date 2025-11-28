@@ -28,7 +28,7 @@ from nautilus_trader.adapters.alpaca.http import AlpacaHttpClient
 from nautilus_trader.adapters.alpaca.constants import ALPACA_VENUE
 from nautilus_trader.core.datetime import ensure_pydatetime_utc
 from nautilus_trader.adapters.alpaca.enums import AlpacaOrderType, AlpacaTimeInForce
-from nautilus_trader.adapters.alpaca.parsing import AlpacaEnumParser, client_order_id_populated_by_alpaca
+from nautilus_trader.adapters.alpaca.parsing import AlpacaEnumParser, client_id_is_real
 from nautilus_trader.adapters.alpaca.parsing import parse_order_status_report
 from nautilus_trader.adapters.alpaca.websocket import AlpacaWebSocketClient
 from nautilus_trader.common.config import PositiveInt
@@ -194,6 +194,10 @@ class AlpacaExecutionClient(LiveExecutionClient):
         self._trade_updates_output_file_path = run_artifacts_subdir("alpaca_trade_updates.json")
         self._trade_updates_data = []
 
+        # Keep track of the associated client_order_id with the venue_order_id as orders are replaced/modified
+        self._venue_id__client_id_map = {}
+
+
     @property
     def instrument_provider(self):
         """
@@ -268,10 +272,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
     # -- EXECUTION REPORTS --------------------------------------------------------------------
 
-    async def generate_order_status_report(
-        self,
-        command: GenerateOrderStatusReport,
-    ) -> OrderStatusReport | None:
+    async def generate_order_status_report(self, command: GenerateOrderStatusReport) -> OrderStatusReport | None:
         """
         Generate an order status report for a specific order.
 
@@ -316,28 +317,27 @@ class AlpacaExecutionClient(LiveExecutionClient):
             self._log.error(f"Failed to generate OrderStatusReport: {e}")
             return None
 
-    @staticmethod
-    def _replaced_or_no_client_order_id(alpaca_order: Dict[str, Any]) -> bool:
-        return alpaca_order["replaced_by"] is not None or not client_order_id_populated_by_alpaca(alpaca_order)
-
     def filter_replaced_and_incomplete_orders(self, orders_list):
-        new_orders_list = [order for order in orders_list if not self._replaced_or_no_client_order_id(order)]
-        return new_orders_list
-
-        # TODO: The first update from a new order does not include the correct client_order_id, Alpaca is still populating it. Do we care about mapping this to an old order? Or just wait for the next update?
-        # replaced_by__client_id_map = {o['replaced_by']:o['client_order_id'] for o in orders_list if o['replaced_by'] is not None and len(o['client_order_id']) != 36}
-
         filtered_and_modified_orders_list = []
-        for order in orders_list:
-            if order["replaced_by"] is None:
-                # if order['id'] in replaced_by__client_id_map.keys():
-                #     order['client_order_id'] = replaced_by__client_id_map[order['id']]
-                if len(order["client_order_id"]) == 36:
-                    # Wait for alpaca to populate the client_order_id. It takes a few seconds.
-                    continue
-                filtered_and_modified_orders_list.append(order)
 
-        # FIXME: Only return the latest report for replaced orders.
+        for order in reversed(orders_list):
+            client_order_id = order["client_order_id"]
+            if client_id_is_real(client_order_id):
+                self._venue_id__client_id_map[order["id"]] = client_order_id
+            elif order["replaces"] in self._venue_id__client_id_map.keys():
+                self._venue_id__client_id_map[order["id"]] = self._venue_id__client_id_map[order["replaces"]]
+
+            if order["replaced_by"] is None:
+                if client_id_is_real(client_order_id):
+                    filtered_and_modified_orders_list.append(order)
+                else:
+                    try:
+                        actual_client_order_id = self._venue_id__client_id_map[order["id"]]
+                        order["client_order_id"] = actual_client_order_id
+                        filtered_and_modified_orders_list.append(order)
+                    except KeyError:
+                        self._log.warning(f"No client_order_id for {order}, skipping")
+
         return filtered_and_modified_orders_list
 
     async def generate_order_status_reports(
@@ -722,6 +722,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
             try:
                 await self._http_client.replace_order(
                     order_id=venue_order_id.value,
+                    # client_order_id=command.client_order_id.value,
                     qty=qty,
                     limit_price=limit_price,
                     stop_price=stop_price,

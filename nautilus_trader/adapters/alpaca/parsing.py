@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import uuid
 from decimal import Decimal
 from typing import Any
 
@@ -42,8 +43,20 @@ from nautilus_trader.model.objects import Money
 from nautilus_trader.model.objects import Price
 from nautilus_trader.model.objects import Quantity
 
-def client_order_id_populated_by_alpaca(alpaca_order: dict[str, Any]) -> bool:
-    return len(alpaca_order["client_order_id"]) != 36
+
+def is_uuid(value: str) -> bool:
+    try:
+        uuid.UUID(value)
+        return True
+    except ValueError:
+        return False
+
+
+def client_id_is_real(client_order_id: str) -> bool:
+    # Alpaca generates a random UUID if client_order_id is not provided
+    # TODO: WARNING This assumes that we never produce a client_id that is a valid UUID!
+    return not is_uuid(client_order_id)
+
 
 class AlpacaEnumParser:
     """
@@ -155,7 +168,8 @@ class AlpacaEnumParser:
         elif status == AlpacaOrderStatus.PENDING_REPLACE:
             return OrderStatus.PENDING_UPDATE
         elif status == AlpacaOrderStatus.REPLACED:
-            return OrderStatus.ACCEPTED  # Replaced order becomes accepted
+            raise NotImplementedError(f"Trying to avoid every passing forward replaced orders")
+            return OrderStatus.CANCELED  # Replaced order becomes canceled
         elif status in (AlpacaOrderStatus.STOPPED, AlpacaOrderStatus.SUSPENDED):
             return OrderStatus.CANCELED  # Map stopped/suspended to canceled
         else:

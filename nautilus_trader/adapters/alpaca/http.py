@@ -235,6 +235,7 @@ class AlpacaHttpClient:
     async def replace_order(
         self,
         order_id: str,
+        # client_order_id: str,
         qty: str | None = None,
         limit_price: str | None = None,
         stop_price: str | None = None,
@@ -262,6 +263,8 @@ class AlpacaHttpClient:
             The updated order details.
 
         """
+        # Alpaca requires a unique client_order_id for each order submission
+        # json_data = {"client_order_id": client_order_id}
         json_data = {}
         if qty:
             json_data["qty"] = qty

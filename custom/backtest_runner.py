@@ -283,11 +283,9 @@ if __name__ == "__main__":
 
         orders_report = artifacts_io.load_orders_report()
         df = orders_report.copy()
-        df = df[df["filled_qty"].astype(int) > 0]
 
         # win_ratio = _calculate_oco_win_ratio_DEPRECATED(df)
         trades, sell_legs = orders_to_trades(df)
         analyze_trades(trades, print_report=True)
 
-        buys = df[df["side"] == "BUY"]
         print()
