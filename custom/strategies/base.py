@@ -411,7 +411,6 @@ class BaseStrategy(Strategy):
         self.sell_position_at_price(self.instrument.make_price(limit_price * 0.8))
 
     def _reconcile(self, event: TimeEvent = None):
-        self._log.info("Reconciling")
         if self._trader_helper is None:
             return
         position = self._trader_helper.get_position_obj()
@@ -431,7 +430,6 @@ class BaseStrategy(Strategy):
                 self._position_discrepancy_start_ns = now_ns
             elif (now_ns - self._position_discrepancy_start_ns) / 1e9 > self.position_discrepancy_allow_secs:
                 # TODO: Figure out how to manage this situation!
-                # FIXME: Test this if/else block
                 self._log.error(f"Position discrepancy detected. Raising")
                 raise RuntimeError(
                     f"Position discrepancy detected. Cache Position: {self.position_qty}, Alpaca Position: {position_at_broker}."
@@ -571,48 +569,3 @@ class BaseStrategy(Strategy):
         pass
 
 
-"""
-  async def _periodic_task(self):
-      while True:
-          await asyncio.sleep(60)  # Wait 60 seconds
-          # Do your periodic operation here
-          self.log.info("Running periodic task")
-
-  def on_start(self):
-      # Start the periodic task
-      self.create_task(self._periodic_task())
-
-  2. Clock Timers (Recommended for Trading Logic)
-
-  Use the built-in clock timer system:
-
-  def on_start(self):
-      # Set a timer that fires every 60 seconds
-      self.clock.set_timer(
-          name="my_periodic_timer",
-          interval=timedelta(seconds=60),
-          callback=self._on_timer_event,
-      )
-
-  def _on_timer_event(self, event: TimeEvent):
-      # Called every 60 seconds
-      self.log.info("Timer fired!")
-      # Do your periodic operation here
-
-  3. Time Alerts (One-time events)
-
-  For one-time future events:
-
-  def on_start(self):
-      # Fire once at a specific time
-      alert_time = self.clock.utc_now() + timedelta(minutes=5)
-      self.clock.set_time_alert(
-          name="my_alert",
-          alert_time=alert_time,
-          callback=self._on_alert,
-      )
-
-  def _on_alert(self, event: TimeEvent):
-      self.log.info("Alert triggered!")
-
-"""

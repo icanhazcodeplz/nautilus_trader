@@ -1,11 +1,10 @@
 from collections import deque
-from copy import copy
 from dataclasses import dataclass
 from random import random
 
 import pandas as pd
 
-from custom.nt_extensions.indicators import RollingVWAP
+from custom.nt_extensions.indicators import VWAPBands
 from custom.strategies.base import BaseStrategy, BaseStrategyConfig
 from nautilus_trader.indicators import VolumeWeightedAveragePrice
 from nautilus_trader.model.data import Bar
@@ -23,6 +22,12 @@ class Metric:
     def get_vals(self):
         return {f"{self.name}_{attr}": round(getattr(self.obj, attr), 3) for attr in self.attrs}
 
+    @property
+    def tick_lookback(self):
+        if hasattr(self.obj, "tick_lookback"):
+            return self.obj.tick_lookback
+        return 0
+
 
 class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     instrument_id: InstrumentId
@@ -32,10 +37,10 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
 
     take_profit: float
     take_ratio: float
+    lower_pct: float
+    upper_pct: float
     vwap_window: int
     variance_window_ratio: float
-    lower_scalar: float
-    upper_scalar: float
 
     trailing_buy_order: bool = False
     use_bracket_orders: bool = False
@@ -84,11 +89,11 @@ class MomoStrategy(BaseStrategy):
         # FIXME: This is temporary
         self.take_profit = self.config.take_profit if self.config.take_profit is not None else self.config.stop_loss
         self.market_open_only = self.config.use_bracket_orders or self.config.use_oco_sell_orders
-        self.vwap = RollingVWAP(
+        self.vwap = VWAPBands(
+            lower_pct=self.config.lower_pct,
+            upper_pct=self.config.upper_pct,
             rolling_window=self.config.vwap_window,
             variance_window_ratio=self.config.variance_window_ratio,
-            lower_scalar=self.config.lower_scalar,
-            upper_scalar=self.config.upper_scalar,
         )
         # self.vwap_day = VolumeWeightedAveragePrice()
 
@@ -118,6 +123,7 @@ class MomoStrategy(BaseStrategy):
         if self.stop_price is not None and tick.price <= self.stop_price:
             # TODO: HARDCODED to set stop price to 0.01 below current price
             new_limit_price = self.instrument.make_price(tick.price - 0.01)
+            self.log.info(f"Stop price {self.stop_price} reached, selling at {new_limit_price}")
 
             # FIXME: this is not a great solution. The fills for selling are more accurate during backtesting
             # if you use a single order, but during live running it is less buggy to modify existing orders because
@@ -278,39 +284,6 @@ class MomoStrategy(BaseStrategy):
         # FIXME: NEed to figure out tiered take prices
         # if order_filled.is_sell and not self.config.use_oco_sell_orders:
         #     self.take_price = order_filled.last_px + self.take_profit
-
-    def on_start(self) -> None:
-        super().on_start()
-        self.instrument = self.cache.instrument(self.config.instrument_id)
-        if self.instrument is None:
-            self.log.error(f"Could not find instrument for {self.config.instrument_id}")
-            self.stop()
-            return
-
-        # FIXME: Assumes all "metrics_to_save" are for trade ticks
-        for metric in self.metrics_to_save:
-            self.register_indicator_for_trade_ticks(self.config.instrument_id, metric.obj)
-
-        # Get historical data
-        # if self.config.request_historical_bars:
-        #     self.request_bars(
-        #         self.config.bar_type,
-        #         start=self._clock.utc_now() - pd.Timedelta(days=1),
-        #     )
-        # self.request_quote_ticks(self.config.instrument_id)
-        # self.request_trade_ticks(self.config.instrument_id)
-
-        # Subscribe to live data
-        # self.subscribe_bars(self.config.bar_type)
-        self.subscribe_trade_ticks(self.config.instrument_id)
-
-    def on_stop(self) -> None:
-        super().on_stop()
-
-        # # TODO: Only save if not already existing
-        # bars_list = self.cache.bars(self.config.bar_type)
-        # bars_list.sort(key=lambda x: x.ts_init)
-        # BACKTESTING_CATALOG.write_data(bars_list)
 
     def on_bar(self, bar: Bar) -> None:
         pass

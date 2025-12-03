@@ -234,39 +234,38 @@ class AlpacaDataClient(LiveMarketDataClient):
         except Exception as e:
             self._log.error(f"Error handling market data message: {e}")
 
+    def _trade_msg_to_tradetick(self, instrument_id: InstrumentId, msg: dict[str, Any]) -> TradeTick | None:
+        """Convert an Alpaca trade message to a TradeTick."""
+        # Skip FINRA market data messages
+        if msg["x"] == "D":
+            return
+
+        ts_event = alpaca_date_str_to_nanos(msg["t"])
+        ts_init = self._clock.timestamp_ns()
+
+        # Create TradeTick
+        trade = TradeTick(
+            instrument_id=instrument_id,
+            price=Price.from_str(str(msg["p"])),
+            size=Quantity.from_str(str(msg["s"])),
+            aggressor_side=AggressorSide.NO_AGGRESSOR,  # Alpaca doesn't provide this
+            trade_id=TradeId(str(msg["i"])),
+            ts_event=ts_event,
+            ts_init=ts_init,
+        )
+        return trade
+
     def _handle_trade_message(self, msg: dict[str, Any]) -> None:
         """Parse and handle a trade message."""
         try:
-            # Skip FINRA market data messages
-            if msg["x"] == "D":
-                return
-
-            # Extract symbol and create instrument ID
+            # Create instrument ID from symbol
             symbol = msg["S"]
             instrument_id = InstrumentId.from_str(f"{symbol}.ALPACA")
-
-            # Get instrument for validation
-            instrument = self._cache.instrument(instrument_id)
-            if instrument is None:
-                self._log.warning(f"Received trade for unknown instrument: {instrument_id}")
-                return
-
-            ts_event = alpaca_date_str_to_nanos(msg["t"])
-            ts_init = self._clock.timestamp_ns()
-
-            # Create TradeTick
-            trade = TradeTick(
-                instrument_id=instrument_id,
-                price=Price.from_str(str(msg["p"])),
-                size=Quantity.from_str(str(msg["s"])),
-                aggressor_side=AggressorSide.NO_AGGRESSOR,  # Alpaca doesn't provide this
-                trade_id=TradeId(str(msg["i"])),
-                ts_event=ts_event,
-                ts_init=ts_init,
-            )
+            trade = self._trade_msg_to_tradetick(instrument_id, msg)
 
             # Send to data engine
-            self._handle_data(trade)
+            if trade is not None:
+                self._handle_data(trade)
 
         except Exception as e:
             self._log.error(f"Error parsing trade message: {e}")
@@ -505,33 +504,14 @@ class AlpacaDataClient(LiveMarketDataClient):
         trades = []
         for trade_data in trades_data:
             try:
-                # FIXME: consolidate this logic with `_handle_trade_message` above
-                if trade_data["x"] == "D":
-                    raise Exception("FINRA trade TEST THIS")
-                    continue
-                ts_event = alpaca_date_str_to_nanos(trade_data["t"])
-                ts_init = self._clock.timestamp_ns()
-                # Create TradeTick
-                trade = TradeTick(
-                    instrument_id=request.instrument_id,
-                    price=Price.from_str(str(trade_data["p"])),
-                    size=Quantity.from_str(str(trade_data["s"])),
-                    aggressor_side=AggressorSide.NO_AGGRESSOR,  # Alpaca doesn't provide this
-                    trade_id=TradeId(str(trade_data["i"])),
-                    ts_event=ts_event,
-                    ts_init=ts_init,
-                )
-                trades.append(trade)
+                tradetick = self._trade_msg_to_tradetick(request.instrument_id, trade_data)
+                if tradetick is not None:
+                    trades.append(tradetick)
             except Exception as exc:
-                self._log.warning(
-                    f"Failed to parse trade data: {trade_data}",
-                    exc,
-                )
+                self._log.warning(f"Failed to parse trade data: {trade_data}", exc)
                 continue
 
-        self._log.info(
-            f"Received {len(trades)} trades for {request.instrument_id}",
-        )
+        self._log.info(f"Received {len(trades)} trades for {request.instrument_id}")
 
         # Send trades to data engine
         self._handle_trade_ticks(

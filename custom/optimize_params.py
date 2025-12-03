@@ -20,20 +20,16 @@ DATABASE_STR = "sqlite:///optuna.db"
 optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
 
 DATASET_NAMES = [
-    "aapl1027",
-    "aapl1028",
-    "aapl1029",
-    "aapl1030",
-    "aapl1031",
-    "aapl1103",
-    "aapl1104",
-    "aapl1105",
-    "aapl1106",
-    "aapl1107",
+    "sgbx",
+    "chnr",
+    "jdzg",
+    "gwav",
+    "nva",
+    "agmh"
 ]
 OPTIMIZE_BUY_SIGNALS = False
 RANDOM_BUY = False
-MIN_BUYS_THRESHOLD = 10
+MIN_TRADES_THRESHOLD = 20
 
 
 def linspace_int(low, high, step):
@@ -79,10 +75,11 @@ def optimize(trial):
         take_ratio=0.8,
         vwap_window=200,
         variance_window_ratio=1.5,
-        lower_scalar=0.40,
+        lower_pct=1.0,
+        upper_pct=1.0,
         trailing_buy_order=False,
         use_bracket_orders=False,
-        use_oco_sell_orders=True,
+        use_oco_sell_orders=False,
         simple_take=False,
         trailing_take=True,
         allow_trades=not OPTIMIZE_BUY_SIGNALS,
@@ -114,21 +111,24 @@ def optimize(trial):
         if OPTIMIZE_BUY_SIGNALS:
             buy_signals = performance_stats["buy_signals"]
             wins = performance_stats["buy_signal_wins"]
-            if performance_stats["buy_signals"] < MIN_BUYS_THRESHOLD and not RANDOM_BUY:
+            if performance_stats["buy_signals"] < MIN_TRADES_THRESHOLD and not RANDOM_BUY:
                 return -1.0
             return round(wins / buy_signals, 3)
         else:
-            buys = performance_stats["buys"]
-            wins = performance_stats["wins"]
-            if buys < MIN_BUYS_THRESHOLD and not RANDOM_BUY:
+            trades = performance_stats["Num Trades"]
+            value = performance_stats["Pnl Per100"]
+            print(f"Trial {trial.number} had {trades} trades, value {value}")
+            if trades < MIN_TRADES_THRESHOLD and not RANDOM_BUY:
+                print(f"Trial {trial.number} had {trades} trades, less than required {MIN_TRADES_THRESHOLD}. Returning -1.0")
                 return -1.0
-            return round(wins / buys, 3)
+            return value
 
             # total_pnl = performance_stats["PnL (total)"].sum()
             # total_bought = performance_stats[TotalBought().name].sum()
             # value = total_pnl / total_bought * 100
             # return value
-    except:
+    except Exception as e:
+        print(f"Error running trial {trial.number}. Returning -1.0. Exception:\n {e}")
         return -1.0
 
 
@@ -165,9 +165,10 @@ if __name__ == "__main__":
             # stop_loss=linspace_float(low=0.18, high=0.28, step=0.03),
             # take_profit=linspace_float(low=0.25, high=0.35, step=0.10),
             # take_ratio=linspace_float(low=0.5, high=1.0, step=0.50),
-            vwap_window=linspace_int(low=150, high=250, step=50),
-            variance_window_ratio=linspace_float(low=1.5, high=2.5, step=0.5),
-            lower_scalar=linspace_float(low=0.04, high=0.12, step=0.02),
+            # vwap_window=linspace_int(low=150, high=180, step=20),
+            # variance_window_ratio=linspace_float(low=1.5, high=2.5, step=0.5),
+            lower_pct=linspace_float(low=0.1, high=2.1, step=0.2),
+            upper_pct=linspace_float(low=0.05, high=2.05, step=0.2),
         )
 
     sampler = optuna.samplers.GridSampler(search_space={**search_space, "dataset": DATASET_NAMES})
@@ -208,6 +209,7 @@ if __name__ == "__main__":
     rename_map = {f"params_{p}": p for p in param_names}
     value_round = 1
 
+    value_multiplier = 1
     if load_random_buy_study:
         random_study = optuna.load_study(study_name="random", storage=DATABASE_STR)
         df = random_study.trials_dataframe().round(3)
@@ -216,15 +218,15 @@ if __name__ == "__main__":
         df = df[["value", "random_seed", "dataset"]]
         df = df[~df.duplicated()]
         random_buy_value_df = df.groupby("dataset").agg(["mean", "max"])["value"]
-        random_buy_value_df = (random_buy_value_df * 100).round(value_round)
+        random_buy_value_df = (random_buy_value_df * value_multiplier).round(value_round)
 
     df = study.trials_dataframe().round(3)
     df = df[df["state"] == "COMPLETE"]
     df = df.rename(columns=rename_map)
     df = df[["value", *param_names]]
     df = df[~df.duplicated()]
-    df = df[df["value"] > 0]
-    df["value"] = (df["value"] * 100).round(value_round)
+    df = df[df["value"] != -1.0]
+    df["value"] = (df["value"] * value_multiplier).round(value_round)
     df_orig = df.copy()
     for dataset in DATASET_NAMES:
         if load_random_buy_study:

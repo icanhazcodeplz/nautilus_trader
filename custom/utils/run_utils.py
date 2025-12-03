@@ -24,7 +24,7 @@ def run_strategy(strategy, node_or_engine, artifacts_location=None, run_config=N
     try:
         node_or_engine.run()
     except Exception as e:
-        log.error(f"Exception during run: {e}")
+        log.error(f"Exception during run with params {run_config}: {e}")
         log.error(f"Traceback:\n{traceback.format_exc()}")
     finally:
         if isinstance(node_or_engine, TradingNode):

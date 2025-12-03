@@ -36,13 +36,13 @@ class LatencyTestStrategy(BaseStrategy):
 
         if self.config.buy_on_tick:
             if (
-                len(self.submitted_or_open_orders()) == 0
+                len(self.open_orders) == 0
                 and (self.clock.utc_now() - self.last_buy_dt).total_seconds() > self.min_secs_between_buys
             ):
                 self.buy(quantity=1, limit_price=tick.price * 0.85, tag="b")
 
     def _modify_or_cancel(self, _: TimeEvent):
-        open_orders = self.submitted_or_open_orders()
+        open_orders = self.open_orders
 
         if len(open_orders) > 1:
             raise RuntimeError(f"More than one order open. Raising")
