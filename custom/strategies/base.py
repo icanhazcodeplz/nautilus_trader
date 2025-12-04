@@ -56,7 +56,7 @@ class BaseStrategy(Strategy):
     def __init__(self, config: BaseStrategyConfig) -> None:
         super().__init__(config)
         self.instrument: Instrument = None  # Initialized in on_start
-        self.metrics_to_save = []
+        self.tick_metrics_to_save = []
 
         self.stop_price = None
         self.last_buy_dt: Timestamp = pd.Timestamp("1990", tz="UTC")
@@ -188,6 +188,7 @@ class BaseStrategy(Strategy):
         return self.position_qty - self.open_sell_qty
 
     def log_buy_signal(self, tick, tag=None):
+        return  # TODO: Rethink buy signals?
         if (self._tick_init_dt_adjusted - self.last_buy_signal_dt) / 1e9 < self.buy_signal_delay_secs:
             return
         self._buy_signals_count += 1
@@ -235,16 +236,18 @@ class BaseStrategy(Strategy):
             }
 
         #  Actual operations of this method
-        self._on_trade_tick(tick)
+        if self.indicators_initialized():
+            self._on_trade_tick(tick)
 
         # Record if needed
         if self.save_artifacts:
             tick_data["ts_now_after"] = pd.Timestamp.utcnow()
 
-        self._update_buy_signals(tick)
+        # TODO: Rethink buy signals?
+        # self._update_buy_signals(tick)
 
         if self.save_artifacts:
-            for metric in self.metrics_to_save:
+            for metric in self.tick_metrics_to_save:
                 tick_data = {**tick_data, **metric.get_vals()}
             self._tick_data_dicts[self._tick_init_dt_adjusted] = tick_data
 
@@ -477,16 +480,14 @@ class BaseStrategy(Strategy):
     def on_start(self) -> None:
         if not self._initialized:
             raise RuntimeError("Strategy must be initialized before starting. Call method `initialize` first.")
+
+        # TIME INTERVAL FUNCTIONS
         self.clock.set_timer(
             name="cancel_orders_timer",
             interval=timedelta(seconds=0.25),
             callback=self._cancel_orders_past_timeout_and_partial_fills,
         )
-        self.clock.set_timer(
-            name="reconcile_internal_fn",
-            interval=timedelta(seconds=1),
-            callback=self._reconcile,
-        )
+        self.clock.set_timer(name="reconcile_internal_fn", interval=timedelta(seconds=1), callback=self._reconcile)
 
         self.instrument = self.cache.instrument(self.config.instrument_id)
         if self.instrument is None:
@@ -494,12 +495,29 @@ class BaseStrategy(Strategy):
             self.stop()
             return
 
-        # Subscribe to live data
+        # TICK DATA
+        # Register indicators and request historical trade ticks if needed
+        max_tick_lookback = 0
+        for metric in self.tick_metrics_to_save:
+            self.register_indicator_for_trade_ticks(self.config.instrument_id, metric.obj)
+            max_tick_lookback = max(max_tick_lookback, metric.tick_lookback)
+
+        if max_tick_lookback > 0:
+            # Set a long lookback to ensure we get at least `max_tick_lookback` ticks back
+            trade_tick_start = self.clock.utc_now() - timedelta(days=2)
+            self.request_trade_ticks(self.config.instrument_id, start=trade_tick_start, limit=max_tick_lookback)
+
         self.subscribe_trade_ticks(self.config.instrument_id)
+
         # self.subscribe_quote_ticks(self.config.instrument_id)
         # self.subscribe_order_book_depth(self.config.instrument_id, book_type=BookType.L1_MBP)
         # self.subscribe_order_book_deltas(self.config.instrument_id, depth=20)  # For debugging
         # self.subscribe_order_book_at_interval(self.config.instrument_id, depth=20)  # For debugging
+
+        # Get historical data
+        # if self.config.request_historical_bars:
+        #     self.request_bars( self.config.bar_type, start=self._clock.utc_now() - pd.Timedelta(days=1) )
+        # self.request_quote_ticks(self.config.instrument_id)
 
     def on_stop(self) -> None:
         if self.position_qty > 0:
@@ -567,5 +585,3 @@ class BaseStrategy(Strategy):
 
     def on_load(self, state: dict[str, bytes]) -> None:
         pass
-
-

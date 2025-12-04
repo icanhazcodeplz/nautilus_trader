@@ -49,7 +49,7 @@ class VWAPBands(Indicator):
         self._window_filled = False
         self._adjust_counter = 1
 
-        self.value = 0
+        self.value = None
         self.lower = 0
         self.upper = 0
 
@@ -95,9 +95,16 @@ class VWAPBands(Indicator):
             return
 
         if not self.initialized:
-            self._set_has_inputs(True)
-            self._set_initialized(True)
-            self.value = price
+            if self.value is None:
+                # Need some initial value to start with to avoid raising
+                self.value = price
+            self._set_has_inputs(True)  # What is this ever used for?
+            # Wait to "set_intialized" until after window is fully filled.
+            if self._window_filled:
+                self._set_initialized(True)
+                # Once window is filled, do the initial upper/lower adjustment
+                self._adjust_upper_lower()
+                self._adjust_counter = 1
 
         self._trade_values.append(price * volume)
         self._volumes.append(volume)

@@ -13,6 +13,7 @@ from custom.utils.paths import run_artifacts_subdir
 from nautilus_trader.adapters.alpaca.utils import get_alpaca_key_and_secret
 
 
+
 class AlpacaHttpClient:
     def __init__(
         self,
@@ -323,12 +324,6 @@ class AlpacaHttpClient:
             Sort order: "asc" or "desc".
         page_token : str, optional
             Pagination token for next page.
-
-        Returns
-        -------
-        dict[str, Any]
-            Dictionary with "trades" list and optional "next_page_token".
-
         """
         params = {}
         if start:

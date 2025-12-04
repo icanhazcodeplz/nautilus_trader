@@ -57,6 +57,8 @@ if TYPE_CHECKING:
     from nautilus_trader.data.messages import UnsubscribeQuoteTicks
     from nautilus_trader.data.messages import UnsubscribeTradeTicks
 
+LIMIT_MULTIPLIER_FOR_FINRA_TRADES = 3
+
 
 class AlpacaDataClientConfig(LiveDataClientConfig, frozen=True):
     """
@@ -240,6 +242,11 @@ class AlpacaDataClient(LiveMarketDataClient):
         if msg["x"] == "D":
             return
 
+        # Skip zero qty trades
+        qty_obj = Quantity.from_str(str(msg["s"]))
+        if qty_obj == 0:
+            return
+
         ts_event = alpaca_date_str_to_nanos(msg["t"])
         ts_init = self._clock.timestamp_ns()
 
@@ -247,7 +254,7 @@ class AlpacaDataClient(LiveMarketDataClient):
         trade = TradeTick(
             instrument_id=instrument_id,
             price=Price.from_str(str(msg["p"])),
-            size=Quantity.from_str(str(msg["s"])),
+            size=qty_obj,
             aggressor_side=AggressorSide.NO_AGGRESSOR,  # Alpaca doesn't provide this
             trade_id=TradeId(str(msg["i"])),
             ts_event=ts_event,
@@ -451,11 +458,14 @@ class AlpacaDataClient(LiveMarketDataClient):
 
         # Prepare request parameters
         limit = request.limit
-        if limit is not None and limit > 10000:
-            self._log.warning(
-                f"Alpaca limit {limit} exceeds maximum of 10000, clamping",
+
+        # Because we filter out finra trades, need to request some larger number and then ensure we still have enough
+        # after filtering is complete.
+        limit_with_multiplier = LIMIT_MULTIPLIER_FOR_FINRA_TRADES * limit if limit is not None else None
+        if limit_with_multiplier is not None and limit_with_multiplier > 10000:
+            raise NotImplementedError(
+                f"Have not implemented pagination for trade ticks yet, limit {limit} exceeds maximum of 10000"
             )
-            limit = 10000
 
         # Convert timestamps to RFC-3339 format
         start_str = None
@@ -468,19 +478,21 @@ class AlpacaDataClient(LiveMarketDataClient):
             end_str = end_dt.isoformat()
 
         # Request trades from Alpaca API
+        # WARNNING
+        # Tried to make this `sort` var more intelligent, for example, checking if start or end were None, but Start is
+        # required by NT to be non-None, and end is set to current time if None in NT code! Hoping 'desc' is okay
+        sort = "desc"  # vs 'asc'
         try:
             response = await self._http_client.get_trades(
                 symbol=symbol,
                 start=start_str,
                 end=end_str,
-                limit=limit,
+                limit=limit_with_multiplier,
                 feed=self._config.feed,
+                sort=sort,
             )
         except Exception as exc:
-            self._log.exception(
-                f"Failed to request trades for {request.instrument_id}",
-                exc,
-            )
+            self._log.exception(f"Failed to request trades for {request.instrument_id}", exc)
             return
 
         # Parse trades from response
@@ -499,7 +511,8 @@ class AlpacaDataClient(LiveMarketDataClient):
                 request.params,
             )
             return
-
+        if sort == "desc":
+            trades_data.reverse()
         # Convert to TradeTick objects
         trades = []
         for trade_data in trades_data:
@@ -510,15 +523,13 @@ class AlpacaDataClient(LiveMarketDataClient):
             except Exception as exc:
                 self._log.warning(f"Failed to parse trade data: {trade_data}", exc)
                 continue
+        if len(trades) < limit:
+            raise ValueError(
+                f"Expected at least {limit} trades, got {len(trades)} after filtering out 0 and finra trades"
+            )
+        trades = trades[-limit:]
 
         self._log.info(f"Received {len(trades)} trades for {request.instrument_id}")
 
         # Send trades to data engine
-        self._handle_trade_ticks(
-            request.instrument_id,
-            trades,
-            request.id,
-            request.start,
-            request.end,
-            request.params,
-        )
+        self._handle_trade_ticks(request.instrument_id, trades, request.id, request.start, request.end, request.params)

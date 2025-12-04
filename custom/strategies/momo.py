@@ -97,7 +97,7 @@ class MomoStrategy(BaseStrategy):
         )
         # self.vwap_day = VolumeWeightedAveragePrice()
 
-        self.metrics_to_save = [
+        self.tick_metrics_to_save = [
             Metric(obj=self.vwap, name="vwap", attrs=["value", "upper", "lower"]),
             # Metric(obj=self.vwap_day, name="day_vwap", attrs=["value"]),
         ]
@@ -134,7 +134,7 @@ class MomoStrategy(BaseStrategy):
             # self.sell(quantity=self.position_qty, limit_price=new_limit_price, tag="s")
 
             # Adjust stop price so we don't send repeat orders
-            self.stop_price = tick.price
+            self.stop_price = new_limit_price
 
     def _on_trade_tick(self, tick: TradeTick) -> None:
         self.stop_out_if_needed(tick)
