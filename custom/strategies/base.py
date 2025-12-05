@@ -18,6 +18,8 @@ from nautilus_trader.model.data import Bar
 from nautilus_trader.model.data import OrderBookDeltas
 from nautilus_trader.model.data import QuoteTick
 from nautilus_trader.model.data import TradeTick
+
+from nautilus_trader.model import Quantity, Price
 from nautilus_trader.model.enums import OrderSide, ContingencyType, OrderStatus
 from nautilus_trader.model.enums import OrderType
 from nautilus_trader.model.enums import TimeInForce
@@ -37,6 +39,87 @@ CLOSED_STATUS_LIST = {
     # OrderStatus.PENDING_CANCEL,
 }
 
+ONLY_MODIFY_EVERY_NS = 80e6  # e6 converts from ms to ns
+CANCEL_PARTIAL_FILLS_AFTER_SECS = 3
+
+
+class OpenOrder:
+    def __init__(self, order: Order, expire_time=None):
+        self.order = order
+        self.expire_time = expire_time
+
+        self._last_modify_ns = 0
+        self._last_modify_qty = None
+        self._last_modify_price = None
+        self._first_partial_fill_ns = None
+
+    @property
+    def is_open(self):
+        return self.order.status not in CLOSED_STATUS_LIST
+
+    @property
+    def price(self):
+        if self._last_modify_price is not None:
+            hi = "hi"
+        return self._last_modify_price if self._last_modify_price is not None else self.order.price
+
+    @property
+    def quantity(self):
+        if self._last_modify_qty is not None:
+            hi = "hi"
+        return self._last_modify_qty if self._last_modify_qty is not None else self.order.quantity
+
+    @property
+    def first_partial_fill_ns(self):
+        if self._first_partial_fill_ns is not None:
+            return self._first_partial_fill_ns
+        if self.order.filled_qty > 0:
+            self._first_partial_fill_ns = min(
+                fill.ts_event for fill in self.order.events if isinstance(fill, OrderFilled)
+            )
+        return self._first_partial_fill_ns
+
+    @property
+    def leaves_qty(self):
+        return self.order.leaves_qty
+
+    @property
+    def venue_order_id(self):
+        return self.order.venue_order_id
+
+    @property
+    def client_order_id(self):
+        return self.order.client_order_id
+
+    def _can_be_modified(self, now_ns):
+        if (now_ns - self._last_modify_ns) < ONLY_MODIFY_EVERY_NS:
+            return False
+        return self.order.status not in [
+            OrderStatus.SUBMITTED,
+            OrderStatus.PENDING_UPDATE,
+            OrderStatus.PENDING_CANCEL,
+            OrderStatus.FILLED,
+        ]
+
+    def update_last_modify_if_allowed(self, quantity: Quantity, price: Price, now_ns: int):
+        if not self._can_be_modified(now_ns):
+            return False
+        if quantity == self._last_modify_qty and price == self._last_modify_price:
+            return False
+        self._last_modify_ns = now_ns
+        self._last_modify_qty = quantity
+        self._last_modify_price = price
+        return True
+
+    def __eq__(self, other):
+        return self.client_order_id == other.client_order_id
+
+    def __hash__(self):
+        return hash(self.order.client_order_id)
+
+    def __repr__(self):
+        return f"OpenOrder(client_id={self.client_order_id}, venue_id={self.venue_order_id} price={self.price}, quantity={self.quantity})"
+
 
 class BaseStrategyConfig(StrategyConfig, frozen=True):
     instrument_id: InstrumentId
@@ -49,8 +132,6 @@ class BaseStrategyConfig(StrategyConfig, frozen=True):
 class BaseStrategy(Strategy):
     buy_signal_delay_secs: int = 1
     log_update_every_secs: int = None
-    only_modify_every_ns = 80e6  # e6 converts to ms
-    cancel_partial_fills_after_secs = 3
     position_discrepancy_allow_secs = 10
 
     def __init__(self, config: BaseStrategyConfig) -> None:
@@ -69,7 +150,6 @@ class BaseStrategy(Strategy):
         self.last_buy_signal_dt = 0
 
         # Used to track order modifications to avoid sending duplicate modify orders when the cache is slow
-        self._order_modify_dict = {}
         self._already_cancelled_orders = set()
         self._uncached_orders = set()
         self._last_log_update_dt = 0
@@ -95,21 +175,17 @@ class BaseStrategy(Strategy):
         return int(self.portfolio.net_position(self.config.instrument_id))
 
     @property
-    def open_buys(self) -> set:
-        for order in copy(self._open_buys):
-            if order.status in CLOSED_STATUS_LIST:
-                self._open_buys.discard(order)
-        return copy(self._open_buys)
+    def open_buys(self) -> set[OpenOrder]:
+        self._open_buys = {open_order for open_order in self._open_buys if open_order.is_open}
+        return self._open_buys
 
     @property
-    def open_sells(self) -> set:
-        for order in copy(self._open_sells):
-            if order.status in CLOSED_STATUS_LIST:
-                self._open_sells.discard(order)
-        return copy(self._open_sells)
+    def open_sells(self) -> set[OpenOrder]:
+        self._open_sells = {open_order for open_order in self._open_sells if open_order.is_open}
+        return self._open_sells
 
     @property
-    def open_orders(self) -> set:
+    def open_orders(self) -> set[OpenOrder]:
         return self.open_buys.union(self.open_sells)
 
     def _remove_open_order(self, order):
@@ -131,41 +207,28 @@ class BaseStrategy(Strategy):
 
     @property
     def open_buy_qty(self):
-        return sum(int(order.leaves_qty) for order in self._open_buys)
+        return sum(int(open_order.leaves_qty) for open_order in self._open_buys)
 
     @property
     def open_sell_qty(self):
-        return sum(int(order.leaves_qty) for order in self._open_sells)
+        return sum(int(open_order.leaves_qty) for open_order in self._open_sells)
 
-    def modify_order(self, order, quantity, price):
-        if order.venue_order_id is not None:
-            qty_obj = self.instrument.make_qty(quantity)
-            price_obj = self.instrument.make_price(price)
-            now_ns = self.clock.timestamp_ns()
-            last_mod_qty, last_mod_price, modify_ns = self._order_modify_dict.get(order.client_order_id, [None] * 3)
+    def modify_open_order(self, open_order: OpenOrder, quantity, price):
+        now_ns = self.clock.timestamp_ns()
+        qty_obj = self.instrument.make_qty(quantity)
+        price_obj = self.instrument.make_price(price)
+        if open_order.update_last_modify_if_allowed(qty_obj, price_obj, now_ns):
+            self.log.debug(f"Modifying order {open_order.client_order_id} with values {qty_obj} @ {price_obj}.")
+            self.modify_order(open_order.order, quantity=qty_obj, price=price_obj)
+            return True
+        return False
 
-            price_or_qty_changed = last_mod_price != price_obj or last_mod_qty != qty_obj
-            if last_mod_qty is None or (price_or_qty_changed and (now_ns - modify_ns) > self.only_modify_every_ns):
-                self.log.debug(f"Modifying order {order.client_order_id} with values {qty_obj} @ {price_obj}.")
-                self._order_modify_dict[order.client_order_id] = (qty_obj, price_obj, now_ns)
-                super().modify_order(order, quantity=qty_obj, price=price_obj)
-            else:
-                # self.log.debug(
-                #     f"Not modifying order {order.client_order_id}. Price {last_mod_price} -> {price_obj} | Qty {last_mod_qty} -> {qty_obj} | Time {round((now_ns - modify_ns) / 1e6,1)} < {self.only_modify_every_ns / 1e6} ms."
-                # )
-                return
-
-    def cancel_order(self, order, client_id=None, params=None):
-        # if order in self._already_cancelled_orders:
-        #     self.log.debug(
-        #         f"Not cancelling order {order.client_order_id}, venue:{order.venue_order_id} because cancellation request has already been sent."
-        #     )
-        #     return
-        # self._already_cancelled_orders.add(order)
-        if order in self.open_orders:
-            if order.venue_order_id is not None:
-                self._remove_open_order(order)
-                super().cancel_order(order=order, client_id=client_id, params=params)
+    def cancel_open_order(self, open_order, client_id=None, params=None):
+        if open_order in self.open_orders:
+            # TODO: Perhaps use order status instead of the existance of venue_order_id?
+            if open_order.venue_order_id is not None:
+                self._remove_open_order(open_order)
+                self.cancel_order(order=open_order.order, client_id=client_id, params=params)
 
     def sell_position_at_price(self, new_limit_price):
         remaining_qty_to_sell = self.position_qty
@@ -173,7 +236,11 @@ class BaseStrategy(Strategy):
             order_qty = order.quantity
             remaining_qty_to_sell -= order_qty
             if order.price != new_limit_price:
-                self.modify_order(order, quantity=order_qty, price=new_limit_price)
+                modified = self.modify_open_order(order, quantity=order_qty, price=new_limit_price)
+                if not modified:
+                    self.log.warning(
+                        f"While stopping out, failed to modify order {order.client_order_id} to {new_limit_price}."
+                    )
         if remaining_qty_to_sell > 0:
             self.sell(quantity=remaining_qty_to_sell, limit_price=new_limit_price, tag="s")
 
@@ -261,7 +328,7 @@ class BaseStrategy(Strategy):
             )
             self._last_log_update_dt = self._tick_init_dt_adjusted
 
-    def _submit_orders_if_allowed(self, order_or_order_list) -> None:
+    def _submit_orders_if_allowed(self, order_or_order_list, expire_time=None) -> None:
         buy_included = False
         if self.config.allow_trades:
             # For OrderList type, submit all at once, but parse through each to check for a buy order (from bracket)
@@ -276,11 +343,12 @@ class BaseStrategy(Strategy):
             # If single item, submit and add to uncached
             elif isinstance(order_or_order_list, Order):
                 self.submit_order(order_or_order_list)
+                open_order = OpenOrder(order_or_order_list, expire_time=expire_time)
                 if order_or_order_list.side == OrderSide.BUY:
                     buy_included = True
-                    self._open_buys.add(order_or_order_list)
+                    self._open_buys.add(open_order)
                 if order_or_order_list.side == OrderSide.SELL:
-                    self._open_sells.add(order_or_order_list)
+                    self._open_sells.add(open_order)
             else:
                 raise ValueError(f"Unexpected order type: {type(order_or_order_list)}")
         if buy_included:
@@ -289,9 +357,6 @@ class BaseStrategy(Strategy):
 
     def _submit_limit_order(self, side: OrderSide, quantity: int, limit_price: float, tag: str, cancel_after_secs=None):
         tags = [tag]
-        if cancel_after_secs is not None:
-            expire_time = self.clock.utc_now() + timedelta(seconds=cancel_after_secs)
-            tags.append(expire_time)
         order: LimitOrder = self.order_factory.limit(
             instrument_id=self.config.instrument_id,
             order_side=side,
@@ -301,8 +366,9 @@ class BaseStrategy(Strategy):
             expire_time=None,
             tags=tags,
         )
-
-        self._submit_orders_if_allowed(order)
+        utc_now = self.clock.utc_now()
+        expire_time = utc_now + timedelta(seconds=cancel_after_secs) if cancel_after_secs is not None else None
+        self._submit_orders_if_allowed(order, expire_time=expire_time)
 
     def buy(self, quantity, limit_price, tag, cancel_after_secs=None) -> None:
         allowed_qty = min(quantity, self._max_buy_qty_allowed())
@@ -384,25 +450,16 @@ class BaseStrategy(Strategy):
     def on_order_filled(self, order) -> None:
         self._on_order_filled(order)
 
-        cached_order = self.cache.order(order.client_order_id)
-        if cached_order.leaves_qty == 0:
-            self._remove_open_order(cached_order)
-
-        # Clean up order modify dict to reduce memory usage
-        # TODO: Test if this actually does anything
-        self._order_modify_dict.pop(order.client_order_id, None)
-
     @abstractmethod
     def _on_trade_tick(self, tick: TradeTick) -> None:
         pass
 
     def on_order_event(self, order) -> None:
         if isinstance(order, OrderRejected):
-            order = self.cache.order(order.client_order_id)
-            self._remove_open_order(order)
-
-            if order.side == OrderSide.BUY:
-                if "insufficient qty available" in order.last_event.reason:
+            cache_order = self.cache.order(order.client_order_id)
+            # self._remove_open_order(order)
+            if cache_order.side == OrderSide.BUY:
+                if "insufficient qty available" in cache_order.last_event.reason:
                     self.log.warning(
                         f"Buy order rejected for insufficient quantity. Accidental shorting is likely. Running reconciliation."
                     )
@@ -459,23 +516,18 @@ class BaseStrategy(Strategy):
                     # check if self_order was just recently opened
                     print()
 
-    def _cancel_orders_past_timeout_and_partial_fills(self, event: TimeEvent):
-        # Cancel open orders if they have reached their expiration time
-        for order in self.open_buys:
-            if len(order.tags) > 1:
-                expire_time = order.tags[1]  # FIXME: hardcoded to look at second item
-                if self.clock.utc_now() > expire_time:
-                    self.cancel_order(order)
+    def _cancel_partial_fills_and_orders_past_timeout(self, event: TimeEvent):
+        for open_order in self.open_orders:
+            if open_order.expire_time is not None and self.clock.utc_now() > open_order.expire_time:
+                self.cancel_open_order(open_order)
 
-        for order in self.open_orders:
-            if order.filled_qty > 0:
-                earliest_fill_time_ns = min(fill.ts_event for fill in order.events if isinstance(fill, OrderFilled))
-                ns_since_earliest_fill = self.clock.timestamp_ns() - earliest_fill_time_ns
-                if (ns_since_earliest_fill / 1e9) > self.cancel_partial_fills_after_secs:
+            elif open_order.first_partial_fill_ns is not None:
+                ns_since_earliest_fill = self.clock.timestamp_ns() - open_order.first_partial_fill_ns
+                if (ns_since_earliest_fill / 1e9) > CANCEL_PARTIAL_FILLS_AFTER_SECS:
                     self.log.info(
-                        f"Canceling order {order.client_order_id}, because first fill occurred more than {self.cancel_partial_fills_after_secs} secs ago"
+                        f"Canceling order {open_order.client_order_id}, because first fill occurred more than {CANCEL_PARTIAL_FILLS_AFTER_SECS} secs ago"
                     )
-                    self.cancel_order(order)
+                    self.cancel_open_order(open_order)
 
     def on_start(self) -> None:
         if not self._initialized:
@@ -485,7 +537,7 @@ class BaseStrategy(Strategy):
         self.clock.set_timer(
             name="cancel_orders_timer",
             interval=timedelta(seconds=0.25),
-            callback=self._cancel_orders_past_timeout_and_partial_fills,
+            callback=self._cancel_partial_fills_and_orders_past_timeout,
         )
         self.clock.set_timer(name="reconcile_internal_fn", interval=timedelta(seconds=1), callback=self._reconcile)
 

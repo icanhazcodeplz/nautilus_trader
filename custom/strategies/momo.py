@@ -1,6 +1,7 @@
-from collections import deque
+from collections import deque, OrderedDict
 from dataclasses import dataclass
 from random import random
+import math
 
 import pandas as pd
 
@@ -10,7 +11,91 @@ from nautilus_trader.indicators import VolumeWeightedAveragePrice
 from nautilus_trader.model.data import Bar
 from nautilus_trader.model.data import TradeTick
 from nautilus_trader.model.identifiers import InstrumentId
-from nautilus_trader.model.enums import OrderSide
+
+
+def market_round_up(price: float) -> float:
+    if price < 1.0:
+        raise NotImplementedError("Market rounding not implemented for penny stocks")
+    return math.ceil(price * 100) / 100
+
+
+def get_step_size(price: float, mean_variance: float) -> float:
+    # TODO: Make this more intelligent
+    if price < 1.0:
+        raise NotImplementedError("Step size not implemented for penny stocks")
+    if mean_variance > 0.10:
+        return 0.02
+    return 0.01
+
+
+class Tiers:
+    def __init__(self, quantity, starting_price, step_size, num_tiers, instrument):
+        self.quantity = quantity
+        if quantity < num_tiers:
+            num_tiers = quantity
+
+        target_prices = self._get_tier_prices(num_tiers, starting_price, step_size)
+        target_prices = [instrument.make_price(price) for price in target_prices]
+
+        target_qtys = self._get_tier_quantities(num_tiers, quantity)
+        self.filled_tiers = []
+        self.tiers = OrderedDict()
+        for price, qty in zip(target_prices, target_qtys):
+            self.tiers[price] = (qty, 0)
+
+    @staticmethod
+    def _get_tier_prices(tier_count: int, low_price: float, step_size: float) -> list[float]:
+        lowest_tier_price = market_round_up(low_price)
+        if tier_count == 1:
+            return [lowest_tier_price]
+        dollars = int(lowest_tier_price)
+        cents = int((lowest_tier_price - dollars) * 100)
+        step_cents = int(step_size * 100)
+
+        # Adjust cents to be the next integer up that is evenly divided by step_cents
+        if cents % step_cents != 0:
+            cents = ((cents // step_cents) + 1) * step_cents
+
+        lowest_tier_price = dollars + (cents / 100)
+        return [lowest_tier_price + (i * step_size) for i in range(tier_count)]
+
+    @staticmethod
+    def _get_tier_quantities(tier_count: int, qty: int) -> list[int]:
+        if tier_count == 1:
+            return [qty]
+        # For most bins, use the same qty for each bin
+        qty_list = [int(qty / tier_count)] * (tier_count - 1)
+        # Fill in remainder at the front
+        remainder = qty - sum(qty_list)
+        qty_list = [remainder] + qty_list
+        return qty_list
+
+    def add_to_lowest_price_available(self, qty):
+        for price, (target_qty, taken_qty) in self.tiers.items():
+            if taken_qty < target_qty:
+                self.tiers[price] = (target_qty, taken_qty + qty)
+                return price
+        return None
+
+    def add_qty_to_tier(self, price, qty):
+        if price not in self.tiers:
+            raise ValueError(f"Price {price} not in tier prices set {self.tiers}")
+        target_qty, taken_qty = self.tiers[price]
+        self.tiers[price] = (target_qty, taken_qty + qty)
+
+    def total_taken_qty(self):
+        taken_qty = sum(taken for _, taken in self.tiers.values())
+        return taken_qty
+
+    @property
+    def available_qty(self):
+        return self.quantity - self.total_taken_qty()
+
+    def lowest_tier_price_and_available_qty(self):
+        for price, (target_qty, taken_qty) in self.tiers.items():
+            if taken_qty < target_qty:
+                return price, target_qty - taken_qty
+        return None, None
 
 
 @dataclass
@@ -179,7 +264,7 @@ class MomoStrategy(BaseStrategy):
             vwap_lower = self.instrument.make_price(self.vwap.lower)
             for order in self.open_buys:
                 if order.price != vwap_lower:
-                    self.modify_order(order, quantity=order.quantity, price=vwap_lower)
+                    self.modify_open_order(order, quantity=order.quantity, price=vwap_lower)
 
             if len(buy_orders) == 0 and (self.clock.utc_now() - self.last_buy_dt).total_seconds() > 1:
                 # FIXME: Clunky to add buy orders count tag here. Should be handled in buy()
@@ -210,7 +295,7 @@ class MomoStrategy(BaseStrategy):
 
         # TAKE LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         if self.config.trailing_take:
-            self._rolling_tiered_take()
+            self._rolling_tiered_take(price)
 
         if not self.config.use_bracket_orders and not self.config.use_oco_sell_orders and not self.config.trailing_take:
             if (
@@ -243,19 +328,57 @@ class MomoStrategy(BaseStrategy):
         #             self.log.info(
         #                 f"Canceling order {order.client_order_id}, tags {order.tags} because current price {price} is higher than vwap {self.vwap.value}"
         #             )
-        #             self.cancel_order(order)
+        #             self.cancel_open_order(order)
 
-    def _rolling_tiered_take(self):
+    def _rolling_tiered_take(self, price):
         position_qty = self.position_qty
-        vwap_upper = self.instrument.make_price(self.vwap.upper)
-        for order in self.open_sells:
-            if order.price != vwap_upper:
-                # If order has not started to fill yet, update quantity to the position_qty
-                new_qty = position_qty if order.filled_qty == 0 else order.quantity
-                self.modify_order(order, quantity=new_qty, price=vwap_upper)
+        if position_qty == 0:
+            return
+        open_sells = self.open_sells
+        num_tiers = 3
+        step_size = get_step_size(price, self.vwap.mean_variance)
+        tiers = Tiers(
+            quantity=position_qty,
+            starting_price=self.vwap.upper,
+            step_size=step_size,
+            num_tiers=num_tiers,
+            instrument=self.instrument
+        )
 
-        if position_qty > 0 and len(self.open_sells) == 0:
-            self.sell(position_qty, vwap_upper, cancel_after_secs=None, tag=f"{self.buy_orders_count}")
+        orders_to_be_modified = []
+        for open_order in open_sells:
+            if open_order.price in tiers.tiers:
+                tiers.add_qty_to_tier(open_order.price, open_order.quantity)
+            else:
+                orders_to_be_modified.append(open_order)
+
+        target_qty_per_tier = max(int(position_qty / num_tiers), 1)
+        for open_order in orders_to_be_modified:
+            cancel_order = False
+            new_price = tiers.add_to_lowest_price_available(open_order.quantity)
+            if new_price is None:
+                cancel_order = True
+            else:
+                if target_qty_per_tier > 5 and new_price > min(tiers.tiers.keys()):
+                    if open_order.quantity < int(target_qty_per_tier * 0.50):
+                        self.log.info(
+                            f"Canceling {open_order} because it is less than half of target tier qty {target_qty_per_tier}"
+                        )
+                        cancel_order = True
+                    elif open_order.quantity > int(target_qty_per_tier * 1.2):
+                        self.log.info(
+                            f"Canceling {open_order} because it is more than 1.2x target tier qty {target_qty_per_tier}"
+                        )
+                        cancel_order = True
+                if not cancel_order:
+                    self.modify_open_order(open_order, quantity=open_order.quantity, price=new_price)
+            if cancel_order:
+                self.cancel_open_order(open_order)
+
+        while tiers.available_qty > 0:
+            price, qty = tiers.lowest_tier_price_and_available_qty()
+            self.sell(qty, price, cancel_after_secs=None, tag=f"{self.buy_orders_count}")
+            tiers.add_qty_to_tier(price, qty)
 
     def _on_order_filled(self, order_filled) -> None:
         if order_filled.is_buy:
