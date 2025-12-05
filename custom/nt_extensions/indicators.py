@@ -50,6 +50,7 @@ class VWAPBands(Indicator):
         self._adjust_counter = 1
 
         self.value = None
+        self.mean_variance = 0
         self.lower = 0
         self.upper = 0
 
@@ -113,8 +114,8 @@ class VWAPBands(Indicator):
 
         variance_from_val = abs(price - self.value)
         self._variances.append(variance_from_val)
-        mean_var = sum(self._variances) / len(self._variances)
-        self._mean_variances_for_adj.append(mean_var)
+        self.mean_variance = sum(self._variances) / len(self._variances)
+        self._mean_variances_for_adj.append(self.mean_variance)
 
         self._prices.append(price)
         self._values_for_adj.append(self.value)
@@ -128,8 +129,8 @@ class VWAPBands(Indicator):
         lower = self.lower_scalar if self._reached_max_window() else self.initial_upper_lower_scalar
         upper = self.upper_scalar if self._reached_max_window() else self.initial_upper_lower_scalar
 
-        self.lower = self.value - mean_var - lower
-        self.upper = self.value + mean_var + upper
+        self.lower = self.value - self.mean_variance - lower
+        self.upper = self.value + self.mean_variance + upper
 
     def _reset(self):
         raise NotImplementedError
