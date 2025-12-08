@@ -52,7 +52,7 @@ config_node = TradingNodeConfig(
         # purge_closed_positions_interval_mins=None,
         open_check_open_only=False,
         open_check_lookback_mins=10,  # TODO: Reduce this?
-        open_check_threshold_ms=300,
+        open_check_threshold_ms=1000,
     ),
     cache=CacheConfig(
         # database=DatabaseConfig(),

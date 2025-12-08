@@ -36,7 +36,6 @@ class Tiers:
 
         target_prices = self._get_tier_prices(num_tiers, starting_price, step_size)
         target_prices = [instrument.make_price(price) for price in target_prices]
-
         target_qtys = self._get_tier_quantities(num_tiers, quantity)
         self.filled_tiers = []
         self.tiers = OrderedDict()
@@ -193,12 +192,14 @@ class MomoStrategy(BaseStrategy):
         self.metrics = []
 
         self.last_take_ts = None
+        self._stopping_out = False
 
     def stop_out_if_needed(self, tick: TradeTick):
         if self.config.use_oco_sell_orders or self.config.use_bracket_orders:
             return
         if self.position_qty == 0:
             self.stop_price = None
+            self._stopping_out = False
             return
 
         if self.position_qty > 0 and self.stop_price is None:
@@ -206,6 +207,7 @@ class MomoStrategy(BaseStrategy):
             self.log.info(f"Setting stop price to {self.stop_price}")
 
         if self.stop_price is not None and tick.price <= self.stop_price:
+            self._stopping_out = True
             # TODO: HARDCODED to set stop price to 0.01 below current price
             new_limit_price = self.instrument.make_price(tick.price - 0.01)
             self.log.info(f"Stop price {self.stop_price} reached, selling at {new_limit_price}")
@@ -294,7 +296,7 @@ class MomoStrategy(BaseStrategy):
                     self.buy(self.config.trade_size, price, cancel_after_secs=1, tag=f"{self._buy_signals_count}")
 
         # TAKE LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-        if self.config.trailing_take:
+        if self.config.trailing_take and not self._stopping_out:
             self._rolling_tiered_take(price)
 
         if not self.config.use_bracket_orders and not self.config.use_oco_sell_orders and not self.config.trailing_take:

@@ -55,7 +55,11 @@ def is_uuid(value: str) -> bool:
 def client_id_is_real(client_order_id: str) -> bool:
     # Alpaca generates a random UUID if client_order_id is not provided
     # TODO: WARNING This assumes that we never produce a client_id that is a valid UUID!
-    return not is_uuid(client_order_id)
+    if is_uuid(client_order_id):
+        return False
+    if len(client_order_id) > 32:
+        return False
+    return True
 
 
 class AlpacaEnumParser:

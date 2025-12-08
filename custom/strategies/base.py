@@ -59,14 +59,10 @@ class OpenOrder:
 
     @property
     def price(self):
-        if self._last_modify_price is not None:
-            hi = "hi"
         return self._last_modify_price if self._last_modify_price is not None else self.order.price
 
     @property
     def quantity(self):
-        if self._last_modify_qty is not None:
-            hi = "hi"
         return self._last_modify_qty if self._last_modify_qty is not None else self.order.quantity
 
     @property
@@ -82,6 +78,10 @@ class OpenOrder:
     @property
     def leaves_qty(self):
         return self.order.leaves_qty
+
+    @property
+    def filled_qty(self):
+        return self.order.filled_qty
 
     @property
     def venue_order_id(self):

@@ -197,7 +197,6 @@ class AlpacaExecutionClient(LiveExecutionClient):
         # Keep track of the associated client_order_id with the venue_order_id as orders are replaced/modified
         self._venue_id__client_id_map = {}
 
-
     @property
     def instrument_provider(self):
         """
@@ -288,7 +287,6 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
         """
         self._log.debug(f"Generating OrderStatusReport for {command.client_order_id}")
-
         try:
             # Try to get venue_order_id from cache
             venue_order_id = command.venue_order_id
@@ -303,15 +301,18 @@ class AlpacaExecutionClient(LiveExecutionClient):
             alpaca_order = await self._http_client.get_order(venue_order_id.value)
 
             # Parse response into OrderStatusReport
-            report = parse_order_status_report(
-                alpaca_order=alpaca_order,
-                account_id=self.account_id,
-                instrument_id=command.instrument_id,
-                ts_init=self._clock.timestamp_ns(),
-            )
-
-            self._log.debug(f"Generated {report}")
-            return report
+            filtered_list = self.filter_replaced_and_incomplete_orders([alpaca_order])
+            if filtered_list is not None and len(filtered_list) > 0:
+                alpaca_order = filtered_list[0]
+                report = parse_order_status_report(
+                    alpaca_order=alpaca_order,
+                    account_id=self.account_id,
+                    instrument_id=command.instrument_id,
+                    ts_init=self._clock.timestamp_ns(),
+                )
+                self._log.debug(f"Generated single order report {report}")
+                return report
+            self._log.error(f"Single order report {alpaca_order} filtered out")
 
         except Exception as e:
             self._log.error(f"Failed to generate OrderStatusReport: {e}")
@@ -322,17 +323,18 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
         for order in reversed(orders_list):
             client_order_id = order["client_order_id"]
+            alpaca_venue_order_id = order["id"]
             if client_id_is_real(client_order_id):
-                self._venue_id__client_id_map[order["id"]] = client_order_id
+                self._venue_id__client_id_map[alpaca_venue_order_id] = client_order_id
             elif order["replaces"] in self._venue_id__client_id_map.keys():
-                self._venue_id__client_id_map[order["id"]] = self._venue_id__client_id_map[order["replaces"]]
+                self._venue_id__client_id_map[alpaca_venue_order_id] = self._venue_id__client_id_map[order["replaces"]]
 
             if order["replaced_by"] is None:
                 if client_id_is_real(client_order_id):
                     filtered_and_modified_orders_list.append(order)
                 else:
                     try:
-                        actual_client_order_id = self._venue_id__client_id_map[order["id"]]
+                        actual_client_order_id = self._venue_id__client_id_map[alpaca_venue_order_id]
                         order["client_order_id"] = actual_client_order_id
                         filtered_and_modified_orders_list.append(order)
                     except KeyError:
@@ -340,10 +342,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
         return filtered_and_modified_orders_list
 
-    async def generate_order_status_reports(
-        self,
-        command: GenerateOrderStatusReports,
-    ) -> list[OrderStatusReport]:
+    async def generate_order_status_reports(self, command: GenerateOrderStatusReports) -> list[OrderStatusReport]:
         """
         Generate order status reports.
 
@@ -854,7 +853,8 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
     async def _query_order(self, command: QueryOrder) -> None:
         order_status_report = await self.generate_order_status_report(command)
-        self._send_order_status_report(order_status_report)
+        if order_status_report is not None:
+            self._send_order_status_report(order_status_report)
 
     # -- WEBSOCKET HANDLERS -------------------------------------------------------------------
 
