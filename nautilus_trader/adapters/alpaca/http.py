@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
-from functools import lru_cache
+import time
+from collections import deque
 from typing import Any
 
 import aiohttp
@@ -13,13 +15,13 @@ from custom.utils.paths import run_artifacts_subdir
 from nautilus_trader.adapters.alpaca.utils import get_alpaca_key_and_secret
 
 
-
 class AlpacaHttpClient:
     def __init__(
         self,
         paper: bool,
         timeout: int,
         record_orders: bool = False,
+        rate_limit: int = 200,
     ) -> None:
         self.paper = paper
         self._api_key, self._api_secret = get_alpaca_key_and_secret(paper=self.paper)
@@ -32,6 +34,13 @@ class AlpacaHttpClient:
         self.record_orders = record_orders
         if record_orders:
             self._orders_file_buffer = open(run_artifacts_subdir("order_submissions.json"), "w")
+
+        # Rate limiting: track request timestamps in a sliding window
+        self._rate_limit = rate_limit
+        self._rate_window = 60.0  # 60 seconds (1 minute)
+        # TODO: Reimplement with logic to check if deque is full at 200 and then check first time?
+        self._request_timestamps: deque[float] = deque()
+        self._rate_limit_lock = asyncio.Lock()
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
         """Ensure HTTP session is initialized."""
@@ -54,6 +63,38 @@ class AlpacaHttpClient:
             "APCA-API-SECRET-KEY": self._api_secret,
             "Content-Type": "application/json",
         }
+
+    async def _wait_for_rate_limit(self) -> None:
+        """
+        Enforce rate limiting using a sliding window approach.
+
+        Waits if necessary to ensure we don't exceed the rate limit of
+        requests per minute.
+        """
+        async with self._rate_limit_lock:
+            current_time = time.time()
+
+            # Remove timestamps older than the rate window
+            while self._request_timestamps and current_time - self._request_timestamps[0] >= self._rate_window:
+                self._request_timestamps.popleft()
+
+            # If we've hit the rate limit, wait until we can make another request
+            if len(self._request_timestamps) >= self._rate_limit:
+                sleep_time = self._rate_window - (current_time - self._request_timestamps[0])
+                if sleep_time > 0:
+                    self._log.warning(
+                        f"Rate limit reached ({self._rate_limit} requests per minute). "
+                        f"Waiting {sleep_time:.2f} seconds."
+                    )
+                    await asyncio.sleep(sleep_time)
+
+                    # Clean up old timestamps after sleeping
+                    current_time = time.time()
+                    while self._request_timestamps and current_time - self._request_timestamps[0] >= self._rate_window:
+                        self._request_timestamps.popleft()
+
+            # Record this request
+            self._request_timestamps.append(current_time)
 
     async def _request(
         self,
@@ -87,6 +128,9 @@ class AlpacaHttpClient:
             If the request fails.
 
         """
+        # Enforce rate limiting before making the request
+        await self._wait_for_rate_limit()
+
         session = await self._ensure_session()
         url = f"{self._base_url}{endpoint}"
         headers = self._get_headers()
@@ -340,6 +384,9 @@ class AlpacaHttpClient:
             params["page_token"] = page_token
 
         # Use data base URL instead of trading API base URL
+        # Enforce rate limiting before making the request
+        await self._wait_for_rate_limit()
+
         session = await self._ensure_session()
         url = f"{self._data_base_url}/v2/stocks/{symbol}/trades"
         headers = self._get_headers()
