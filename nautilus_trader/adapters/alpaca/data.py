@@ -57,8 +57,6 @@ if TYPE_CHECKING:
     from nautilus_trader.data.messages import UnsubscribeQuoteTicks
     from nautilus_trader.data.messages import UnsubscribeTradeTicks
 
-LIMIT_MULTIPLIER_FOR_FINRA_TRADES = 3
-
 
 class AlpacaDataClientConfig(LiveDataClientConfig, frozen=True):
     """
@@ -461,11 +459,15 @@ class AlpacaDataClient(LiveMarketDataClient):
 
         # Because we filter out finra trades, need to request some larger number and then ensure we still have enough
         # after filtering is complete.
-        limit_with_multiplier = LIMIT_MULTIPLIER_FOR_FINRA_TRADES * limit if limit is not None else None
-        if limit_with_multiplier is not None and limit_with_multiplier > 10000:
-            raise NotImplementedError(
-                f"Have not implemented pagination for trade ticks yet, limit {limit} exceeds maximum of 10000"
-            )
+        if limit is not None:
+            if limit > 10000:
+                raise NotImplementedError(
+                    f"Have not implemented pagination for trade ticks yet, limit {limit} exceeds maximum of 10000"
+                )
+            # WARNING, setting to 10000 to ensure we get enough ticks after filtering for finra trades
+            request_limit = 10000
+        else:
+            request_limit = None
 
         # Convert timestamps to RFC-3339 format
         start_str = None
@@ -478,7 +480,6 @@ class AlpacaDataClient(LiveMarketDataClient):
             end_str = end_dt.isoformat()
 
         # Request trades from Alpaca API
-        # WARNNING
         # Tried to make this `sort` var more intelligent, for example, checking if start or end were None, but Start is
         # required by NT to be non-None, and end is set to current time if None in NT code! Hoping 'desc' is okay
         sort = "desc"  # vs 'asc'
@@ -487,7 +488,7 @@ class AlpacaDataClient(LiveMarketDataClient):
                 symbol=symbol,
                 start=start_str,
                 end=end_str,
-                limit=limit_with_multiplier,
+                limit=request_limit,
                 feed=self._config.feed,
                 sort=sort,
             )
@@ -525,7 +526,7 @@ class AlpacaDataClient(LiveMarketDataClient):
                 continue
         if len(trades) < limit:
             raise ValueError(
-                f"Expected at least {limit} trades, got {len(trades)} after filtering out 0 and finra trades"
+                f"Expected at least {limit} trades, got {len(trades)} after filtering out zero qty and finra trades"
             )
         trades = trades[-limit:]
 
