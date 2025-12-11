@@ -357,8 +357,6 @@ class AlpacaExecutionClient(LiveExecutionClient):
             The order status reports.
 
         """
-        self._log.debug("Generating OrderStatusReports...")
-
         reports: list[OrderStatusReport] = []
 
         try:
@@ -392,8 +390,6 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
                 except Exception as e:
                     self._log.error(f"Failed to parse order {alpaca_order.get('id')}: {e}")
-
-            self._log.info(f"Generated {len(reports)} OrderStatusReports")
 
         except Exception as e:
             self._log.error(f"Failed to generate OrderStatusReports: {e}")
@@ -938,7 +934,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 limit_price = order_data["limit_price"]
                 if int(alpaca_order_qty) != int(order.quantity):
                     self._log.warning(
-                        f"Order qty mismatch: Alpaca {alpaca_order_qty} != NT {order.quantity}. Sending `generate_order_updated` with new info"
+                        f"Order qty mismatch {client_order_id} | {venue_order_id}: Alpaca {alpaca_order_qty} != NT {order.quantity}. Sending `generate_order_updated` with new qty {alpaca_order_qty}"
                     )
                     self.generate_order_updated(
                         strategy_id=order.strategy_id,

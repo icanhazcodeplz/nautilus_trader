@@ -21,7 +21,7 @@ class AlpacaHttpClient:
         paper: bool,
         timeout: int,
         record_orders: bool = False,
-        rate_limit: int = 200,
+        rate_limit: int = 194,  # Slightly below alpaca limit of 200
     ) -> None:
         self.paper = paper
         self._api_key, self._api_secret = get_alpaca_key_and_secret(paper=self.paper)
