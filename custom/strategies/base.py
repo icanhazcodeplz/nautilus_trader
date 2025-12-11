@@ -77,7 +77,7 @@ class OpenOrder:
 
     @property
     def leaves_qty(self):
-        return self.order.leaves_qty
+        return self.quantity - self.filled_qty
 
     @property
     def filled_qty(self):
@@ -118,7 +118,8 @@ class OpenOrder:
         return hash(self.order.client_order_id)
 
     def __repr__(self):
-        return f"OpenOrder(client_id={self.client_order_id}, venue_id={self.venue_order_id} price={self.price}, quantity={self.quantity})"
+        side_str = "SELL" if self.order.side == OrderSide.SELL else "BUY"
+        return f"OpenOrder({side_str} client_id={self.client_order_id}, venue_id={self.venue_order_id} price={self.price}, quantity={self.quantity}, leaves_qty={self.leaves_qty})"
 
 
 class BaseStrategyConfig(StrategyConfig, frozen=True):
@@ -162,6 +163,7 @@ class BaseStrategy(Strategy):
         self._open_buys = set()
         self._open_sells = set()
         self._position_discrepancy_start_ns = None
+        self._raise_msg = None
 
     def initialize(self, artifacts_location: Optional[Path], trader_helper: Optional[AlpacaTraderHelper] = None):
         self._initialized = True
@@ -286,7 +288,16 @@ class BaseStrategy(Strategy):
                         signal["win_delay"] = win
                         signal["win_delay_time"] = self._tick_init_dt_adjusted
 
+    def _raise_if_needed(self):
+        """
+        Need separate method because _reconcile raises were not causing system to raise
+        """
+        if self._raise_msg is not None:
+            self.log.error(f"Raising RuntimeError: {self._raise_msg}")
+            raise RuntimeError(self._raise_msg)
+
     def on_trade_tick(self, tick: TradeTick) -> None:
+        self._raise_if_needed()
         if self._tick_init_dt_adjusted >= tick.ts_init:
             self._tick_init_dt_adjusted += 1
         else:
@@ -480,37 +491,50 @@ class BaseStrategy(Strategy):
 
         position_at_broker = int(position.qty)
         if position_at_broker < 0:
-            raise RuntimeError(
-                f"Position is negative. Cache Position: {self.position_qty}, Alpaca Position: {position_at_broker}."
-            )
+            self._raise_msg = f"Position still negative after attempting to flatten. Cache Position: {self.position_qty}, Alpaca Position: {position_at_broker}."
+            return
 
+        # CHECK POSITION DISCREPANCY BETWEEN LOCAL AND BROKER
         if self.position_qty != position_at_broker:
             now_ns = self.clock.timestamp_ns()
             if self._position_discrepancy_start_ns is None:
                 self._position_discrepancy_start_ns = now_ns
             elif (now_ns - self._position_discrepancy_start_ns) / 1e9 > self.position_discrepancy_allow_secs:
-                # TODO: Figure out how to manage this situation!
-                self._log.error(f"Position discrepancy detected. Raising")
-                raise RuntimeError(
-                    f"Position discrepancy detected. Cache Position: {self.position_qty}, Alpaca Position: {position_at_broker}."
+                self._log.error(
+                    f"Position discrepancy detected. Cache Position: {self.position_qty}, Alpaca Position: {position_at_broker}"
                 )
+                for open_order in self.open_orders:
+                    self.log.warning(f"Strategy OpenOrder {open_order.order}")
+                for order in set(self.cache.orders_open() + self.cache.orders_inflight()):
+                    self.log.warning(f"Cache order {order}")
+                self._raise_msg = (
+                    f"Position discrepancy has existed for more than {self.position_discrepancy_allow_secs}. Raising."
+                )
+                return
         else:
             self._position_discrepancy_start_ns = None
 
-        self_open_orders = self.open_orders
-
-        if len(self_open_orders) > 0:
-            cache_open_orders = set(self.cache.orders_open() + self.cache.orders_inflight())
-
+        # COMPARE OPEN ORDERS TO CACHED ORDERS
+        self_open_orders = set(open_order.order for open_order in self.open_orders)
+        cache_open_orders = set(self.cache.orders_open() + self.cache.orders_inflight())
+        cache_open_orders = set(order for order in cache_open_orders if order.status != OrderStatus.PENDING_CANCEL)
+        if (len(self_open_orders) + len(cache_open_orders)) > 0:
             for order in cache_open_orders - self_open_orders:
-                self.log.error(f"Cache open order, venue_id {order.venue_order_id} not found in self.open_orders.")
+                self.log.error(
+                    f"Cache open order, venue_id {order.venue_order_id} not found in self.open_orders.\nOrder: {order}"
+                )
+                for order in cache_open_orders:
+                    self.log.warning(f"Cache order {order}")
+                for open_order in self_open_orders:
+                    self.log.warning(f"OpenOrder {open_order.order}")
 
             for order in self_open_orders - cache_open_orders:
-                self.log.warning(f"Self open order {order} not found in cache.")
+                self.log.warning(f"OpenOrder {order} not found in cache.")
                 try:
                     # Try to retrieve order and see if status is closed. If so, remove from self.open_orders
                     cache_order = self.cache.order(order.client_order_id)
                     if cache_order.status in CLOSED_STATUS_LIST:
+                        self.log.info(f"Removing open order {order} from self.open_orders because it is closed.")
                         self._remove_open_order(order)
                 except Exception as e:
                     # check if self_order was just recently opened
@@ -521,13 +545,13 @@ class BaseStrategy(Strategy):
             if open_order.expire_time is not None and self.clock.utc_now() > open_order.expire_time:
                 self.cancel_open_order(open_order)
 
-            elif open_order.first_partial_fill_ns is not None:
-                ns_since_earliest_fill = self.clock.timestamp_ns() - open_order.first_partial_fill_ns
-                if (ns_since_earliest_fill / 1e9) > CANCEL_PARTIAL_FILLS_AFTER_SECS:
-                    self.log.info(
-                        f"Canceling order {open_order.client_order_id}, because first fill occurred more than {CANCEL_PARTIAL_FILLS_AFTER_SECS} secs ago"
-                    )
-                    self.cancel_open_order(open_order)
+            # elif open_order.first_partial_fill_ns is not None:
+            #     ns_since_earliest_fill = self.clock.timestamp_ns() - open_order.first_partial_fill_ns
+            #     if (ns_since_earliest_fill / 1e9) > CANCEL_PARTIAL_FILLS_AFTER_SECS:
+            #         self.log.info(
+            #             f"Canceling order {open_order.client_order_id}, because first fill occurred more than {CANCEL_PARTIAL_FILLS_AFTER_SECS} secs ago"
+            #         )
+            #         self.cancel_open_order(open_order)
 
     def on_start(self) -> None:
         if not self._initialized:
@@ -536,10 +560,10 @@ class BaseStrategy(Strategy):
         # TIME INTERVAL FUNCTIONS
         self.clock.set_timer(
             name="cancel_orders_timer",
-            interval=timedelta(seconds=0.25),
+            interval=timedelta(seconds=0.5),
             callback=self._cancel_partial_fills_and_orders_past_timeout,
         )
-        self.clock.set_timer(name="reconcile_internal_fn", interval=timedelta(seconds=1), callback=self._reconcile)
+        self.clock.set_timer(name="reconcile_internal_fn", interval=timedelta(seconds=3), callback=self._reconcile)
 
         self.instrument = self.cache.instrument(self.config.instrument_id)
         if self.instrument is None:

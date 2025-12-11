@@ -6,7 +6,7 @@ from custom.strategies.momo import MomoStrategyConfig
 from custom.utils.paths import run_artifacts_subdir
 from custom.utils.run_utils import run_strategy
 from custom.utils.alpaca_trader_http_client import AlpacaTraderHttpClient
-from nautilus_trader.adapters.alpaca import ALPACA, AlpacaExecClientConfig, AlpacaDataClientConfig, AlpacaHttpClient
+from nautilus_trader.adapters.alpaca import ALPACA, AlpacaExecClientConfig, AlpacaDataClientConfig
 from nautilus_trader.adapters.alpaca import AlpacaLiveDataClientFactory
 from nautilus_trader.adapters.alpaca import AlpacaLiveExecClientFactory
 from nautilus_trader.cache.config import CacheConfig
@@ -14,12 +14,13 @@ from nautilus_trader.config import InstrumentProviderConfig
 from nautilus_trader.config import LiveExecEngineConfig
 from nautilus_trader.config import LoggingConfig
 from nautilus_trader.config import TradingNodeConfig
+from nautilus_trader.live.config import LiveDataEngineConfig
 from nautilus_trader.live.node import TradingNode
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.identifiers import TraderId
 
 
-symbol = "foxx".upper()
+symbol = "pets".upper()
 instrument_id = InstrumentId.from_str(f"{symbol}.{ALPACA}")
 paper = True
 
@@ -29,15 +30,17 @@ instrument_provider_config = InstrumentProviderConfig(
     load_all=False,
 )
 log_level = "INFO"
-log_level = "DEBUG"
+# log_level = "DEBUG"
+file_log_level = "DEBUG"
+
 artifacts_directory = run_artifacts_subdir()
 config_node = TradingNodeConfig(
     trader_id=TraderId("TESTER-001"),
     logging=LoggingConfig(
         log_level=log_level,
-        log_level_file=log_level,
+        log_level_file=file_log_level,
         log_directory=str(artifacts_directory),
-        log_file_name=log_level,
+        log_file_name=file_log_level,
         use_pyo3=True,
         log_file_max_size=int(5e6),
     ),
@@ -53,6 +56,7 @@ config_node = TradingNodeConfig(
         open_check_open_only=False,
         open_check_lookback_mins=10,  # TODO: Reduce this?
         open_check_threshold_ms=1000,
+        graceful_shutdown_on_exception=True,
     ),
     cache=CacheConfig(
         # database=DatabaseConfig(),
@@ -73,6 +77,7 @@ config_node = TradingNodeConfig(
             instrument_provider=instrument_provider_config,
         ),
     },
+    data_engine=LiveDataEngineConfig(graceful_shutdown_on_exception=True),
     timeout_connection=60.0,
     timeout_reconciliation=20.0,
     timeout_portfolio=10.0,
