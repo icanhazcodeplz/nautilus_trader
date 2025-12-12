@@ -340,7 +340,21 @@ class AlpacaExecutionClient(LiveExecutionClient):
                     except KeyError:
                         self._log.debug(f"No client_order_id for {order}, skipping")
 
-        return filtered_and_modified_orders_list
+        # Deduplicate orders with the same client_order_id, keeping only the one with the highest updated_at timestamp
+        deduplicated_orders = {}
+        for order in filtered_and_modified_orders_list:
+            client_order_id = order["client_order_id"]
+            if client_order_id not in deduplicated_orders:
+                deduplicated_orders[client_order_id] = order
+            else:
+                # Compare timestamps and keep the order with the most recent updated_at
+                existing_order = deduplicated_orders[client_order_id]
+                # FIXME: This has not been tested yet! Change to debug once tested
+                self._log.error(f"Two orders with the same client_order_id {client_order_id}:\n{order}\n and\n{existing_order}\nComparing timestamps and keeping latest")
+                if pd.Timestamp(order["updated_at"]) > pd.Timestamp(existing_order["updated_at"]):
+                    deduplicated_orders[client_order_id] = order
+
+        return list(deduplicated_orders.values())
 
     async def generate_order_status_reports(self, command: GenerateOrderStatusReports) -> list[OrderStatusReport]:
         """
@@ -735,8 +749,9 @@ class AlpacaExecutionClient(LiveExecutionClient):
                         self._log.warning(f"Order already replaced, but limit price has changed. {venue_order_id}")
                 elif msg == "order parameters are not changed":
                     self._log.info(f"Order {command.client_order_id} order parameters are not changed, skipping")
-                # elif msg.startswith("qty must be"):
-
+                elif "insufficient qty available for order" in msg:
+                    # FIXME: TEST THIS
+                    self._log.error(f"Order not submitted. Msg: {msg}")
                 else:
                     raise Exception from e
 

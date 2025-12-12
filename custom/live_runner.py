@@ -63,7 +63,7 @@ config_node = TradingNodeConfig(
     data_clients={
         ALPACA: AlpacaDataClientConfig(
             paper=paper,
-            feed="sip",  # 'iex' or 'sip' (SIP requires paid subscription)
+            feed="sip",  # 'iex' or 'sip'
             instrument_provider=instrument_provider_config,
         ),
     },
@@ -99,7 +99,8 @@ strategy_config = MomoStrategyConfig(
     use_bracket_orders=False,
     use_oco_sell_orders=False,
     trailing_take=True,
-    random_buy=False,
+    num_sell_tiers=4,
+    random_buy=True,
     simple_take=False,
     allow_trades=True,
     print_update_every_secs=3,

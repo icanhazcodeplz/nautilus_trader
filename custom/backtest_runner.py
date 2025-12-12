@@ -246,8 +246,10 @@ if __name__ == "__main__":
         use_oco_sell_orders=False,
         simple_take=False,
         trailing_take=True,
+        num_sell_tiers=3,
         allow_trades=True,
         random_buy=True,
+        print_update_every_secs=None,
         random_seed=11,
     )
     datasets = [

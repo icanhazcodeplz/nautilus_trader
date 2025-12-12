@@ -207,7 +207,7 @@ if __name__ == "__main__":
     study = optuna.load_study(study_name=study_name, storage=DATABASE_STR)
     param_names = sampler._param_names
     rename_map = {f"params_{p}": p for p in param_names}
-    value_round = 1
+    value_round = 2
 
     value_multiplier = 1
     if load_random_buy_study:
@@ -251,7 +251,7 @@ if __name__ == "__main__":
             if col == "dataset":
                 continue
             gp = df.groupby(col)["value"].mean().round(value_round)
-            max_[col] = _try_round2(gp.sort_values().index[-1])
+            # max_[col] = _try_round2(gp.sort_values().index[-1])
             print(gp.to_frame().T)
             print()
 

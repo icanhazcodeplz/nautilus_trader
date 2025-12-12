@@ -1,5 +1,4 @@
 from abc import abstractmethod
-from copy import copy
 from datetime import timedelta
 from pathlib import Path
 from typing import Optional
@@ -8,8 +7,11 @@ import pandas as pd
 from pandas import Timestamp
 
 from custom.artifacts import ArtifactsIO
+from custom.strategies._open_order import OpenOrder, CLOSED_STATUS_LIST
 from custom.utils.alpaca_trader_http_client import AlpacaTraderHelper
 from nautilus_trader.common.component import TimeEvent
+
+from nautilus_trader.common.enums import LogColor
 from nautilus_trader.config import StrategyConfig
 from nautilus_trader.core.data import Data
 from nautilus_trader.core.message import Event
@@ -19,107 +21,17 @@ from nautilus_trader.model.data import OrderBookDeltas
 from nautilus_trader.model.data import QuoteTick
 from nautilus_trader.model.data import TradeTick
 
-from nautilus_trader.model import Quantity, Price
 from nautilus_trader.model.enums import OrderSide, ContingencyType, OrderStatus
 from nautilus_trader.model.enums import OrderType
 from nautilus_trader.model.enums import TimeInForce
 from nautilus_trader.model.identifiers import InstrumentId
-from nautilus_trader.model.events import OrderRejected, OrderFilled
+from nautilus_trader.model.events import OrderRejected
 from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.model.orders import LimitOrder, Order
 from nautilus_trader.model.orders.list import OrderList
 from nautilus_trader.trading.strategy import Strategy
 
-CLOSED_STATUS_LIST = {
-    OrderStatus.DENIED,
-    OrderStatus.FILLED,
-    OrderStatus.REJECTED,
-    OrderStatus.CANCELED,
-    OrderStatus.EXPIRED,
-    # OrderStatus.PENDING_CANCEL,
-}
-
-ONLY_MODIFY_EVERY_NS = 80e6  # e6 converts from ms to ns
 CANCEL_PARTIAL_FILLS_AFTER_SECS = 3
-
-
-class OpenOrder:
-    def __init__(self, order: Order, expire_time=None):
-        self.order = order
-        self.expire_time = expire_time
-
-        self._last_modify_ns = 0
-        self._last_modify_qty = None
-        self._last_modify_price = None
-        self._first_partial_fill_ns = None
-
-    @property
-    def is_open(self):
-        return self.order.status not in CLOSED_STATUS_LIST
-
-    @property
-    def price(self):
-        return self._last_modify_price if self._last_modify_price is not None else self.order.price
-
-    @property
-    def quantity(self):
-        return self._last_modify_qty if self._last_modify_qty is not None else self.order.quantity
-
-    @property
-    def first_partial_fill_ns(self):
-        if self._first_partial_fill_ns is not None:
-            return self._first_partial_fill_ns
-        if self.order.filled_qty > 0:
-            self._first_partial_fill_ns = min(
-                fill.ts_event for fill in self.order.events if isinstance(fill, OrderFilled)
-            )
-        return self._first_partial_fill_ns
-
-    @property
-    def leaves_qty(self):
-        return self.quantity - self.filled_qty
-
-    @property
-    def filled_qty(self):
-        return self.order.filled_qty
-
-    @property
-    def venue_order_id(self):
-        return self.order.venue_order_id
-
-    @property
-    def client_order_id(self):
-        return self.order.client_order_id
-
-    def _can_be_modified(self, now_ns):
-        if (now_ns - self._last_modify_ns) < ONLY_MODIFY_EVERY_NS:
-            return False
-        return self.order.status not in [
-            OrderStatus.SUBMITTED,
-            OrderStatus.PENDING_UPDATE,
-            OrderStatus.PENDING_CANCEL,
-            OrderStatus.FILLED,
-        ]
-
-    def update_last_modify_if_allowed(self, quantity: Quantity, price: Price, now_ns: int):
-        if not self._can_be_modified(now_ns):
-            return False
-        if quantity == self._last_modify_qty and price == self._last_modify_price:
-            return False
-        self._last_modify_ns = now_ns
-        self._last_modify_qty = quantity
-        self._last_modify_price = price
-        return True
-
-    def __eq__(self, other):
-        return self.client_order_id == other.client_order_id
-
-    def __hash__(self):
-        return hash(self.order.client_order_id)
-
-    def __repr__(self):
-        side_str = "SELL" if self.order.side == OrderSide.SELL else "BUY"
-        return f"OpenOrder({side_str} client_id={self.client_order_id}, venue_id={self.venue_order_id} price={self.price}, quantity={self.quantity}, leaves_qty={self.leaves_qty})"
 
 
 class BaseStrategyConfig(StrategyConfig, frozen=True):
@@ -128,11 +40,11 @@ class BaseStrategyConfig(StrategyConfig, frozen=True):
     max_position_multiplier: int
     stop_loss: float
     allow_trades: bool = True
+    print_update_every_secs: int = None
 
 
 class BaseStrategy(Strategy):
     buy_signal_delay_secs: int = 1
-    log_update_every_secs: int = None
     position_discrepancy_allow_secs = 10
 
     def __init__(self, config: BaseStrategyConfig) -> None:
@@ -164,6 +76,8 @@ class BaseStrategy(Strategy):
         self._open_sells = set()
         self._position_discrepancy_start_ns = None
         self._raise_msg = None
+        self._last_tick = None
+        self._total_buy_qty = 0
 
     def initialize(self, artifacts_location: Optional[Path], trader_helper: Optional[AlpacaTraderHelper] = None):
         self._initialized = True
@@ -298,6 +212,7 @@ class BaseStrategy(Strategy):
 
     def on_trade_tick(self, tick: TradeTick) -> None:
         self._raise_if_needed()
+        self._last_tick = tick
         if self._tick_init_dt_adjusted >= tick.ts_init:
             self._tick_init_dt_adjusted += 1
         else:
@@ -328,16 +243,6 @@ class BaseStrategy(Strategy):
             for metric in self.tick_metrics_to_save:
                 tick_data = {**tick_data, **metric.get_vals()}
             self._tick_data_dicts[self._tick_init_dt_adjusted] = tick_data
-
-        if (
-            self.log_update_every_secs is not None
-            and (self._tick_init_dt_adjusted - self._last_log_update_dt) / 1e9 > self.log_update_every_secs
-        ):
-            timestamp = pd.Timestamp(self._tick_init_dt_adjusted, unit="ns")
-            self.log.info(
-                f"Update\nTick {timestamp}: {tick_data}\nPosition {self.position_qty} @ {self.position_avg_px}\nBuy signals: {len(self.buy_sell_signals)} | Buys {self.buy_orders_count} | Open Buys {len(self.open_buys)} | Open Sells {len(self.open_sells)}"
-            )
-            self._last_log_update_dt = self._tick_init_dt_adjusted
 
     def _submit_orders_if_allowed(self, order_or_order_list, expire_time=None) -> None:
         buy_included = False
@@ -460,6 +365,8 @@ class BaseStrategy(Strategy):
 
     def on_order_filled(self, order) -> None:
         self._on_order_filled(order)
+        if order.order_side == OrderSide.BUY:
+            self._total_buy_qty += int(order.last_qty)
 
     @abstractmethod
     def _on_trade_tick(self, tick: TradeTick) -> None:
@@ -553,6 +460,44 @@ class BaseStrategy(Strategy):
             #         )
             #         self.cancel_open_order(open_order)
 
+    def _print_update(self):
+        return ""
+
+    def print_update(self, event: TimeEvent):
+        tick_str = ""
+        if self._last_tick is not None:
+            timestamp = pd.Timestamp(self._last_tick.ts_event, unit="ns")
+            tick_str = f"Last Tick {timestamp} size {self._last_tick.size} @ {self._last_tick.price}"
+
+        # Get P&L information
+        realized_pnl = self.portfolio.realized_pnl(self.config.instrument_id)
+
+        open_buys_str = "\n".join(str(o) for o in self.open_buys) if len(self.open_buys) > 0 else ""
+        open_sells_str = "\n".join(str(o) for o in self.open_sells) if len(self.open_sells) > 0 else ""
+        OpenBuysQty = int(sum(o.leaves_qty for o in self.open_buys))
+        OpenSellsQty = int(sum(o.leaves_qty for o in self.open_sells))
+
+        position_str = ""
+        if self.position_qty > 0:
+            avg_px = self.position_avg_px
+            gain = self._last_tick.price - avg_px
+            unrealized = self.position_qty * gain
+            position_str = f"Position {self.position_qty} @ {round(avg_px, 2)} | PerShare {round(gain, 2)} | PnL ${round(unrealized, 2)} | {OpenSellsQty=} | Diff={self.position_qty - OpenSellsQty}\n"
+        metrics_data = {}
+        for metric in self.tick_metrics_to_save:
+            vals = {k: str(round(v, 3)) for k, v in metric.get_vals().items()}
+            metrics_data = {**metrics_data, **vals}
+        self.log.info(
+            f"UPDATE: {tick_str}\n"
+            f"Total Bought {self._total_buy_qty} | Realized: {realized_pnl} | {OpenBuysQty=} Orders: {open_buys_str}\n"
+            f"{position_str}"
+            # f"{open_sells_str}"
+            f"{self._print_update()}"
+            f"{metrics_data}",
+            color=LogColor.CYAN,
+        )
+        self._last_log_update_dt = self._tick_init_dt_adjusted
+
     def on_start(self) -> None:
         if not self._initialized:
             raise RuntimeError("Strategy must be initialized before starting. Call method `initialize` first.")
@@ -564,6 +509,12 @@ class BaseStrategy(Strategy):
             callback=self._cancel_partial_fills_and_orders_past_timeout,
         )
         self.clock.set_timer(name="reconcile_internal_fn", interval=timedelta(seconds=3), callback=self._reconcile)
+        if self.config.print_update_every_secs is not None:
+            self.clock.set_timer(
+                name="print_update",
+                interval=timedelta(seconds=self.config.print_update_every_secs),
+                callback=self.print_update,
+            )
 
         self.instrument = self.cache.instrument(self.config.instrument_id)
         if self.instrument is None:

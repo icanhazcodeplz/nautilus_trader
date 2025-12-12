@@ -20,7 +20,7 @@ class Metric:
     attrs: list[str]
 
     def get_vals(self):
-        return {f"{self.name}_{attr}": round(getattr(self.obj, attr), 3) for attr in self.attrs}
+        return {f"{self.name}_{attr}": getattr(self.obj, attr) for attr in self.attrs}
 
     @property
     def tick_lookback(self):
@@ -49,6 +49,7 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     trailing_take: bool = False
     random_buy: bool = False
     num_sell_tiers: int = 1
+    print_update_every_secs: int = None
 
     allow_trades: bool = True
 
@@ -137,9 +138,6 @@ class MomoStrategy(BaseStrategy):
             # FIXME: cancelling all orders sometimes also cancels the subsequent sell order because of the async calls
             # self.cancel_all_orders(self.config.instrument_id)
             # self.sell(quantity=self.position_qty, limit_price=new_limit_price, tag="s")
-
-            # Adjust stop price so we don't send repeat orders
-            self.stop_price = new_limit_price
 
     def _on_trade_tick(self, tick: TradeTick) -> None:
         self.stop_out_if_needed(tick)
@@ -260,7 +258,11 @@ class MomoStrategy(BaseStrategy):
         position_qty = self.position_qty
         if position_qty == 0:
             return
-
+        elif position_qty < 0:
+            self.log.warning(
+                f"Position qty {position_qty} is negative. Not adjusting tiers in hopes that reconciliation will fix it."
+            )
+            return
         tiers = Tiers(
             quantity=position_qty,
             starting_price=self.vwap.upper,
@@ -273,25 +275,31 @@ class MomoStrategy(BaseStrategy):
         qty_taken_in_tiers = 0
         for open_order in self.open_sells:
             existing_open_sell_qty += open_order.leaves_qty
+            if existing_open_sell_qty > position_qty:
+                self.log.error(
+                    f"Existing open sell qty {existing_open_sell_qty} is greater than position qty {position_qty}. Canceling order and skipping adjusting tiers."
+                )
+                self.cancel_open_order(open_order)
+                return
             if tiers.take_price_if_available(open_order.price):
-                self.log.info(f"Keeping {open_order}")
                 qty_taken_in_tiers += open_order.leaves_qty
             else:
-                self.log.info(f"To be modified {open_order}")
                 orders_to_be_modified.append(open_order)
 
         # If we adjust two orders at the same time, we often get an "insufficient qty" error from alpaca. To reduce
         # this likelihood, limit the amount of increase qty to the current position
         available_qty_increase = position_qty - existing_open_sell_qty
 
-        if len(tiers.available_prices) > 0:
-            self.log.info(f"Available qty increase: {available_qty_increase}")
-            self.log.info(f"Available Tiers: max {tiers.max_qty_per_tier} in {tiers.available_prices}")
+        while len(tiers.available_prices) > 0:
+            price = tiers.available_prices.pop()
 
-        for price in tiers.available_prices:
             # Only sell up to (position_qty - qty_taken_in_tiers) to limit "insufficient qty" error
-            max_sell_allowed = position_qty - qty_taken_in_tiers
-            qty_to_sell = min(tiers.max_qty_per_tier, max_sell_allowed)
+            qty_to_sell = position_qty - qty_taken_in_tiers
+
+            # Minimize to tier max if there are more prices to sell at after this one
+            if len(tiers.available_prices) > 0:
+                qty_to_sell = min(tiers.max_qty_per_tier, qty_to_sell)
+
             if qty_to_sell > 0:
                 # Modify an existing order if possible, otherwise create a new one
                 if len(orders_to_be_modified) > 0:
@@ -321,8 +329,20 @@ class MomoStrategy(BaseStrategy):
         open_sells_after = self.open_sells
         if len(open_sells_after) > len(tiers.prices):
             self.log.error(
-                f"Number of open sell orders {len(copy(self.open_sells))} is greater than number of tiers {len(tiers.tiers)}"
+                f"Number of open sell orders {len(copy(self.open_sells))} is greater than number of tiers {len(tiers.prices)}"
             )
+
+    def _print_update(self):
+        def open_for_secs(open_order):
+            return round((self.clock.timestamp_ns() - open_order.order.last_event.ts_event) / 1e9, 1)
+
+        if self.config.trailing_take:
+            if len(self.open_sells) > 0:
+                ordered_sells = sorted(self.open_sells, key=lambda x: x.price)
+                sells_str = "\n".join(f"{o.leaves_qty} @ {o.price}  OpenSecs {open_for_secs(o)}" for o in ordered_sells)
+                msg = f"{round(self.vwap.mean_variance, 2)} {round(self.vwap.upper, 3)}\n{sells_str}\n"
+                return msg
+        return ""
 
     def _on_order_filled(self, order_filled) -> None:
         if order_filled.is_buy:

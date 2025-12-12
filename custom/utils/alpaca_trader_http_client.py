@@ -160,11 +160,15 @@ class AlpacaTraderHelper:
             self._log.warning(f"Existing position for {self.symbol} of {qty}. Submitting {side} order at {limit_price}")
         return canceling_or_flattening_needed
 
-    @retry(max_retries=3, wait_time=2.0)
-    def cancel_orders_and_flatten_position_with_retry(self):
+    @retry(max_retries=2, wait_time=2.0)
+    def cancel_orders_and_flatten_position_with_retry(self, max_retries=2):
         # Wrapper to run multiple times until we get through `cancel_open_orders_and_close_position` without any operations
         iterations = 0
         while self.cancel_open_orders_and_flatten():
             iterations += 1
+            if iterations > max_retries:
+                raise RuntimeError(
+                    f"Failed to cancel orders and flatten position for {self.symbol} after {iterations - 1} iterations"
+                )
             sleep(1)
         self._log.info(f"{self.symbol} flat after {iterations} iterations of canceling orders and closing position")
