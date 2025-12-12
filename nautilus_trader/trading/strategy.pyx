@@ -1438,36 +1438,36 @@ cdef class Strategy(Actor):
         ClientId client_id = None,
         dict[str, object] params = None,
     ):
-        cdef bint updating = False  # Set validation flag (must become true)
-
-        if quantity is not None and quantity != order.quantity:
-            updating = True
-
-        if price is not None:
-            Condition.is_true(
-                order.order_type in LIMIT_ORDER_TYPES,
-                fail_msg=f"{order.type_string_c()} orders do not have a LIMIT price",
-            )
-            if price != order.price:
-                updating = True
-
-        if trigger_price is not None:
-            Condition.is_true(
-                order.order_type in STOP_ORDER_TYPES,
-                fail_msg=f"{order.type_string_c()} orders do not have a STOP trigger price",
-            )
-            if trigger_price != order.trigger_price:
-                updating = True
-
-        if not updating:
-            price_str = f", {order.price=}" if order.has_price_c() else ""
-            trigger_str = f", {order.trigger_price=}" if order.has_trigger_price_c() else ""
-            self.log.error(
-                "Cannot create command ModifyOrder: "
-                f"{quantity=}, {price=}, {trigger_price=} were either None "
-                f"or the same as existing values: {order.quantity=}{price_str}{trigger_str}",
-            )
-            return None  # Cannot send command
+        # cdef bint updating = False  # Set validation flag (must become true)
+        #
+        # if quantity is not None and quantity != order.quantity:
+        #     updating = True
+        #
+        # if price is not None:
+        #     Condition.is_true(
+        #         order.order_type in LIMIT_ORDER_TYPES,
+        #         fail_msg=f"{order.type_string_c()} orders do not have a LIMIT price",
+        #     )
+        #     if price != order.price:
+        #         updating = True
+        #
+        # if trigger_price is not None:
+        #     Condition.is_true(
+        #         order.order_type in STOP_ORDER_TYPES,
+        #         fail_msg=f"{order.type_string_c()} orders do not have a STOP trigger price",
+        #     )
+        #     if trigger_price != order.trigger_price:
+        #         updating = True
+        #
+        # if not updating:
+        #     price_str = f", {order.price=}" if order.has_price_c() else ""
+        #     trigger_str = f", {order.trigger_price=}" if order.has_trigger_price_c() else ""
+        #     self.log.error(
+        #         "Cannot create command ModifyOrder: "
+        #         f"{quantity=}, {price=}, {trigger_price=} were either None "
+        #         f"or the same as existing values: {order.quantity=}{price_str}{trigger_str}",
+        #     )
+        #     return None  # Cannot send command
 
         if order.is_closed_c() or order.is_pending_cancel_c():
             self.log.warning(
