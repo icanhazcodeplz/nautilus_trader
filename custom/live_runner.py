@@ -24,11 +24,7 @@ symbol = "pets".upper()
 instrument_id = InstrumentId.from_str(f"{symbol}.{ALPACA}")
 paper = True
 
-instrument_provider_config = InstrumentProviderConfig(
-    load_ids=frozenset([instrument_id]),
-    # FIXME: figure out why all instruments are loaded when load_all=False
-    load_all=False,
-)
+instrument_provider_config = InstrumentProviderConfig(load_ids=frozenset([instrument_id]), load_all=False)
 log_level = "INFO"
 # log_level = "DEBUG"
 file_log_level = "DEBUG"
@@ -106,6 +102,7 @@ strategy_config = MomoStrategyConfig(
     random_buy=False,
     simple_take=False,
     allow_trades=True,
+    print_update_every_secs=3,
 )
 node.add_data_client_factory(ALPACA, AlpacaLiveDataClientFactory)
 node.add_exec_client_factory(ALPACA, AlpacaLiveExecClientFactory)
@@ -121,7 +118,6 @@ def place_orders_for_testing(paper: bool = True):
 
 if __name__ == "__main__":
     # place_orders_for_testing(paper=paper)
-
     run_config = {"symbol": symbol, "strategy": strategy_config.dict()}
     strategy = MomoStrategy(config=strategy_config)
     performance_stats = run_strategy(strategy, node, artifacts_directory, run_config=run_config, paper=paper)

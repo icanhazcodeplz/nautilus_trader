@@ -338,7 +338,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
                         order["client_order_id"] = actual_client_order_id
                         filtered_and_modified_orders_list.append(order)
                     except KeyError:
-                        self._log.warning(f"No client_order_id for {order}, skipping")
+                        self._log.debug(f"No client_order_id for {order}, skipping")
 
         return filtered_and_modified_orders_list
 
@@ -605,7 +605,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
             )
 
         except Exception as e:
-            self._log.error(f"Failed to submit order: {e}")
+            self._log.debug(f"Failed to submit order: {e}")
             self.generate_order_rejected(
                 strategy_id=order.strategy_id,
                 instrument_id=order.instrument_id,

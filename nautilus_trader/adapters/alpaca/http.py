@@ -146,7 +146,7 @@ class AlpacaHttpClient:
         ) as response:
             if response.status >= 400:
                 text = await response.text()
-                self._log.error(f"HTTP {response.status}: {text}")
+                self._log.debug(f"HTTP {response.status}: {text}")
                 raise Exception(f"HTTP {response.status}: {text}")
 
             return await response.json()
