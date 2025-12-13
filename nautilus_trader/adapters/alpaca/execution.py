@@ -350,7 +350,9 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 # Compare timestamps and keep the order with the most recent updated_at
                 existing_order = deduplicated_orders[client_order_id]
                 # FIXME: This has not been tested yet! Change to debug once tested
-                self._log.error(f"Two orders with the same client_order_id {client_order_id}:\n{order}\n and\n{existing_order}\nComparing timestamps and keeping latest")
+                self._log.error(
+                    f"Two orders with the same client_order_id {client_order_id}:\n{order}\n and\n{existing_order}\nComparing timestamps and keeping latest"
+                )
                 if pd.Timestamp(order["updated_at"]) > pd.Timestamp(existing_order["updated_at"]):
                     deduplicated_orders[client_order_id] = order
 
@@ -948,7 +950,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 alpaca_order_qty = order_data["qty"]
                 limit_price = order_data["limit_price"]
                 if int(alpaca_order_qty) != int(order.quantity):
-                    self._log.warning(
+                    self._log.error(
                         f"Order qty mismatch {client_order_id} | {venue_order_id}: Alpaca {alpaca_order_qty} != NT {order.quantity}. Sending `generate_order_updated` with new qty {alpaca_order_qty}"
                     )
                     self.generate_order_updated(

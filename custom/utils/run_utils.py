@@ -28,8 +28,11 @@ def run_strategy(strategy, node_or_engine, artifacts_location=None, run_config=N
         log.error(f"Traceback:\n{traceback.format_exc()}")
     finally:
         if isinstance(node_or_engine, TradingNode):
-            alpaca_helper.cancel_orders_and_flatten_position_with_retry()
-
+            try:
+                alpaca_helper.cancel_orders_and_flatten_position_with_retry()
+            except Exception as e:
+                log.error(f"Unable to flatten position during cleanup: {e}")
+                # FIXME: Add text notification!
         orders_report = node_or_engine.trader.generate_orders_report()
         performance_stats = {
             **node_or_engine.portfolio.analyzer.get_performance_stats_pnls(),
@@ -43,10 +46,6 @@ def run_strategy(strategy, node_or_engine, artifacts_location=None, run_config=N
             if run_config is not None:
                 artifacts_io.save_config(run_config)
 
-            # "buy_signals": num_buy_sells,
-            # "buy_signal_wins": long_wins,
-            # "buys": total_buys,
-            # "wins": wins,
-
         node_or_engine.dispose()
+
         return performance_stats

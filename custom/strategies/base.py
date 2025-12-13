@@ -389,27 +389,38 @@ class BaseStrategy(Strategy):
         self.sell_position_at_price(self.instrument.make_price(limit_price * 0.8))
 
     def _reconcile(self, event: TimeEvent = None):
-        if self._trader_helper is None:
-            return
-        position = self._trader_helper.get_position_obj()
-        if self._trader_helper.flatten_if_short_with_retry(position):
-            # Need to get position again after if flattening occurred
-            position = self._trader_helper.get_position_obj()
+        if self._trader_helper is not None:
+            # Running live. Get position from broker
+            position_at_broker = self._trader_helper.get_position_obj()
+            position_at_broker = int(position_at_broker.qty)
+        else:
+            # Running a backtest, so just use the local position
+            position_at_broker = self.position_qty
 
-        position_at_broker = int(position.qty)
+        # FLATTEN POSITION IF NEEDED
         if position_at_broker < 0:
-            self._raise_msg = f"Position still negative after attempting to flatten. Cache Position: {self.position_qty}, Alpaca Position: {position_at_broker}."
-            return
+            self.log.error(
+                f"Position {position_at_broker} is negative! Canceling all existing open_sells and buying to flatten."
+            )
+            for open_order in self.open_sells:
+                self.cancel_open_order(open_order)
+            price = self._last_tick.price * 1.1
+            if len(self.open_buys) > 0:
+                open_buy_to_modify = list(self.open_buys)[0]
+                self.modify_open_order(open_buy_to_modify, quantity=abs(position_at_broker), price=price)
+            else:
+                self._submit_limit_order(OrderSide.BUY, abs(position_at_broker), price, "flatten")
+            return  # Return from here to allow orders time to cancel and buy
 
         # CHECK POSITION DISCREPANCY BETWEEN LOCAL AND BROKER
         if self.position_qty != position_at_broker:
             now_ns = self.clock.timestamp_ns()
             if self._position_discrepancy_start_ns is None:
                 self._position_discrepancy_start_ns = now_ns
-            elif (now_ns - self._position_discrepancy_start_ns) / 1e9 > self.position_discrepancy_allow_secs:
                 self._log.error(
                     f"Position discrepancy detected. Cache Position: {self.position_qty}, Alpaca Position: {position_at_broker}"
                 )
+            elif (now_ns - self._position_discrepancy_start_ns) / 1e9 > self.position_discrepancy_allow_secs:
                 for open_order in self.open_orders:
                     self.log.warning(f"Strategy OpenOrder {open_order.order}")
                 for order in set(self.cache.orders_open() + self.cache.orders_inflight()):

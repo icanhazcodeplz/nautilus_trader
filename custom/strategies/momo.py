@@ -1,7 +1,7 @@
 from collections import deque
 from copy import copy
 from dataclasses import dataclass
-from random import random
+import random
 
 import pandas as pd
 
@@ -155,7 +155,7 @@ class MomoStrategy(BaseStrategy):
                 len(buy_orders) == 0
                 and (self.clock.utc_now() - self.last_buy_dt).total_seconds() > 20
                 and position_qty == 0
-                and random() < 0.3
+                and random.random() < 0.3
             ):
                 # Only send buy command if it has been at least 10 seconds of flat
                 all_positions = self.cache.positions(instrument_id=self.config.instrument_id)
@@ -259,9 +259,8 @@ class MomoStrategy(BaseStrategy):
         if position_qty == 0:
             return
         elif position_qty < 0:
-            self.log.warning(
-                f"Position qty {position_qty} is negative. Not adjusting tiers in hopes that reconciliation will fix it."
-            )
+            self.log.error(f"Position qty {position_qty} is negative. Running reconciliation.")
+            self._reconcile()
             return
         tiers = Tiers(
             quantity=position_qty,
