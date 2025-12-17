@@ -349,8 +349,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
             else:
                 # Compare timestamps and keep the order with the most recent updated_at
                 existing_order = deduplicated_orders[client_order_id]
-                # FIXME: This has not been tested yet! Change to debug once tested
-                self._log.error(
+                self._log.debug(
                     f"Two orders with the same client_order_id {client_order_id}:\n{order}\n and\n{existing_order}\nComparing timestamps and keeping latest"
                 )
                 if pd.Timestamp(order["updated_at"]) > pd.Timestamp(existing_order["updated_at"]):

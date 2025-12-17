@@ -215,10 +215,12 @@ if __name__ == "__main__":
        10/14 - GWAV
        10/14 - NVA
        12/01 - CNCK
+       12/15 - RADX
+       12/16 - AMCI
        """
 
-    symbol = "CNCK".upper()
-    start_dt_str = "2025-12-01"
+    symbol = "AMCI".upper()
+    start_dt_str = "2025-12-16"
 
     prepare_alpaca_data(symbol, start_dt_str)
 

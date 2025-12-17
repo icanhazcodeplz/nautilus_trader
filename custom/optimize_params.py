@@ -20,12 +20,7 @@ DATABASE_STR = "sqlite:///optuna.db"
 optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
 
 DATASET_NAMES = [
-    "sgbx",
-    "chnr",
-    "jdzg",
-    "gwav",
-    "nva",
-    "agmh"
+    "radx",
 ]
 OPTIMIZE_BUY_SIGNALS = False
 RANDOM_BUY = False

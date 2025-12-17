@@ -52,6 +52,7 @@ latency_model = LatencyModel(
     cancel_latency_nanos=25 * 1e6,
 )
 # latency_model=LatencyModel()
+prob_fill_on_limit = 0.5
 
 # DATA_VENUE = DATABENTO
 DATA_VENUE = ALPACA
@@ -144,7 +145,7 @@ def run_single_backtest(dataset_name, strategy_name, params, artifacts_location=
         account_type=AccountType.MARGIN,
         base_currency=USD,
         starting_balances=[Money(100000.0, USD)],
-        fill_model=LimitFillModel(prob_fill_on_limit=0.8, random_seed=random_seed),
+        fill_model=LimitFillModel(prob_fill_on_limit=prob_fill_on_limit, random_seed=random_seed),
         reject_stop_orders=False,
         # trade_execution=True,
         latency_model=latency_model,
@@ -273,7 +274,7 @@ if __name__ == "__main__":
             pass
     else:
         run_single_backtest(
-            BACKTEST_SYMBOL,
+            BACKTEST_SYMBOL.lower(),
             strategy_name,
             params,
             artifacts_location=VIZ_ARTIFACTS_PATH,
@@ -283,11 +284,14 @@ if __name__ == "__main__":
         artifacts_io = ArtifactsIO(VIZ_ARTIFACTS_PATH)
         num_buy_sells, long_wins = buy_signal_stats(artifacts_io.load_signals())
 
+        p_mets = artifacts_io.load_performance_metrics()
+        print('\n'.join(f"{k}: {round(v, 2)}" for k, v in p_mets.items()))
+        print()
+
         orders_report = artifacts_io.load_orders_report()
         df = orders_report.copy()
 
         # win_ratio = _calculate_oco_win_ratio_DEPRECATED(df)
         trades, sell_legs = orders_to_trades(df)
         analyze_trades(trades, print_report=True)
-
         print()

@@ -11,7 +11,7 @@ BACKTESTING_CATALOG = ParquetDataCatalog(CATALOG_PATH)
 
 
 def get_tbbo_for_viz(venue=DATABENTO):
-    params = CATALOG_OPTIONS[BACKTEST_SYMBOL]
+    params = CATALOG_OPTIONS[BACKTEST_SYMBOL.lower()]
     tbbo = BACKTESTING_CATALOG.query(
         data_cls=TBBOData, identifiers=[f"{params['symbol']}.{venue}"], start=params["start"], end=params["end"]
     )
