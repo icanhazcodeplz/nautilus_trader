@@ -63,7 +63,7 @@ def optimize(trial):
     strategy_name = "momo"
 
     params = dict(
-        trade_size=1,
+        trade_size=100,
         max_position_multiplier=1,
         stop_loss=0.10,
         take_profit=None,
@@ -77,6 +77,7 @@ def optimize(trial):
         use_oco_sell_orders=False,
         simple_take=False,
         trailing_take=True,
+        num_sell_tiers=3,
         allow_trades=not OPTIMIZE_BUY_SIGNALS,
         random_buy=RANDOM_BUY,
         random_seed=None,

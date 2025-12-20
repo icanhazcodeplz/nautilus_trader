@@ -79,6 +79,8 @@ class BaseStrategy(Strategy):
         self._last_tick = None
         self._total_buy_qty = 0
 
+        self._stopping_out = None
+
     def initialize(self, artifacts_location: Optional[Path], trader_helper: Optional[AlpacaTraderHelper] = None):
         self._initialized = True
         self._trader_helper = trader_helper
@@ -493,7 +495,10 @@ class BaseStrategy(Strategy):
             avg_px = self.position_avg_px
             gain = self._last_tick.price - avg_px
             unrealized = self.position_qty * gain
-            position_str = f"Position {self.position_qty} @ {round(avg_px, 2)} | PerShare {round(gain, 2)} | PnL ${round(unrealized, 2)} | {OpenSellsQty=} | Diff={self.position_qty - OpenSellsQty}\n"
+            diff = self.position_qty - OpenSellsQty
+            if diff > 0:
+                self.log.warning(f"Diff: {diff}")
+            position_str = f"Position {self.position_qty} @ {round(avg_px, 2)} | PerShare {round(gain, 2)} | PnL ${round(unrealized, 2)} | {OpenSellsQty=} | Diff={diff}\n"
         metrics_data = {}
         for metric in self.tick_metrics_to_save:
             vals = {k: str(round(v, 3)) for k, v in metric.get_vals().items()}
