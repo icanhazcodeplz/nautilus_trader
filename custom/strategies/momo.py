@@ -37,10 +37,10 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
 
     take_profit: float
     take_ratio: float
-    lower_pct: float
-    upper_pct: float
+    lower_scalar_multiplier: float
+    upper_scalar_multiplier: float
     vwap_window: int
-    variance_window_ratio: float
+    variance_window: int
 
     trailing_buy_order: bool = False
     use_bracket_orders: bool = False
@@ -70,6 +70,7 @@ def is_market_open(now_utc: pd.Timestamp) -> bool:
 
 class MomoStrategy(BaseStrategy):
     adjust_tiers_only_every_ms = 100
+    attempt_stop_out_every_ms = 60  # TODO: Move stopout logic into BaseStrategy?
 
     def __init__(self, config: MomoStrategyConfig) -> None:
         super().__init__(config)
@@ -92,15 +93,15 @@ class MomoStrategy(BaseStrategy):
         self.take_profit = self.config.take_profit if self.config.take_profit is not None else self.config.stop_loss
         self.market_open_only = self.config.use_bracket_orders or self.config.use_oco_sell_orders
         self.vwap = VWAPBands(
-            lower_pct=self.config.lower_pct,
-            upper_pct=self.config.upper_pct,
+            lower_scalar_multiplier=self.config.lower_scalar_multiplier,
+            upper_scalar_multiplier=self.config.upper_scalar_multiplier,
             rolling_window=self.config.vwap_window,
-            variance_window_ratio=self.config.variance_window_ratio,
+            variance_window=self.config.variance_window,
         )
         # self.vwap_day = VolumeWeightedAveragePrice()
 
         self.tick_metrics_to_save = [
-            Metric(obj=self.vwap, name="vwap", attrs=["value", "upper", "lower"]),
+            Metric(obj=self.vwap, name="vwap", attrs=["value", "upper", "lower", "lower_base"]),
             # Metric(obj=self.vwap_day, name="day_vwap", attrs=["value"]),
         ]
 
@@ -111,6 +112,7 @@ class MomoStrategy(BaseStrategy):
 
         self.last_take_ts = None
         self._stopping_out = False
+        self._last_stop_out_attempt = 0
         self._last_tier_adjustment_ns = None
 
     def stop_out_if_needed(self, tick: TradeTick):
@@ -121,11 +123,19 @@ class MomoStrategy(BaseStrategy):
             self._stopping_out = False
             return
 
+        if self.clock.timestamp_ns() - self._last_stop_out_attempt < self.attempt_stop_out_every_ms * 1e6:
+            time_since = (self.clock.timestamp_ns() - self._last_stop_out_attempt) / 1e6
+            self.log.debug(
+                f"Skipping stop out attempt because last attempt {time_since} ms ago. Limit {self.attempt_stop_out_every_ms}"
+            )
+            return
+
         if self.position_qty > 0 and self.stop_price is None:
             self.stop_price = tick.price - self.config.stop_loss
             self.log.info(f"Setting stop price to {self.stop_price}")
 
         if self.stop_price is not None and tick.price <= self.stop_price:
+            self._last_stop_out_attempt = self.clock.timestamp_ns()
             self._stopping_out = True
             # TODO: HARDCODED to set stop price to 0.01 below current price
             new_limit_price = self.instrument.make_price(tick.price - 0.25)
@@ -259,7 +269,7 @@ class MomoStrategy(BaseStrategy):
         if position_qty == 0:
             return
         elif position_qty < 0:
-            self.log.error(f"Position qty {position_qty} is negative. Running reconciliation.")
+            self.log.info(f"Position qty {position_qty} is negative. Running reconciliation.")
             self._reconcile()
             return
         tiers = Tiers(

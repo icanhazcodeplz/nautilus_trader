@@ -20,7 +20,16 @@ DATABASE_STR = "sqlite:///optuna.db"
 optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
 
 DATASET_NAMES = [
+    "sgbx",
+    "cnck",
     "radx",
+    "bttc",
+    "crbp",
+    "migi",
+    "jzxn",
+    "mbrx",
+    "lhai",
+    "azi",
 ]
 OPTIMIZE_BUY_SIGNALS = False
 RANDOM_BUY = False
@@ -65,13 +74,13 @@ def optimize(trial):
     params = dict(
         trade_size=100,
         max_position_multiplier=1,
-        stop_loss=0.10,
+        stop_loss=1.0,
         take_profit=None,
         take_ratio=0.8,
-        vwap_window=200,
-        variance_window_ratio=1.5,
-        lower_pct=1.0,
-        upper_pct=1.0,
+        vwap_window=160,
+        variance_window=300,
+        lower_scalar_multiplier=2.0,
+        upper_scalar_multiplier=0.8,
         trailing_buy_order=False,
         use_bracket_orders=False,
         use_oco_sell_orders=False,
@@ -115,7 +124,9 @@ def optimize(trial):
             value = performance_stats["Pnl Per100"]
             print(f"Trial {trial.number} had {trades} trades, value {value}")
             if trades < MIN_TRADES_THRESHOLD and not RANDOM_BUY:
-                print(f"Trial {trial.number} had {trades} trades, less than required {MIN_TRADES_THRESHOLD}. Returning -1.0")
+                print(
+                    f"Trial {trial.number} had {trades} trades, less than required {MIN_TRADES_THRESHOLD}. Returning -1.0"
+                )
                 return -1.0
             return value
 
@@ -156,15 +167,16 @@ if __name__ == "__main__":
     else:
         study_name = "test"
         search_space = dict(
-            random_seed=[5, 6],
+            random_seed=[1, 2, 3, 4, 5],
             # max_position_multiplier=linspace_int(low=1, high=1, step=1),
             # stop_loss=linspace_float(low=0.18, high=0.28, step=0.03),
             # take_profit=linspace_float(low=0.25, high=0.35, step=0.10),
             # take_ratio=linspace_float(low=0.5, high=1.0, step=0.50),
-            # vwap_window=linspace_int(low=150, high=180, step=20),
-            # variance_window_ratio=linspace_float(low=1.5, high=2.5, step=0.5),
-            lower_pct=linspace_float(low=0.1, high=2.1, step=0.2),
-            upper_pct=linspace_float(low=0.05, high=2.05, step=0.2),
+            variance_window=linspace_int(low=280, high=320, step=20),
+            vwap_window=linspace_int(low=120, high=180, step=20),
+            upper_scalar_multiplier=linspace_float(low=0.6, high=1, step=0.1),
+            lower_scalar_multiplier=linspace_float(low=1.8, high=3.2, step=0.3),
+            # trailing_buy_order=[True, False],
         )
 
     sampler = optuna.samplers.GridSampler(search_space={**search_space, "dataset": DATASET_NAMES})
@@ -261,6 +273,7 @@ if __name__ == "__main__":
         #     print(f"{col}: {corr:.3f}")
 
         print()
+    print()
 
     """
     mysql.server start
