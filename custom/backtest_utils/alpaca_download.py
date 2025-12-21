@@ -217,10 +217,20 @@ if __name__ == "__main__":
        12/01 - CNCK
        12/15 - RADX
        12/16 - AMCI
+       
+       12/11 - BTTC
+       12/11 - CRBP
+       12/11 - MIGI
+       12/11 - AXIL
+       12/12 - JZXN
+       12/19 - AZI
+       12/17 - MBRX
+       12/18 - LHAI
+              
        """
 
-    symbol = "AMCI".upper()
-    start_dt_str = "2025-12-16"
+    symbol = "pavs".upper()
+    start_dt_str = "2025-12-18"
 
     prepare_alpaca_data(symbol, start_dt_str)
 
