@@ -33,7 +33,7 @@ DATASET_NAMES = [
 ]
 OPTIMIZE_BUY_SIGNALS = False
 RANDOM_BUY = False
-MIN_TRADES_THRESHOLD = 20
+MIN_TRADES_THRESHOLD = 15
 
 
 def linspace_int(low, high, step):
@@ -84,6 +84,7 @@ def optimize(trial):
         trailing_buy_order=False,
         use_bracket_orders=False,
         use_oco_sell_orders=False,
+        only_buy_if_macd_positive=True,
         simple_take=False,
         trailing_take=True,
         num_sell_tiers=3,
@@ -195,7 +196,7 @@ if __name__ == "__main__":
         # RUN SINGLE PROCESS
         # target(study_name, sampler, total_trials)
 
-        n_processes = 8
+        n_processes = 9
         trials_per_process = 1
         trials_started = 0
         pm = ProcessManager()

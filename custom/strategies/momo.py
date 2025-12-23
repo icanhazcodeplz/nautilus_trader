@@ -8,6 +8,7 @@ import pandas as pd
 from custom.nt_extensions.indicators import VWAPBands
 from custom.strategies.base import BaseStrategy, BaseStrategyConfig
 from custom.strategies._tiers import Tiers
+from nautilus_trader.indicators.trend import MACDHistogram
 from nautilus_trader.model.data import Bar
 from nautilus_trader.model.data import TradeTick
 from nautilus_trader.model.identifiers import InstrumentId
@@ -42,6 +43,7 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     vwap_window: int
     variance_window: int
 
+    only_buy_if_macd_positive: bool = False
     trailing_buy_order: bool = False
     use_bracket_orders: bool = False
     use_oco_sell_orders: bool = False
@@ -99,11 +101,13 @@ class MomoStrategy(BaseStrategy):
             variance_window=self.config.variance_window,
         )
         # self.vwap_day = VolumeWeightedAveragePrice()
-
-        self.tick_metrics_to_save = [
+        self.macd = MACDHistogram(fast_period=12, slow_period=26, signal_period=9)
+        self.metrics_to_save_on_tick = [
             Metric(obj=self.vwap, name="vwap", attrs=["value", "upper", "lower", "lower_base"]),
             # Metric(obj=self.vwap_day, name="day_vwap", attrs=["value"]),
         ]
+        if self.config.only_buy_if_macd_positive:
+            self.metrics_to_save_on_1min.append(Metric(obj=self.macd, name="macd", attrs=["value"]))
 
         self.price_dq = deque(maxlen=2)
         self.take_price = None
@@ -186,7 +190,6 @@ class MomoStrategy(BaseStrategy):
         price = tick.price
 
         self.price_dq.append(tick.price)
-
         # BUY LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         if self.config.trailing_buy_order:
             vwap_lower = self.instrument.make_price(self.vwap.lower)
@@ -219,7 +222,13 @@ class MomoStrategy(BaseStrategy):
                         tag=f"{self._buy_signals_count}",
                     )
                 elif not self.config.trailing_buy_order:
-                    self.buy(self.config.trade_size, price, cancel_after_secs=1, tag=f"{self._buy_signals_count}")
+                    if self.config.only_buy_if_macd_positive:
+                        if self.macd.initialized and self.macd.value > 0:
+                            self.buy(
+                                self.config.trade_size, price, cancel_after_secs=1, tag=f"{self._buy_signals_count}"
+                            )
+                    else:
+                        self.buy(self.config.trade_size, price, cancel_after_secs=1, tag=f"{self._buy_signals_count}")
 
         # TAKE LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         if self.config.trailing_take and not self._stopping_out:
@@ -376,10 +385,6 @@ class MomoStrategy(BaseStrategy):
                 else:
                     self.log.info(f"Setting stop price to {new_stop_price}")
                     self.stop_price = new_stop_price
-
-        # FIXME: NEed to figure out tiered take prices
-        # if order_filled.is_sell and not self.config.use_oco_sell_orders:
-        #     self.take_price = order_filled.last_px + self.take_profit
 
     def on_bar(self, bar: Bar) -> None:
         pass

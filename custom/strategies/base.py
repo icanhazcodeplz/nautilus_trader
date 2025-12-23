@@ -16,7 +16,7 @@ from nautilus_trader.config import StrategyConfig
 from nautilus_trader.core.data import Data
 from nautilus_trader.core.message import Event
 from nautilus_trader.model.book import OrderBook
-from nautilus_trader.model.data import Bar
+from nautilus_trader.model.data import BarType
 from nautilus_trader.model.data import OrderBookDeltas
 from nautilus_trader.model.data import QuoteTick
 from nautilus_trader.model.data import TradeTick
@@ -50,7 +50,8 @@ class BaseStrategy(Strategy):
     def __init__(self, config: BaseStrategyConfig) -> None:
         super().__init__(config)
         self.instrument: Instrument = None  # Initialized in on_start
-        self.tick_metrics_to_save = []
+        self.metrics_to_save_on_tick = []
+        self.metrics_to_save_on_1min = []
 
         self.stop_price = None
         self.last_buy_dt: Timestamp = pd.Timestamp("1990", tz="UTC")
@@ -242,9 +243,13 @@ class BaseStrategy(Strategy):
         # self._update_buy_signals(tick)
 
         if self.save_artifacts:
-            for metric in self.tick_metrics_to_save:
+            for metric in self.metrics_to_save_on_tick:
                 tick_data = {**tick_data, **metric.get_vals()}
             self._tick_data_dicts[self._tick_init_dt_adjusted] = tick_data
+
+            for metric in self.metrics_to_save_on_1min:
+                # FIXME: Implement this
+                pass
 
     def _submit_orders_if_allowed(self, order_or_order_list, expire_time=None) -> None:
         buy_included = False
@@ -458,6 +463,7 @@ class BaseStrategy(Strategy):
                         self._remove_open_order(order)
                 except Exception as e:
                     # check if self_order was just recently opened
+                    # FIXME: Test this
                     print()
 
     def _cancel_partial_fills_and_orders_past_timeout(self, event: TimeEvent):
@@ -500,7 +506,7 @@ class BaseStrategy(Strategy):
                 self.log.warning(f"Diff: {diff}")
             position_str = f"Position {self.position_qty} @ {round(avg_px, 2)} | PerShare {round(gain, 2)} | PnL ${round(unrealized, 2)} | {OpenSellsQty=} | Diff={diff}\n"
         metrics_data = {}
-        for metric in self.tick_metrics_to_save:
+        for metric in self.metrics_to_save_on_tick + self.metrics_to_save_on_1min:
             vals = {k: str(round(v, 3)) for k, v in metric.get_vals().items()}
             metrics_data = {**metrics_data, **vals}
         self.log.info(
@@ -541,7 +547,7 @@ class BaseStrategy(Strategy):
         # TICK DATA
         # Register indicators and request historical trade ticks if needed
         max_tick_lookback = 0
-        for metric in self.tick_metrics_to_save:
+        for metric in self.metrics_to_save_on_tick:
             self.register_indicator_for_trade_ticks(self.config.instrument_id, metric.obj)
             max_tick_lookback = max(max_tick_lookback, metric.tick_lookback)
 
@@ -551,6 +557,16 @@ class BaseStrategy(Strategy):
             self.request_trade_ticks(self.config.instrument_id, start=trade_tick_start, limit=max_tick_lookback)
 
         self.subscribe_trade_ticks(self.config.instrument_id)
+
+        bar_type = BarType.from_str(f"{self.config.instrument_id}-1-MINUTE-LAST-INTERNAL")
+        # bar_type = BarType.from_str(f"{self.config.instrument_id}-1-MINUTE-LAST-EXTERNAL")
+        for metric in self.metrics_to_save_on_1min:
+            self.register_indicator_for_bars(bar_type=bar_type, indicator=metric.obj)
+
+        # Subscribe to 1-minute bars
+        # TODO: Test if "internal" vs "external" bars does anything for us
+        if len(self.metrics_to_save_on_1min) > 0:
+            self.subscribe_bars(bar_type)
 
         # self.subscribe_quote_ticks(self.config.instrument_id)
         # self.subscribe_order_book_depth(self.config.instrument_id, book_type=BookType.L1_MBP)
@@ -609,9 +625,6 @@ class BaseStrategy(Strategy):
         pass
 
     def on_quote_tick(self, tick: QuoteTick) -> None:
-        pass
-
-    def on_bar(self, bar: Bar) -> None:
         pass
 
     def on_data(self, data: Data) -> None:

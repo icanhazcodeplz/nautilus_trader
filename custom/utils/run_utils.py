@@ -22,6 +22,7 @@ def run_strategy(strategy, node_or_engine, artifacts_location=None, run_config=N
         node_or_engine.add_strategy(strategy=strategy)
 
     try:
+        # FIXME: Need to run in a separate process so can still close position if rust panick: exit code 134 (interrupted by signal 6:SIGABRT)
         node_or_engine.run()
     except Exception as e:
         log.error(f"Exception during run with params {run_config}: {e}")

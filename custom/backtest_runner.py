@@ -246,6 +246,7 @@ if __name__ == "__main__":
         vwap_window=180,
         variance_window=280,
         simple_take=False,
+        only_buy_if_macd_positive=True,
         trailing_take=True,
         num_sell_tiers=3,
         trailing_buy_order=False,
@@ -284,7 +285,7 @@ if __name__ == "__main__":
         num_buy_sells, long_wins = buy_signal_stats(artifacts_io.load_signals())
 
         p_mets = artifacts_io.load_performance_metrics()
-        print('\n'.join(f"{k}: {round(v, 2)}" for k, v in p_mets.items()))
+        print("\n".join(f"{k}: {round(v, 2)}" for k, v in p_mets.items()))
         print()
 
         orders_report = artifacts_io.load_orders_report()
