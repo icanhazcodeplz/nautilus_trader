@@ -80,6 +80,22 @@ cdef class MovingAverageConvergenceDivergence(Indicator):
     cpdef void update_raw(self, double value)
 
 
+cdef class MACDHistogram(Indicator):
+    cdef MovingAverage _fast_ma
+    cdef MovingAverage _slow_ma
+    cdef MovingAverage _signal_ma
+    cdef object price_type
+
+    cdef readonly int fast_period
+    cdef readonly int slow_period
+    cdef readonly int signal_period
+    cdef readonly double signal
+    cdef readonly double macd
+    cdef readonly double value
+
+    cpdef void update_raw(self, double value)
+
+
 cdef class LinearRegression(Indicator):
     cdef object _inputs
 

@@ -467,6 +467,146 @@ cdef class MovingAverageConvergenceDivergence(Indicator):
         self.value = 0
 
 
+cdef class MACDHistogram(Indicator):
+    """
+    An indicator which calculates the MACD histogram (MACD - Signal line).
+
+    The MACD line is the difference between two moving averages, and the signal
+    line is a moving average of the MACD line. The histogram represents the
+    difference between the MACD and signal lines.
+
+    Parameters
+    ----------
+    fast_period : int
+        The period for the fast moving average (> 0).
+    slow_period : int
+        The period for the slow moving average (> 0 & > fast_period).
+    signal_period : int
+        The period for the signal line moving average (> 0).
+    ma_type : MovingAverageType
+        The moving average type for the calculations.
+    price_type : PriceType
+        The specified price type for extracting values from quotes.
+
+    Raises
+    ------
+    ValueError
+        If `fast_period` is not positive (> 0).
+    ValueError
+        If `slow_period` is not positive (> 0).
+    ValueError
+        If `fast_period` is not < `slow_period`.
+    ValueError
+        If `signal_period` is not positive (> 0).
+    """
+
+    def __init__(
+        self,
+        int fast_period,
+        int slow_period,
+        int signal_period=9,
+        MovingAverageType ma_type=MovingAverageType.EXPONENTIAL,
+        PriceType price_type=PriceType.LAST,
+    ):
+        Condition.positive_int(fast_period, "fast_period")
+        Condition.positive_int(slow_period, "slow_period")
+        Condition.positive_int(signal_period, "signal_period")
+        Condition.is_true(slow_period > fast_period, "slow_period was <= fast_period")
+
+        params=[
+            fast_period,
+            slow_period,
+            signal_period,
+            get_ma_type_name(ma_type),
+        ]
+        super().__init__(params=params)
+
+        self.fast_period = fast_period
+        self.slow_period = slow_period
+        self.signal_period = signal_period
+        self._fast_ma = MovingAverageFactory.create(fast_period, ma_type)
+        self._slow_ma = MovingAverageFactory.create(slow_period, ma_type)
+        self._signal_ma = MovingAverageFactory.create(signal_period, ma_type)
+        self.price_type = price_type
+        self.macd = 0
+        self.signal = 0
+        self.value = 0
+
+    cpdef void handle_quote_tick(self, QuoteTick tick):
+        """
+        Update the indicator with the given quote tick.
+
+        Parameters
+        ----------
+        tick : QuoteTick
+            The update tick to handle.
+
+        """
+        Condition.not_none(tick, "tick")
+
+        cdef Price price = tick.extract_price(self.price_type)
+        self.update_raw(Price.raw_to_f64_c(price._mem.raw))
+
+    cpdef void handle_trade_tick(self, TradeTick tick):
+        """
+        Update the indicator with the given trade tick.
+
+        Parameters
+        ----------
+        tick : TradeTick
+            The update tick to handle.
+
+        """
+        Condition.not_none(tick, "tick")
+
+        self.update_raw(Price.raw_to_f64_c(tick._mem.price.raw))
+
+    cpdef void handle_bar(self, Bar bar):
+        """
+        Update the indicator with the given bar.
+
+        Parameters
+        ----------
+        bar : Bar
+            The update bar.
+
+        """
+        Condition.not_none(bar, "bar")
+
+        self.update_raw(bar.close.as_double())
+
+    cpdef void update_raw(self, double close):
+        """
+        Update the indicator with the given close price.
+
+        Parameters
+        ----------
+        close : double
+            The close price.
+
+        """
+        self._fast_ma.update_raw(close)
+        self._slow_ma.update_raw(close)
+        self.macd = self._fast_ma.value - self._slow_ma.value
+        self._signal_ma.update_raw(self.macd)
+        self.signal = self._signal_ma.value
+        self.value = self.macd - self.signal
+
+        # Initialization logic
+        if not self.initialized:
+            self._set_has_inputs(True)
+            if self._fast_ma.initialized and self._slow_ma.initialized and self._signal_ma.initialized:
+                self._set_initialized(True)
+
+    cpdef void _reset(self):
+        self._fast_ma.reset()
+        self._slow_ma.reset()
+        self._signal_ma.reset()
+        self.macd = 0
+        self.signal = 0
+        self.value = 0
+
+
 cdef class LinearRegression(Indicator):
     """
     An indicator that calculates a simple linear regression.
