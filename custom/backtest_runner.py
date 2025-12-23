@@ -3,9 +3,7 @@ import random
 
 import pandas as pd
 
-from custom.backtest_utils import BACKTEST_SYMBOL
-from custom.catalog_options import CATALOG_OPTIONS
-from custom.backtest_utils.load_catalog_data import get_catalog_data
+from custom.backtest_utils.load_catalog_data import load_catalog_data_to_engine_for_backtest
 from custom.nt_extensions.limit_fill_model import LimitFillModel
 from custom.strategies.momo import MomoStrategyConfig, MomoStrategy
 from custom.artifacts import ArtifactsIO, VIZ_ARTIFACTS_PATH
@@ -37,13 +35,11 @@ from nautilus_trader.core.nautilus_pyo3 import (
     MinWinner,
 )
 from nautilus_trader.model.currencies import USD
-from nautilus_trader.model.data import QuoteTick, TradeTick
 from nautilus_trader.model.enums import AccountType, BookType
 from nautilus_trader.model.enums import OmsType
 from nautilus_trader.model.identifiers import TraderId
 from nautilus_trader.model.identifiers import Venue
 from nautilus_trader.model.objects import Money
-from nautilus_trader.test_kit.providers import TestInstrumentProvider
 
 latency_model = LatencyModel(
     base_latency_nanos=30 * 1e6,
@@ -53,8 +49,6 @@ latency_model = LatencyModel(
 )
 # latency_model=LatencyModel()
 prob_fill_on_limit = 0.5
-
-# DATA_VENUE = DATABENTO
 DATA_VENUE = ALPACA
 
 
@@ -151,18 +145,7 @@ def run_single_backtest(dataset_name, strategy_name, params, artifacts_location=
         latency_model=latency_model,
     )
 
-    dataset_params = CATALOG_OPTIONS[dataset_name.lower()]
-    symbol = dataset_params["symbol"]
-
-    test_instrument = TestInstrumentProvider.equity(symbol=symbol, venue=DATA_VENUE)
-    engine.add_instrument(test_instrument)
-
-    engine.add_data(
-        get_catalog_data(symbol, dataset_params["start"], dataset_params["end"], data_cls=TradeTick, venue=DATA_VENUE)
-    )
-    engine.add_data(
-        get_catalog_data(symbol, dataset_params["start"], dataset_params["end"], data_cls=QuoteTick, venue=DATA_VENUE)
-    )
+    test_instrument, engine = load_catalog_data_to_engine_for_backtest(engine, dataset_name, data_venue=DATA_VENUE)
 
     avg_trade_scaled = PnlPer100()
 
@@ -194,8 +177,7 @@ def run_single_backtest(dataset_name, strategy_name, params, artifacts_location=
         config = MomoStrategyConfig(instrument_id=test_instrument.id, **params_copy)
         strategy = MomoStrategy(config=config)
 
-    run_config = {"symbol": symbol, "strategy": config.dict()}
-    performance_stats = run_strategy(strategy, engine, artifacts_location, run_config=run_config)
+    performance_stats = run_strategy(strategy, engine, artifacts_location, run_config=config.dict())
     return performance_stats
 
 
@@ -231,7 +213,6 @@ if __name__ == "__main__":
     # log_level = "WARNING"
 
     strategy_name = "momo"
-
     params = dict(
         allow_trades=True,
         take_ratio=0.8,
@@ -251,17 +232,10 @@ if __name__ == "__main__":
         random_buy=False,
         random_seed=None,
     )
-    datasets = [
-        "aapl1103",
-        "aapl1104",
-        "aapl1105",
-        "aapl1106",
-        "aapl1107",
-    ]
-    run_BACKTEST_SYMBOL = True
+    datasets = ["radx"]
 
     all_stats = []
-    if not run_BACKTEST_SYMBOL:
+    if len(datasets) > 1:
         for random_seed in [1]:
             params["random_seed"] = random_seed
             stats = run_multiple_backtests(datasets, strategy_name, params, log_level=log_level)
@@ -272,13 +246,8 @@ if __name__ == "__main__":
             pass
     else:
         run_single_backtest(
-            BACKTEST_SYMBOL.lower(),
-            strategy_name,
-            params,
-            artifacts_location=VIZ_ARTIFACTS_PATH,
-            log_level=log_level,
+            datasets[0], strategy_name, params, artifacts_location=VIZ_ARTIFACTS_PATH, log_level=log_level
         )
-
         artifacts_io = ArtifactsIO(VIZ_ARTIFACTS_PATH)
         num_buy_sells, long_wins = buy_signal_stats(artifacts_io.load_signals())
 
@@ -289,7 +258,6 @@ if __name__ == "__main__":
         orders_report = artifacts_io.load_orders_report()
         df = orders_report.copy()
 
-        # win_ratio = _calculate_oco_win_ratio_DEPRECATED(df)
         trades, sell_legs = orders_to_trades(df)
         analyze_trades(trades, print_report=True)
         print()
