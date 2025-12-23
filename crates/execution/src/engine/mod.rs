@@ -931,7 +931,7 @@ impl ExecutionEngine {
     ) {
         let difference = match position.side {
             PositionSide::Long => Quantity::from_raw(
-                fill.last_qty.raw - position.quantity.raw,
+                fill.last_qty.raw.saturating_sub(position.quantity.raw),
                 position.size_precision,
             ),
             PositionSide::Short => Quantity::from_raw(

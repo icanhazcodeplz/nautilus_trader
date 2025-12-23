@@ -80,7 +80,8 @@ def get_data():
         signals=signals,
         TickChartLines=[
             # dict(key='ask', color='#EF5350CC', width=1, type=1),
-            dict(key="vwap_lower", color="#4590d1", width=1, type=0),
+            dict(key="vwap_lower_base", color="#B0E0E6", width=1, type=0),
+            dict(key="vwap_lower", color="red", width=1, type=0),
             dict(key="vwap_value", color="#45d14c", width=1, type=0),
             dict(key="vwap_upper", color="red", width=1, type=0),
             # dict(key='day_vwap_value', color='green', width=1, type=0),

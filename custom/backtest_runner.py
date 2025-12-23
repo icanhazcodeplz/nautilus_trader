@@ -236,8 +236,6 @@ if __name__ == "__main__":
         allow_trades=True,
         take_ratio=0.8,
         max_position_multiplier=1,
-        # use_bracket_orders=False,
-        # use_oco_sell_orders=False,
         trade_size=100,
         stop_loss=1.0,
         take_profit=None,

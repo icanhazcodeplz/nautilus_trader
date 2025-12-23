@@ -82,8 +82,6 @@ def optimize(trial):
         lower_scalar_multiplier=2.0,
         upper_scalar_multiplier=0.8,
         trailing_buy_order=False,
-        use_bracket_orders=False,
-        use_oco_sell_orders=False,
         only_buy_if_macd_positive=True,
         simple_take=False,
         trailing_take=True,

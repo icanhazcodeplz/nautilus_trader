@@ -45,8 +45,6 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
 
     only_buy_if_macd_positive: bool = False
     trailing_buy_order: bool = False
-    use_bracket_orders: bool = False
-    use_oco_sell_orders: bool = False
     simple_take: bool = False
     trailing_take: bool = False
     random_buy: bool = False
@@ -76,24 +74,14 @@ class MomoStrategy(BaseStrategy):
 
     def __init__(self, config: MomoStrategyConfig) -> None:
         super().__init__(config)
-        if (
-            sum(
-                [
-                    self.config.trailing_take,
-                    self.config.simple_take,
-                    self.config.use_bracket_orders,
-                    self.config.use_oco_sell_orders,
-                ]
-            )
-            > 1
-        ):
-            raise ValueError("Cannot use more than one of simple_take, use_bracket_orders, use_oco_sell_orders")
+        if sum([self.config.trailing_take, self.config.simple_take]) > 1:
+            raise ValueError("Cannot use more than one of simple_take, trailing_take")
 
         if sum([self.config.trailing_buy_order, self.config.random_buy]) > 1:
             raise ValueError("Cannot use more than one of trailing_buy_order, random_buy")
         # FIXME: This is temporary
         self.take_profit = self.config.take_profit if self.config.take_profit is not None else self.config.stop_loss
-        self.market_open_only = self.config.use_bracket_orders or self.config.use_oco_sell_orders
+        self.market_open_only = False  # TODO: remove this?
         self.vwap = VWAPBands(
             lower_scalar_multiplier=self.config.lower_scalar_multiplier,
             upper_scalar_multiplier=self.config.upper_scalar_multiplier,
@@ -120,8 +108,6 @@ class MomoStrategy(BaseStrategy):
         self._last_tier_adjustment_ns = None
 
     def stop_out_if_needed(self, tick: TradeTick):
-        if self.config.use_oco_sell_orders or self.config.use_bracket_orders:
-            return
         if self.position_qty == 0:
             self.stop_price = None
             self._stopping_out = False
@@ -213,15 +199,7 @@ class MomoStrategy(BaseStrategy):
                 # and (self.clock.utc_now() - self.last_buy_ts).total_seconds() > random.randint(1, 20)
                 and (self.clock.utc_now() - self.last_buy_dt).total_seconds() > 1
             ):
-                if self.config.use_bracket_orders:
-                    self.buy_bracket(
-                        self.config.trade_size,
-                        price,
-                        self.config.stop_loss,
-                        self.take_profit,
-                        tag=f"{self._buy_signals_count}",
-                    )
-                elif not self.config.trailing_buy_order:
+                if not self.config.trailing_buy_order:
                     if self.config.only_buy_if_macd_positive:
                         if self.macd.initialized and self.macd.value > 0:
                             self.buy(
@@ -239,7 +217,7 @@ class MomoStrategy(BaseStrategy):
             ):
                 self._rolling_tiered_take()
 
-        if not self.config.use_bracket_orders and not self.config.use_oco_sell_orders and not self.config.trailing_take:
+        if not self.config.trailing_take:
             if (
                 self.open_sell_qty < position_qty
                 and price >= self.take_price
@@ -364,27 +342,16 @@ class MomoStrategy(BaseStrategy):
 
     def _on_order_filled(self, order_filled) -> None:
         if order_filled.is_buy:
-            if self.config.use_oco_sell_orders:
-                cached_order = self.cache.order(order_filled.client_order_id)
-                tag = cached_order.tags[0]
-                price = order_filled.last_px
-                self.sell_oco(
-                    quantity=order_filled.last_qty,
-                    stop_price=price - self.config.stop_loss,
-                    take_price=price + self.take_profit,
-                    tag=tag,
-                )
-            else:
-                # Set take and stop losses based on order fill price
-                self.take_price = order_filled.last_px + self.take_profit
-                new_stop_price = order_filled.last_px - self.config.stop_loss
-                if self.stop_price is not None:
-                    if new_stop_price > self.stop_price:
-                        self.log.info(f"Changing stop price from {self.stop_price} to {new_stop_price}")
-                        self.stop_price = new_stop_price
-                else:
-                    self.log.info(f"Setting stop price to {new_stop_price}")
+            # Set take and stop losses based on order fill price
+            self.take_price = order_filled.last_px + self.take_profit
+            new_stop_price = order_filled.last_px - self.config.stop_loss
+            if self.stop_price is not None:
+                if new_stop_price > self.stop_price:
+                    self.log.info(f"Changing stop price from {self.stop_price} to {new_stop_price}")
                     self.stop_price = new_stop_price
+            else:
+                self.log.info(f"Setting stop price to {new_stop_price}")
+                self.stop_price = new_stop_price
 
     def on_bar(self, bar: Bar) -> None:
         pass

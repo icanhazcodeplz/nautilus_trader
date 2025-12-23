@@ -302,63 +302,6 @@ class BaseStrategy(Strategy):
         if allowed_qty > 0:
             self._submit_limit_order(OrderSide.BUY, allowed_qty, limit_price, tag, cancel_after_secs)
 
-    def buy_bracket(self, quantity, limit_price, stop_loss, take_profit, tag, cancel_after_secs=None) -> None:
-        allowed_qty = min(quantity, self._max_buy_qty_allowed())
-        if allowed_qty != quantity:
-            self.log.debug(
-                f"Buy quantity reduced from {quantity} to {allowed_qty} to avoid exceeding max position of {self.max_position_allowed}."
-            )
-        if allowed_qty > 0:
-            entry_tags = [tag]
-            if cancel_after_secs is not None:
-                expire_time = self.clock.utc_now() + timedelta(seconds=cancel_after_secs)
-                entry_tags.append(expire_time)
-
-            # Calculate stop-loss and take-profit prices
-            sl_trigger_price = self.instrument.make_price(limit_price - stop_loss)
-            tp_price = self.instrument.make_price(limit_price + take_profit)
-
-            # Create bracket order with entry, stop-loss, and take-profit
-            order_list: OrderList = self.order_factory.bracket(
-                instrument_id=self.config.instrument_id,
-                order_side=OrderSide.BUY,
-                quantity=self.instrument.make_qty(allowed_qty),
-                contingency_type=ContingencyType.OUO,
-                entry_order_type=OrderType.LIMIT,
-                entry_price=self.instrument.make_price(limit_price),
-                time_in_force=TimeInForce.DAY,
-                entry_tags=entry_tags,
-                tp_tags=[tag, "t"],
-                sl_tags=[tag, "s"],
-                tp_price=tp_price,
-                tp_time_in_force=TimeInForce.DAY,
-                sl_order_type=OrderType.STOP_LIMIT,
-                sl_time_in_force=TimeInForce.DAY,
-                sl_trigger_price=sl_trigger_price,
-                # FIXME: hardcoded to 0.10 below stop_loss_price
-                sl_price=self.instrument.make_price(limit_price - stop_loss - 0.1),
-            )
-            self._submit_orders_if_allowed(order_list)
-
-    def sell_oco(self, quantity, stop_price, take_price, tag) -> None:
-        # Create oco order with stop-loss, and take-profit
-        order_list: OrderList = self.order_factory.oco_sell(
-            instrument_id=self.config.instrument_id,
-            quantity=self.instrument.make_qty(quantity),
-            contingency_type=ContingencyType.OUO,  # One updates the other
-            tp_tags=[tag, "t"],
-            sl_tags=[tag, "s"],
-            tp_price=self.instrument.make_price(take_price),
-            tp_time_in_force=TimeInForce.DAY,
-            sl_order_type=OrderType.STOP_LIMIT,
-            sl_time_in_force=TimeInForce.DAY,
-            sl_trigger_price=self.instrument.make_price(stop_price),
-            # FIXME: hardcoded to 0.10 below stop_loss_price
-            sl_price=self.instrument.make_price(stop_price - 0.1),
-        )
-
-        self._submit_orders_if_allowed(order_list)
-
     def sell(self, quantity, limit_price, tag, cancel_after_secs=None) -> None:
         allowed_qty = min(quantity, self._max_sell_qty_allowed())
         if allowed_qty != quantity:

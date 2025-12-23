@@ -933,36 +933,39 @@ class AlpacaExecutionClient(LiveExecutionClient):
                         f"fill event for asset_class {order_data['asset_class']} not yet implemented"
                     )
 
-                filled_qty = int(order_data.get("filled_qty"))
-                filled_avg_price = float(order_data.get("filled_avg_price"))
+                # filled_qty = int(order_data.get("filled_qty"))
+                # filled_avg_price = float(order_data.get("filled_avg_price"))
 
-                previous_qty, previous_value = self.order_previous_qty_and_value.get(client_order_id, (0, 0.0))
+                # previous_qty, previous_value = self.order_previous_qty_and_value.get(client_order_id, (0, 0.0))
 
-                this_fill_qty = filled_qty - previous_qty
-                current_total_value = round(filled_qty * filled_avg_price, 4)
-                this_fill_value = current_total_value - previous_value
-                this_fill_px = round(this_fill_value / this_fill_qty, 4)
-
-                self.order_previous_qty_and_value[client_order_id] = (filled_qty, current_total_value)
+                this_fill_qty = int(msg['data']['qty'])
+                this_fill_price = float(msg['data']['price'])
+                # current_total_value = round(filled_qty * filled_avg_price, 4)
+                # this_fill_value = current_total_value - previous_value
+                # this_fill_px = round(this_fill_value / this_fill_qty, 4)
+                #
+                # self.order_previous_qty_and_value[client_order_id] = (filled_qty, current_total_value)
 
                 # In an effort to prevent an order qty mismatch, adjust order qty and create OrderUpdated event
-                alpaca_order_qty = order_data["qty"]
-                limit_price = order_data["limit_price"]
-                if int(alpaca_order_qty) != int(order.quantity):
-                    self._log.error(
-                        f"Order qty mismatch {client_order_id} | {venue_order_id}: Alpaca {alpaca_order_qty} != NT {order.quantity}. Sending `generate_order_updated` with new qty {alpaca_order_qty}"
-                    )
-                    self.generate_order_updated(
-                        strategy_id=order.strategy_id,
-                        instrument_id=instrument_id,
-                        client_order_id=client_order_id,
-                        venue_order_id=venue_order_id,
-                        quantity=Quantity.from_str(alpaca_order_qty),
-                        price=Price(float(limit_price), precision=order.price.precision),
-                        trigger_price=order.trigger_price if order.has_trigger_price else None,
-                        ts_event=ts_event,
-                        venue_order_id_modified=False,
-                    )
+                # alpaca_order_qty = order_data["qty"]
+                # limit_price = order_data["limit_price"]
+                # if int(alpaca_order_qty) != int(order.quantity):
+                #     self._log.error(
+                #         f"Order qty mismatch {client_order_id} | {venue_order_id}: Alpaca {alpaca_order_qty} != NT {order.quantity}. Sending `generate_order_updated` with new qty {alpaca_order_qty}"
+                #     )
+                #     self.generate_order_updated(
+                #         strategy_id=order.strategy_id,
+                #         instrument_id=instrument_id,
+                #         client_order_id=client_order_id,
+                #         venue_order_id=venue_order_id,
+                #         quantity=Quantity.from_str(alpaca_order_qty),
+                #         price=Price(float(limit_price), precision=order.price.precision),
+                #         trigger_price=order.trigger_price if order.has_trigger_price else None,
+                #         ts_event=ts_event,
+                #         venue_order_id_modified=False,
+                #     )
+                    # FIXME: BRENT is this where the rust failure is happening? Need to delay sending order filled
+                    #     until update has finished? Create a queue for this?
 
                 alpaca_event_id = msg["data"]["event_id"]  # This is a unique id for the trade event
                 currency = Currency.from_str("USD")
@@ -976,7 +979,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
                     order_side=order.side,
                     order_type=order.order_type,
                     last_qty=Quantity.from_str(str(this_fill_qty)),
-                    last_px=Price.from_str(str(this_fill_px)),
+                    last_px=Price.from_str(str(this_fill_price)),
                     quote_currency=currency,
                     commission=Money(0, currency),  # Commission is 0 for Alpaca
                     liquidity_side=LiquiditySide.TAKER,
