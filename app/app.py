@@ -71,6 +71,7 @@ def get_data():
     for s in signals:
         s["time"] = str(s["time"])
 
+    baby_blue = '#59e5ea'
     records = dict(
         ticks=ticks,
         ten_sec=[],
@@ -79,12 +80,16 @@ def get_data():
         fill_markers=markers,
         signals=signals,
         TickChartLines=[
-            # dict(key='ask', color='#EF5350CC', width=1, type=1),
-            dict(key="vwap_lower_base", color="#B0E0E6", width=1, type=0),
-            dict(key="vwap_lower", color="red", width=1, type=0),
-            dict(key="vwap_value", color="#45d14c", width=1, type=0),
-            dict(key="vwap_upper", color="red", width=1, type=0),
-            # dict(key='day_vwap_value', color='green', width=1, type=0),
+            dict(key="vwap_value", color="#45d14c", width=2, type=0),
+            dict(key="vwap_low", color="red", width=1.5, type=0),
+            dict(key="vwap_low_inner", color=baby_blue, width=1, type=0),
+            dict(key="vwap_low_outer", color=baby_blue, width=1, type=0),
+            dict(key="vwap_high", color=baby_blue, width=1.5, type=0),
+            dict(key="vwap_high_inner", color='red', width=1, type=0),
+            dict(key="vwap_high_outer", color='red', width=1, type=0),
+        ],
+        SecondaryTickChartLines=[
+            dict(key='vwap_pressure', color='#e70f0f', color_negative=baby_blue, width=1, type=0),
         ],
     )
     return jsonify(records)

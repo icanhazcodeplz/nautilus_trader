@@ -5,7 +5,7 @@ import random
 
 import pandas as pd
 
-from custom.nt_extensions.indicators import VWAPBands
+from custom.nt_extensions.indicators import VWAPBands, VWAPBandsNew
 from custom.strategies.base import BaseStrategy, BaseStrategyConfig
 from custom.strategies._tiers import Tiers
 from nautilus_trader.indicators.trend import MACDHistogram
@@ -42,6 +42,7 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     upper_scalar_multiplier: float
     vwap_window: int
     variance_window: int
+    outer_band_multiplier:float=1.0
 
     only_buy_if_macd_positive: bool = False
     trailing_buy_order: bool = False
@@ -82,16 +83,31 @@ class MomoStrategy(BaseStrategy):
         # FIXME: This is temporary
         self.take_profit = self.config.take_profit if self.config.take_profit is not None else self.config.stop_loss
         self.market_open_only = False  # TODO: remove this?
-        self.vwap = VWAPBands(
+        # self.vwap = VWAPBands(
+        self.vwap = VWAPBandsNew(
             lower_scalar_multiplier=self.config.lower_scalar_multiplier,
             upper_scalar_multiplier=self.config.upper_scalar_multiplier,
             rolling_window=self.config.vwap_window,
             variance_window=self.config.variance_window,
+            outer_band_multiplier=self.config.outer_band_multiplier,
         )
         # self.vwap_day = VolumeWeightedAveragePrice()
         self.macd = MACDHistogram(fast_period=12, slow_period=26, signal_period=9)
         self.metrics_to_save_on_tick = [
-            Metric(obj=self.vwap, name="vwap", attrs=["value", "upper", "lower", "lower_base"]),
+            Metric(
+                obj=self.vwap,
+                name="vwap",
+                attrs=[
+                    "value",
+                    "low",
+                    "high",
+                    "low_inner",
+                    "low_outer",
+                    "high_inner",
+                    "high_outer",
+                    "pressure",
+                ],
+            ),
             # Metric(obj=self.vwap_day, name="day_vwap", attrs=["value"]),
         ]
         if self.config.only_buy_if_macd_positive:
@@ -178,7 +194,7 @@ class MomoStrategy(BaseStrategy):
         self.price_dq.append(tick.price)
         # BUY LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         if self.config.trailing_buy_order:
-            vwap_lower = self.instrument.make_price(self.vwap.lower)
+            vwap_lower = self.instrument.make_price(self.vwap.low)
             for order in self.open_buys:
                 if order.price != vwap_lower:
                     self.modify_open_order(order, quantity=order.quantity, price=vwap_lower)
@@ -188,7 +204,7 @@ class MomoStrategy(BaseStrategy):
                 self.buy(self.config.trade_size, vwap_lower, cancel_after_secs=None, tag=f"{self.buy_orders_count}")
 
         if (
-            price < self.vwap.lower and price_1ago > self.vwap.lower
+            price < self.vwap.low and price_1ago > self.vwap.low
             # and (price > price_1ago)
             # and (price > self.vwap_day.value)
         ):
@@ -261,7 +277,7 @@ class MomoStrategy(BaseStrategy):
             return
         tiers = Tiers(
             quantity=position_qty,
-            starting_price=self.vwap.upper,
+            starting_price=self.vwap.high,
             mean_variance=self.vwap.mean_variance,
             num_tiers=self.config.num_sell_tiers,
             instrument=self.instrument,
@@ -336,7 +352,7 @@ class MomoStrategy(BaseStrategy):
             if len(self.open_sells) > 0:
                 ordered_sells = sorted(self.open_sells, key=lambda x: x.price)
                 sells_str = "\n".join(f"{o.leaves_qty} @ {o.price}  OpenSecs {open_for_secs(o)}" for o in ordered_sells)
-                msg = f"{round(self.vwap.mean_variance, 2)} {round(self.vwap.upper, 3)}\n{sells_str}\n"
+                msg = f"{round(self.vwap.mean_variance, 2)} {round(self.vwap.high, 3)}\n{sells_str}\n"
                 return msg
         return ""
 
