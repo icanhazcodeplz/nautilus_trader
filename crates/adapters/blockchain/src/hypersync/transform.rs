@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -90,7 +90,7 @@ pub fn transform_hypersync_block(
         block = block.with_blob_gas(used, excess);
     }
 
-    // TODO: HyperSync does not yet publush L1 gas metadata fields
+    // TODO: HyperSync does not yet publish L1 gas metadata fields
     // if let (Some(price_hex), Some(l1_used_hex), Some(scalar_hex)) = (
     //     received_block.l1_gas_price,
     //     received_block.l1_gas_used,
@@ -104,10 +104,6 @@ pub fn transform_hypersync_block(
 
     Ok(block)
 }
-
-////////////////////////////////////////////////////////////////////////////////
-// Tests
-////////////////////////////////////////////////////////////////////////////////
 
 #[cfg(test)]
 mod tests {}

@@ -1,5 +1,5 @@
 # -------------------------------------------------------------------------------------------------
-#  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+#  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 #  https://nautechsystems.io
 #
 #  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -22,7 +22,6 @@ It could also be possible to write clients for specialized data providers.
 
 import asyncio
 import functools
-import traceback
 from asyncio import Task
 from collections.abc import Callable
 from collections.abc import Coroutine
@@ -204,10 +203,7 @@ class LiveDataClient(DataClient):
             return
 
         if e:
-            tb_str = "".join(traceback.format_exception(type(e), e, e.__traceback__))
-            self._log.error(
-                f"Error on '{task.get_name()}': {task.exception()!r}\n{tb_str}",
-            )
+            self._log.exception(f"Error on '{task.get_name()}'", e)
         else:
             if actions:
                 try:
@@ -512,12 +508,7 @@ class LiveMarketDataClient(MarketDataClient):
         exception: BaseException | None = None,
     ) -> None:
         if exception:
-            tb_str = "".join(
-                traceback.format_exception(type(exception), exception, exception.__traceback__),
-            )
-            self._log.error(
-                f"Error running '{coro_name}': {exception!r}\n{tb_str}",
-            )
+            self._log.exception(f"Error running '{coro_name}'", exception)
         else:
             self._log.debug(f"Coroutine '{coro_name}' completed")
 
@@ -600,12 +591,12 @@ class LiveMarketDataClient(MarketDataClient):
             success_color=LogColor.BLUE,
         )
 
-    def subscribe_order_book_snapshots(self, command: SubscribeOrderBook) -> None:
-        self._add_subscription_order_book_snapshots(command.instrument_id)
+    def subscribe_order_book_depth(self, command: SubscribeOrderBook) -> None:
+        self._add_subscription_order_book_depth(command.instrument_id)
         self.create_task(
-            self._subscribe_order_book_snapshots(command),
-            log_msg=f"subscribe: order_book_snapshots {command.instrument_id}",
-            success_msg=f"Subscribed {command.instrument_id} order book snapshots; depth={command.depth}",
+            self._subscribe_order_book_depth(command),
+            log_msg=f"subscribe: order_book_depth {command.instrument_id}",
+            success_msg=f"Subscribed {command.instrument_id} order book depth; depth={command.depth}",
             success_color=LogColor.BLUE,
         )
 
@@ -723,12 +714,12 @@ class LiveMarketDataClient(MarketDataClient):
             success_color=LogColor.BLUE,
         )
 
-    def unsubscribe_order_book_snapshots(self, command: UnsubscribeOrderBook) -> None:
-        self._remove_subscription_order_book_snapshots(command.instrument_id)
+    def unsubscribe_order_book_depth(self, command: UnsubscribeOrderBook) -> None:
+        self._remove_subscription_order_book_depth(command.instrument_id)
         self.create_task(
-            self._unsubscribe_order_book_snapshots(command),
-            log_msg=f"unsubscribe: order_book_snapshots {command.instrument_id}",
-            success_msg=f"Unsubscribed {command.instrument_id} order book snapshots",
+            self._unsubscribe_order_book_depth(command),
+            log_msg=f"unsubscribe: order_book_depth {command.instrument_id}",
+            success_msg=f"Unsubscribed {command.instrument_id} order book depth",
             success_color=LogColor.BLUE,
         )
 
@@ -922,9 +913,9 @@ class LiveMarketDataClient(MarketDataClient):
             "implement the `_subscribe_order_book_deltas` coroutine",  # pragma: no cover
         )
 
-    async def _subscribe_order_book_snapshots(self, command: SubscribeOrderBook) -> None:
+    async def _subscribe_order_book_depth(self, command: SubscribeOrderBook) -> None:
         raise NotImplementedError(  # pragma: no cover
-            "implement the `_subscribe_order_book_snapshots` coroutine",  # pragma: no cover
+            "implement the `_subscribe_order_book_depth` coroutine",  # pragma: no cover
         )
 
     async def _subscribe_quote_ticks(self, command: SubscribeQuoteTicks) -> None:
@@ -987,9 +978,9 @@ class LiveMarketDataClient(MarketDataClient):
             "implement the `_unsubscribe_order_book_deltas` coroutine",  # pragma: no cover
         )
 
-    async def _unsubscribe_order_book_snapshots(self, command: UnsubscribeOrderBook) -> None:
+    async def _unsubscribe_order_book_depth(self, command: UnsubscribeOrderBook) -> None:
         raise NotImplementedError(  # pragma: no cover
-            "implement the `_unsubscribe_order_book_snapshots` coroutine",  # pragma: no cover
+            "implement the `_unsubscribe_order_book_depth` coroutine",  # pragma: no cover
         )
 
     async def _unsubscribe_quote_ticks(self, command: UnsubscribeQuoteTicks) -> None:

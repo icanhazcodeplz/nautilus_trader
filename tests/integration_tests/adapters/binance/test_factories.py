@@ -1,5 +1,5 @@
 # -------------------------------------------------------------------------------------------------
-#  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+#  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 #  https://nautechsystems.io
 #
 #  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -13,7 +13,6 @@
 #  limitations under the License.
 # -------------------------------------------------------------------------------------------------
 
-import asyncio
 
 import pytest
 
@@ -36,9 +35,10 @@ from nautilus_trader.test_kit.stubs.identifiers import TestIdStubs
 
 
 class TestBinanceFactories:
-    def setup(self):
+    @pytest.fixture(autouse=True)
+    def setup(self, request):
         # Fixture Setup
-        self.loop = asyncio.get_event_loop()
+        self.loop = request.getfixturevalue("event_loop")
         self.clock = LiveClock()
         self.trader_id = TestIdStubs.trader_id()
         self.strategy_id = TestIdStubs.strategy_id()
@@ -54,6 +54,8 @@ class TestBinanceFactories:
         self.cache = Cache(
             database=self.cache_db,
         )
+
+        return
 
     @pytest.mark.parametrize(
         ("account_type", "is_testnet", "is_us", "expected"),

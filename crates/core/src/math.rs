@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -18,6 +18,17 @@
 //! This module provides essential mathematical operations for quantitative trading,
 //! including linear and quadratic interpolation functions commonly used in financial
 //! data processing and analysis.
+//!
+//! # Epsilon Values
+//!
+//! Two epsilon thresholds are used in this module:
+//!
+//! - **`f64::EPSILON * 2.0` (~4.44e-16):** Used for detecting near-zero denominators
+//!   in `linear_weight` and `quad_polynomial` to prevent division instability.
+//!   This is a machine-precision threshold.
+//!
+//! - **`1e-8`:** Used in `quadratic_interpolation` for detecting exact sample points.
+//!   This is an application-level threshold appropriate for typical financial data.
 
 /// Macro for approximate floating-point equality comparison.
 ///
@@ -41,12 +52,6 @@ macro_rules! approx_eq {
         let right_val: $type = $right;
         (left_val - right_val).abs() < $epsilon
     }};
-    ($type:ty, $left:expr, $right:expr, epsilon = $epsilon:expr, ulps = $ulps:expr) => {{
-        let left_val: $type = $left;
-        let right_val: $type = $right;
-        // For compatibility, we use epsilon comparison and ignore ulps
-        (left_val - right_val).abs() < $epsilon
-    }};
 }
 
 /// Calculates the interpolation weight between `x1` and `x2` for a value `x`.
@@ -56,21 +61,23 @@ macro_rules! approx_eq {
 ///
 /// # Panics
 ///
-/// Panics if `x1` and `x2` are too close (within machine epsilon), which would
-/// cause division by zero or numerical instability. Uses f64::EPSILON * 2.0 to
-/// account for floating-point rounding in the difference computation.
+/// - If any input is NaN or infinite.
+/// - If `x1` and `x2` are too close (within machine epsilon), which would
+///   cause division by zero or numerical instability.
 #[inline]
 #[must_use]
 pub fn linear_weight(x1: f64, x2: f64, x: f64) -> f64 {
     const EPSILON: f64 = f64::EPSILON * 2.0; // ~4.44e-16
+
+    assert!(
+        x1.is_finite() && x2.is_finite() && x.is_finite(),
+        "All inputs must be finite: x1={x1}, x2={x2}, x={x}"
+    );
+
     let diff = (x2 - x1).abs();
     assert!(
         diff >= EPSILON,
-        "`x1` ({}) and `x2` ({}) are too close for stable interpolation (diff: {}, min: {})",
-        x1,
-        x2,
-        diff,
-        EPSILON
+        "`x1` ({x1}) and `x2` ({x2}) are too close for stable interpolation (diff: {diff}, min: {EPSILON})"
     );
     (x - x1) / (x2 - x1)
 }
@@ -96,19 +103,6 @@ pub fn linear_weighting(y1: f64, y2: f64, x1_diff: f64) -> f64 {
 /// - For single-element arrays, always returns index 0, regardless of whether `x > xs[0]`
 /// - For values below the minimum, returns 0
 /// - For values at or above the maximum, returns `xs.len() - 1`
-///
-/// # Examples
-///
-/// ```
-/// use nautilus_core::math::pos_search;
-///
-/// // Normal case: find position between elements
-/// assert_eq!(pos_search(2.5, &[1.0, 2.0, 3.0, 4.0]), 1); // Between indices 1 and 2
-///
-/// // Single element: always returns 0
-/// assert_eq!(pos_search(5.0, &[10.0]), 0); // Even though x < xs[0]
-/// assert_eq!(pos_search(15.0, &[10.0]), 0); // Even though x > xs[0]
-/// ```
 #[inline]
 #[must_use]
 pub fn pos_search(x: f64, xs: &[f64]) -> usize {
@@ -129,12 +123,24 @@ pub fn pos_search(x: f64, xs: &[f64]) -> usize {
 ///
 /// # Panics
 ///
-/// Panics if any two abscissas are too close (within machine epsilon), which would
-/// cause division by zero or numerical instability in the interpolation.
+/// - If any input is NaN or infinite.
+/// - If any two abscissas are too close (within machine epsilon), which would
+///   cause division by zero or numerical instability.
 #[inline]
 #[must_use]
 pub fn quad_polynomial(x: f64, x0: f64, x1: f64, x2: f64, y0: f64, y1: f64, y2: f64) -> f64 {
     const EPSILON: f64 = f64::EPSILON * 2.0; // ~4.44e-16
+
+    assert!(
+        x.is_finite()
+            && x0.is_finite()
+            && x1.is_finite()
+            && x2.is_finite()
+            && y0.is_finite()
+            && y1.is_finite()
+            && y2.is_finite(),
+        "All inputs must be finite: x={x}, x0={x0}, x1={x1}, x2={x2}, y0={y0}, y1={y1}, y2={y2}"
+    );
 
     // Protect against coincident x values that would lead to division by zero
     let diff_01 = (x0 - x1).abs();
@@ -143,14 +149,7 @@ pub fn quad_polynomial(x: f64, x0: f64, x1: f64, x2: f64, y0: f64, y1: f64, y2: 
 
     assert!(
         diff_01 >= EPSILON && diff_02 >= EPSILON && diff_12 >= EPSILON,
-        "Abscissas are too close for stable interpolation: x0={}, x1={}, x2={} (diffs: {:.2e}, {:.2e}, {:.2e}, min: {})",
-        x0,
-        x1,
-        x2,
-        diff_01,
-        diff_02,
-        diff_12,
-        EPSILON
+        "Abscissas are too close for stable interpolation: x0={x0}, x1={x1}, x2={x2} (diffs: {diff_01:.2e}, {diff_02:.2e}, {diff_12:.2e}, min: {EPSILON})"
     );
 
     y0 * (x - x1) * (x - x2) / ((x0 - x1) * (x0 - x2))
@@ -229,9 +228,6 @@ pub fn quadratic_interpolation(x: f64, xs: &[f64], ys: &[f64]) -> f64 {
     )
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// Tests
-////////////////////////////////////////////////////////////////////////////////
 #[cfg(test)]
 mod tests {
     use rstest::*;
@@ -430,5 +426,28 @@ mod tests {
         let xs = vec![1.0, 2.0, 3.0];
         let ys = vec![1.0, 4.0];
         let _ = quadratic_interpolation(1.5, &xs, &ys);
+    }
+
+    #[rstest]
+    #[case(f64::NAN, 0.0, 1.0)]
+    #[case(0.0, f64::NAN, 1.0)]
+    #[case(0.0, 1.0, f64::NAN)]
+    #[case(f64::INFINITY, 0.0, 1.0)]
+    #[case(0.0, f64::NEG_INFINITY, 1.0)]
+    #[should_panic(expected = "All inputs must be finite")]
+    fn test_linear_weight_non_finite_panics(#[case] x1: f64, #[case] x2: f64, #[case] x: f64) {
+        let _ = linear_weight(x1, x2, x);
+    }
+
+    #[rstest]
+    #[should_panic(expected = "All inputs must be finite")]
+    fn test_quad_polynomial_nan_panics() {
+        let _ = quad_polynomial(f64::NAN, 0.0, 1.0, 2.0, 0.0, 1.0, 4.0);
+    }
+
+    #[rstest]
+    #[should_panic(expected = "All inputs must be finite")]
+    fn test_quad_polynomial_infinity_panics() {
+        let _ = quad_polynomial(0.5, f64::INFINITY, 1.0, 2.0, 0.0, 1.0, 4.0);
     }
 }

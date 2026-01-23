@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -178,7 +178,7 @@ impl FixMessage {
 
     /// Parses a FIX message from a byte slice.
     pub(crate) fn parse(data: &[u8]) -> Result<Self, String> {
-        const DELIMITER: char = '\x01'; // Standard FIX delimiter (more efficent to define here)
+        const DELIMITER: char = '\x01'; // Standard FIX delimiter (more efficient to define here)
 
         let data_str = std::str::from_utf8(data).map_err(|e| format!("Invalid UTF-8: {e}"))?;
 

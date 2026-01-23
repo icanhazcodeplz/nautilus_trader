@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -197,6 +197,20 @@ pub enum TardisExchange {
 }
 
 impl TardisExchange {
+    /// Option-specific exchanges that should be filtered out when options are not requested.
+    pub const OPTION_EXCHANGES: &'static [Self] = &[
+        Self::BinanceOptions,
+        Self::BinanceEuropeanOptions,
+        Self::BybitOptions,
+        Self::OkexOptions,
+        Self::HuobiDmOptions,
+    ];
+
+    #[must_use]
+    pub fn is_option_exchange(&self) -> bool {
+        Self::OPTION_EXCHANGES.contains(self)
+    }
+
     #[must_use]
     pub fn from_venue_str(s: &str) -> Vec<Self> {
         let s = s.to_ascii_uppercase();

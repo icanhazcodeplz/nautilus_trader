@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -33,6 +33,7 @@ struct BookLevelDisplay {
 
 /// Return a [`String`] representation of the order book in a human-readable table format.
 #[must_use]
+#[allow(clippy::needless_collect)] // Collect needed for .rev() and .chain()
 pub(crate) fn pprint_book(
     order_book: &OrderBook,
     num_levels: usize,
@@ -119,9 +120,12 @@ pub(crate) fn pprint_book(
     let table = Table::new(data).with(Style::rounded()).to_string();
 
     let header = format!(
-        "bid_levels: {}\nask_levels: {}",
+        "bid_levels: {}\nask_levels: {}\nsequence: {}\nupdate_count: {}\nts_last: {}",
         order_book.bids.levels.len(),
-        order_book.asks.levels.len()
+        order_book.asks.levels.len(),
+        order_book.sequence,
+        order_book.update_count,
+        order_book.ts_last,
     );
 
     format!("{header}\n{table}")
@@ -129,6 +133,7 @@ pub(crate) fn pprint_book(
 
 /// Return a [`String`] representation of the own order book in a human-readable table format.
 #[must_use]
+#[allow(clippy::needless_collect)] // Collect needed for .rev() and .chain()
 pub(crate) fn pprint_own_book(
     own_order_book: &OwnOrderBook,
     num_levels: usize,
@@ -217,9 +222,11 @@ pub(crate) fn pprint_own_book(
     let table = Table::new(data).with(Style::rounded()).to_string();
 
     let header = format!(
-        "bid_levels: {}\nask_levels: {}",
+        "bid_levels: {}\nask_levels: {}\nupdate_count: {}\nts_last: {}",
         own_order_book.bids.levels.len(),
-        own_order_book.asks.levels.len()
+        own_order_book.asks.levels.len(),
+        own_order_book.update_count,
+        own_order_book.ts_last,
     );
 
     format!("{header}\n{table}")

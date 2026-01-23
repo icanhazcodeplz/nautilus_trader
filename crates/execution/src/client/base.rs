@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -19,9 +19,11 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
 
-use std::{any::Any, cell::RefCell, fmt::Debug, rc::Rc};
+use std::{cell::RefCell, fmt::Debug, rc::Rc};
 
-use nautilus_common::{cache::Cache, clock::Clock, msgbus};
+use nautilus_common::{
+    cache::Cache, clock::Clock, messages::ExecutionReport, msgbus, msgbus::MessagingSwitchboard,
+};
 use nautilus_core::{UUID4, UnixNanos};
 use nautilus_model::{
     accounts::AccountAny,
@@ -35,6 +37,7 @@ use nautilus_model::{
         AccountId, ClientId, ClientOrderId, InstrumentId, PositionId, StrategyId, TradeId,
         TraderId, Venue, VenueOrderId,
     },
+    orders::OrderAny,
     reports::{ExecutionMassStatus, FillReport, OrderStatusReport, PositionStatusReport},
     types::{AccountBalance, Currency, MarginBalance, Money, Price, Quantity},
 };
@@ -121,6 +124,19 @@ impl ExecutionClientCore {
     #[must_use]
     pub fn get_account(&self) -> Option<AccountAny> {
         self.cache.borrow().account(&self.account_id).cloned()
+    }
+
+    /// Returns the order for the given client order ID from the cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the order is not found in the cache.
+    pub fn get_order(&self, client_order_id: &ClientOrderId) -> anyhow::Result<OrderAny> {
+        self.cache
+            .borrow()
+            .order(client_order_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("Order not found in cache for {client_order_id}"))
     }
 
     /// Generates and publishes the account state event.
@@ -300,6 +316,7 @@ impl ExecutionClientCore {
         quantity: Quantity,
         price: Price,
         trigger_price: Option<Price>,
+        protection_price: Option<Price>,
         ts_event: UnixNanos,
         venue_order_id_modified: bool,
     ) {
@@ -329,6 +346,7 @@ impl ExecutionClientCore {
             Some(self.account_id),
             Some(price),
             trigger_price,
+            protection_price,
         );
 
         self.send_order_event(OrderEventAny::Updated(event));
@@ -450,32 +468,36 @@ impl ExecutionClientCore {
     }
 
     fn send_account_state(&self, account_state: AccountState) {
-        let endpoint = "Portfolio.update_account".into();
-        msgbus::send_any(endpoint, &account_state as &dyn Any);
+        let endpoint = MessagingSwitchboard::portfolio_update_account();
+        msgbus::send_account_state(endpoint, &account_state);
     }
 
     fn send_order_event(&self, event: OrderEventAny) {
-        let endpoint = "ExecEngine.process".into();
-        msgbus::send_any(endpoint, &event as &dyn Any);
+        let endpoint = MessagingSwitchboard::exec_engine_process();
+        msgbus::send_order_event(endpoint, event);
     }
 
     fn send_mass_status_report(&self, report: ExecutionMassStatus) {
-        let endpoint = "ExecEngine.reconcile_execution_mass_status".into();
-        msgbus::send_any(endpoint, &report as &dyn Any);
+        let endpoint = MessagingSwitchboard::exec_engine_reconcile_execution_report();
+        let report = ExecutionReport::MassStatus(Box::new(report));
+        msgbus::send_execution_report(endpoint, report);
     }
 
     fn send_order_status_report(&self, report: OrderStatusReport) {
-        let endpoint = "ExecEngine.reconcile_execution_report".into();
-        msgbus::send_any(endpoint, &report as &dyn Any);
+        let endpoint = MessagingSwitchboard::exec_engine_reconcile_execution_report();
+        let report = ExecutionReport::Order(Box::new(report));
+        msgbus::send_execution_report(endpoint, report);
     }
 
     fn send_fill_report(&self, report: FillReport) {
-        let endpoint = "ExecEngine.reconcile_execution_report".into();
-        msgbus::send_any(endpoint, &report as &dyn Any);
+        let endpoint = MessagingSwitchboard::exec_engine_reconcile_execution_report();
+        let report = ExecutionReport::Fill(Box::new(report));
+        msgbus::send_execution_report(endpoint, report);
     }
 
     fn send_position_report(&self, report: PositionStatusReport) {
-        let endpoint = "ExecEngine.reconcile_execution_report".into();
-        msgbus::send_any(endpoint, &report as &dyn Any);
+        let endpoint = MessagingSwitchboard::exec_engine_reconcile_execution_report();
+        let report = ExecutionReport::Position(Box::new(report));
+        msgbus::send_execution_report(endpoint, report);
     }
 }

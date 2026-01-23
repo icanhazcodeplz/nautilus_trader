@@ -10,9 +10,7 @@ class DataType:
     """
 
     def __init__(
-        self,
-        type_name: builtins.str,
-        metadata: typing.Mapping[builtins.str, builtins.str] | None,
+        self, type_name: builtins.str, metadata: typing.Mapping[builtins.str, builtins.str] | None
     ) -> None: ...
     def py_type_name(self) -> builtins.str: ...
     def py_metadata(self) -> builtins.dict[builtins.str, builtins.str] | None: ...

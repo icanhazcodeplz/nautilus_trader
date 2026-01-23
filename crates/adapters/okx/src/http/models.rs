@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -18,7 +18,10 @@
 use serde::{Deserialize, Serialize};
 use ustr::Ustr;
 
-use crate::common::parse::{deserialize_empty_string_as_none, deserialize_empty_ustr_as_none};
+use crate::common::parse::{
+    deserialize_empty_string_as_none, deserialize_empty_ustr_as_none,
+    deserialize_target_currency_as_none,
+};
 
 /// Represents a trade tick from the GET /api/v5/market/trades endpoint.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -65,8 +68,9 @@ pub struct OKXCandlestick(
 
 use crate::common::{
     enums::{
-        OKXAlgoOrderType, OKXExecType, OKXInstrumentType, OKXMarginMode, OKXOrderStatus,
-        OKXOrderType, OKXPositionSide, OKXSide, OKXTradeMode, OKXTriggerType,
+        OKXAlgoOrderType, OKXExecType, OKXInstrumentType, OKXMarginMode, OKXOrderCategory,
+        OKXOrderStatus, OKXOrderType, OKXPositionSide, OKXSide, OKXTargetCurrency, OKXTradeMode,
+        OKXTriggerType, OKXVipLevel,
     },
     parse::deserialize_string_to_u64,
 };
@@ -171,6 +175,7 @@ pub struct OKXAccount {
 /// Represents a balance detail for a single currency in an OKX account.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "python", pyo3::pyclass)]
 pub struct OKXBalanceDetail {
     /// Available balance.
     pub avail_bal: String,
@@ -420,8 +425,8 @@ pub struct OKXPlaceOrderResponse {
     #[serde(default)]
     pub reduce_only: Option<String>,
     /// Target currency (optional).
-    #[serde(default)]
-    pub tgt_ccy: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_target_currency_as_none")]
+    pub tgt_ccy: Option<OKXTargetCurrency>,
     /// Creation time.
     #[serde(default)]
     pub c_time: Option<String>,
@@ -470,7 +475,8 @@ pub struct OKXOrderHistory {
     /// Reduce-only flag.
     pub reduce_only: String,
     /// Target currency (optional).
-    pub tgt_ccy: String,
+    #[serde(default, deserialize_with = "deserialize_target_currency_as_none")]
+    pub tgt_ccy: Option<OKXTargetCurrency>,
     /// Order state.
     pub state: OKXOrderStatus,
     /// Average price (optional).
@@ -505,8 +511,8 @@ pub struct OKXOrderHistory {
     /// Fee discount (optional).
     #[serde(default)]
     pub fee_discount: Option<String>,
-    /// Category (optional).
-    pub category: String,
+    /// Order category (normal, liquidation, ADL, etc.).
+    pub category: OKXOrderCategory,
     /// Last update time, Unix timestamp in milliseconds.
     #[serde(deserialize_with = "deserialize_string_to_u64")]
     pub u_time: u64,
@@ -718,7 +724,7 @@ pub struct OKXPlaceAlgoOrderRequest {
     pub trigger_px_type: Option<OKXTriggerType>,
     /// Target currency (base_ccy or quote_ccy).
     #[serde(rename = "tgtCcy", skip_serializing_if = "Option::is_none")]
-    pub tgt_ccy: Option<String>,
+    pub tgt_ccy: Option<OKXTargetCurrency>,
     /// Position side (net, long, short).
     #[serde(rename = "posSide", skip_serializing_if = "Option::is_none")]
     pub pos_side: Option<OKXPositionSide>,
@@ -790,9 +796,36 @@ pub struct OKXServerTime {
     pub ts: u64,
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// Tests
-////////////////////////////////////////////////////////////////////////////////
+/// Represents a fee rate entry from `GET /api/v5/account/trade-fee`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OKXFeeRate {
+    /// Fee level (VIP tier) - indicates the user's VIP tier (0-9).
+    #[serde(deserialize_with = "crate::common::parse::deserialize_vip_level")]
+    pub level: OKXVipLevel,
+    /// Taker fee rate for crypto-margined contracts.
+    pub taker: String,
+    /// Maker fee rate for crypto-margined contracts.
+    pub maker: String,
+    /// Taker fee rate for USDT-margined contracts.
+    pub taker_u: String,
+    /// Maker fee rate for USDT-margined contracts.
+    pub maker_u: String,
+    /// Delivery fee rate.
+    #[serde(default)]
+    pub delivery: String,
+    /// Option exercise fee rate.
+    #[serde(default)]
+    pub exercise: String,
+    /// Instrument type (SPOT, MARGIN, SWAP, FUTURES, OPTION).
+    pub inst_type: OKXInstrumentType,
+    /// Fee schedule category (being deprecated).
+    #[serde(default)]
+    pub category: String,
+    /// Data return timestamp (Unix timestamp in milliseconds).
+    #[serde(deserialize_with = "deserialize_string_to_u64")]
+    pub ts: u64,
+}
 
 #[cfg(test)]
 mod tests {
@@ -849,7 +882,7 @@ mod tests {
             trigger_px: Some("50000".to_string()),
             order_px: Some("49900".to_string()),
             trigger_px_type: Some(OKXTriggerType::Mark),
-            tgt_ccy: Some("base_ccy".to_string()),
+            tgt_ccy: Some(OKXTargetCurrency::BaseCcy),
             pos_side: Some(OKXPositionSide::Net),
             close_position: None,
             tag: None,

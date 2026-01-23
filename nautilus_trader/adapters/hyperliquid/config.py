@@ -1,5 +1,5 @@
 # -------------------------------------------------------------------------------------------------
-#  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+#  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 #  https://nautechsystems.io
 #
 #  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -30,6 +30,12 @@ class HyperliquidDataClientConfig(LiveDataClientConfig, frozen=True):
         The HTTP client custom endpoint override.
     base_url_ws : str, optional
         The WebSocket client custom endpoint override.
+    http_proxy_url : str, optional
+        Optional HTTP proxy URL.
+    ws_proxy_url : str, optional
+        Optional WebSocket proxy URL.
+        Note: WebSocket proxy support is not yet implemented. This field is reserved
+        for future functionality. Use `http_proxy_url` for REST API proxy support.
     testnet : bool, default False
         If the client is connecting to the Hyperliquid testnet API.
     http_timeout_secs : PositiveInt, default 10
@@ -39,6 +45,8 @@ class HyperliquidDataClientConfig(LiveDataClientConfig, frozen=True):
 
     base_url_http: str | None = None
     base_url_ws: str | None = None
+    http_proxy_url: str | None = None
+    ws_proxy_url: str | None = None
     testnet: bool = False
     http_timeout_secs: PositiveInt = 10
 
@@ -51,14 +59,22 @@ class HyperliquidExecClientConfig(LiveExecClientConfig, frozen=True):
     ----------
     private_key : str, optional
         The Hyperliquid EVM private key.
-        If ``None`` then will source the `HYPERLIQUID_PK` environment variable.
+        If ``None`` then will source the `HYPERLIQUID_PK` or `HYPERLIQUID_TESTNET_PK`
+        environment variable (depending on the `testnet` setting).
     vault_address : str, optional
         The vault address for vault trading.
-        If ``None`` then will source the `HYPERLIQUID_VAULT` environment variable.
+        If ``None`` then will source the `HYPERLIQUID_VAULT` or `HYPERLIQUID_TESTNET_VAULT`
+        environment variable (depending on the `testnet` setting).
     base_url_http : str, optional
         The HTTP client custom endpoint override.
     base_url_ws : str, optional
         The WebSocket client custom endpoint override.
+    http_proxy_url : str, optional
+        Optional HTTP proxy URL.
+    ws_proxy_url : str, optional
+        Optional WebSocket proxy URL.
+        Note: WebSocket proxy support is not yet implemented. This field is reserved
+        for future functionality. Use `http_proxy_url` for REST API proxy support.
     testnet : bool, default False
         If the client is connecting to the Hyperliquid testnet API.
     max_retries : PositiveInt, optional
@@ -80,6 +96,8 @@ class HyperliquidExecClientConfig(LiveExecClientConfig, frozen=True):
     vault_address: str | None = None
     base_url_http: str | None = None
     base_url_ws: str | None = None
+    http_proxy_url: str | None = None
+    ws_proxy_url: str | None = None
     testnet: bool = False
     max_retries: PositiveInt | None = None
     retry_delay_initial_ms: PositiveInt | None = None

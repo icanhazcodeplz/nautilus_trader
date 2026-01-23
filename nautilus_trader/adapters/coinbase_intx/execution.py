@@ -1,5 +1,5 @@
 # -------------------------------------------------------------------------------------------------
-#  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+#  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 #  https://nautechsystems.io
 #
 #  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -131,7 +131,8 @@ class CoinbaseIntxExecutionClient(LiveExecutionClient):
 
         # HTTP API
         self._http_client = client
-        self._log.info(f"REST API key {self._http_client.api_key}", LogColor.BLUE)
+        masked_key = self._http_client.api_key_masked
+        self._log.info(f"REST API key {masked_key}", LogColor.BLUE)
 
         # FIX API
         self._fix_client = nautilus_pyo3.CoinbaseIntxFixClient(
@@ -150,6 +151,9 @@ class CoinbaseIntxExecutionClient(LiveExecutionClient):
     async def _connect(self) -> None:
         await self._cache_instruments()
         await self._update_account_state()
+        await self._await_account_registered()
+
+        self._log.info("Coinbase INTX API key authenticated", LogColor.GREEN)
 
         self._log.info(
             f"Logging on to FIX Drop Copy server: endpoint={self._fix_client.endpoint}, "
@@ -202,12 +206,7 @@ class CoinbaseIntxExecutionClient(LiveExecutionClient):
         self._log.debug("Cached instruments", LogColor.MAGENTA)
 
     async def _update_account_state(self) -> None:
-        try:
-            pyo3_account_state = await self._http_client.request_account_state(self.pyo3_account_id)
-        except ValueError as e:
-            self._log.error(str(e))
-            return
-
+        pyo3_account_state = await self._http_client.request_account_state(self.pyo3_account_id)
         account_state = AccountState.from_dict(pyo3_account_state.to_dict())
 
         self.generate_account_state(
@@ -216,6 +215,11 @@ class CoinbaseIntxExecutionClient(LiveExecutionClient):
             reported=True,
             ts_event=account_state.ts_event,
         )
+
+        if account_state.balances:
+            self._log.info(
+                f"Generated account state with {len(account_state.balances)} balance(s)",
+            )
 
     # -- EXECUTION REPORTS ------------------------------------------------------------------------
 
@@ -245,10 +249,10 @@ class CoinbaseIntxExecutionClient(LiveExecutionClient):
         active_symbols = self._get_cache_active_symbols()
 
         # Fetch active symbols from exchange
-        pyo3_position_reports: list[nautilus_pyo3.PositionStatusReport] = (
-            await self._http_client.request_position_status_reports(
-                account_id=self.pyo3_account_id,
-            )
+        pyo3_position_reports: list[
+            nautilus_pyo3.PositionStatusReport
+        ] = await self._http_client.request_position_status_reports(
+            account_id=self.pyo3_account_id,
         )
 
         for pyo3_position_report in pyo3_position_reports:
@@ -269,14 +273,11 @@ class CoinbaseIntxExecutionClient(LiveExecutionClient):
         except Exception as e:
             self._log.exception("Failed to generate OrderStatusReports", e)
 
-        len_reports = len(reports)
-        plural = "" if len_reports == 1 else "s"
-        receipt_log = f"Received {len(reports)} OrderStatusReport{plural}"
-
-        if command.log_receipt_level == LogLevel.INFO:
-            self._log.info(receipt_log)
-        else:
-            self._log.debug(receipt_log)
+        self._log_report_receipt(
+            len(reports),
+            "OrderStatusReport",
+            command.log_receipt_level,
+        )
 
         return reports
 
@@ -344,9 +345,7 @@ class CoinbaseIntxExecutionClient(LiveExecutionClient):
         except Exception as e:
             self._log.exception("Failed to generate FillReports", e)
 
-        len_reports = len(reports)
-        plural = "" if len_reports == 1 else "s"
-        self._log.info(f"Received {len(reports)} FillReport{plural}")
+        self._log_report_receipt(len(reports), "FillReport", LogLevel.INFO)
 
         return reports
 
@@ -374,10 +373,10 @@ class CoinbaseIntxExecutionClient(LiveExecutionClient):
                 reports.append(report)
             else:
                 self._log.debug("Requesting PositionStatusReports...")
-                pyo3_reports: list[nautilus_pyo3.PositionStatusReport] = (
-                    await self._http_client.request_position_status_reports(
-                        account_id=self.pyo3_account_id,
-                    )
+                pyo3_reports: list[
+                    nautilus_pyo3.PositionStatusReport
+                ] = await self._http_client.request_position_status_reports(
+                    account_id=self.pyo3_account_id,
                 )
 
                 for pyo3_report in pyo3_reports:
@@ -401,9 +400,11 @@ class CoinbaseIntxExecutionClient(LiveExecutionClient):
         except Exception as e:
             self._log.exception("Failed to generate PositionReports", e)
 
-        len_reports = len(reports)
-        plural = "" if len_reports == 1 else "s"
-        self._log.info(f"Received {len(reports)} PositionReport{plural}")
+        self._log_report_receipt(
+            len(reports),
+            "PositionReport",
+            command.log_receipt_level,
+        )
 
         return reports
 

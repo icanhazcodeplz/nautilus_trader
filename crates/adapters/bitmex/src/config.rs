@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -32,6 +32,13 @@ pub struct BitmexDataClientConfig {
     pub base_url_http: Option<String>,
     /// Optional override for the WebSocket URL.
     pub base_url_ws: Option<String>,
+    /// Optional HTTP proxy URL for general HTTP client operations.
+    pub http_proxy_url: Option<String>,
+    /// Optional WebSocket proxy URL for WebSocket client.
+    ///
+    /// Note: WebSocket proxy support is not yet implemented. This field is reserved
+    /// for future functionality. Use `http_proxy_url` for REST API proxy support.
+    pub ws_proxy_url: Option<String>,
     /// Optional REST timeout in seconds.
     pub http_timeout_secs: Option<u64>,
     /// Optional maximum retry attempts for REST requests.
@@ -42,7 +49,7 @@ pub struct BitmexDataClientConfig {
     pub retry_delay_max_ms: Option<u64>,
     /// Optional heartbeat interval (seconds) for the WebSocket client.
     pub heartbeat_interval_secs: Option<u64>,
-    /// Optional receive window in milliseconds for signed requests (default 10000).
+    /// Optional receive window in milliseconds for signed requests (default 10_000).
     ///
     /// This value determines how far in the future the `api-expires` timestamp will be set
     /// for signed REST requests. BitMEX uses seconds-granularity Unix timestamps in the
@@ -55,7 +62,7 @@ pub struct BitmexDataClientConfig {
     ///
     /// A larger window provides more tolerance for clock skew and network latency, but
     /// increases the replay attack window. The default of 10 seconds should be sufficient
-    /// for most deployments. Consider increasing this value (e.g., to 30000ms = 30s) if you
+    /// for most deployments. Consider increasing this value (e.g., to 30_000ms = 30s) if you
     /// experience request expiration errors due to clock drift or high network latency.
     pub recv_window_ms: Option<u64>,
     /// When `true`, only active instruments are requested during bootstrap.
@@ -64,6 +71,10 @@ pub struct BitmexDataClientConfig {
     pub update_instruments_interval_mins: Option<u64>,
     /// When `true`, use BitMEX testnet endpoints by default.
     pub use_testnet: bool,
+    /// Maximum number of requests per second (burst limit).
+    pub max_requests_per_second: Option<u32>,
+    /// Maximum number of requests per minute (rolling window).
+    pub max_requests_per_minute: Option<u32>,
 }
 
 impl Default for BitmexDataClientConfig {
@@ -73,6 +84,8 @@ impl Default for BitmexDataClientConfig {
             api_secret: None,
             base_url_http: None,
             base_url_ws: None,
+            http_proxy_url: None,
+            ws_proxy_url: None,
             http_timeout_secs: Some(60),
             max_retries: Some(3),
             retry_delay_initial_ms: Some(1_000),
@@ -82,6 +95,8 @@ impl Default for BitmexDataClientConfig {
             active_only: true,
             update_instruments_interval_mins: None,
             use_testnet: false,
+            max_requests_per_second: Some(10),
+            max_requests_per_minute: Some(120),
         }
     }
 }
@@ -135,6 +150,13 @@ pub struct BitmexExecClientConfig {
     pub base_url_http: Option<String>,
     /// Optional override for the WebSocket URL.
     pub base_url_ws: Option<String>,
+    /// Optional HTTP proxy URL for general HTTP client operations.
+    pub http_proxy_url: Option<String>,
+    /// Optional WebSocket proxy URL for WebSocket client.
+    ///
+    /// Note: WebSocket proxy support is not yet implemented. This field is reserved
+    /// for future functionality. Use `http_proxy_url` for REST API proxy support.
+    pub ws_proxy_url: Option<String>,
     /// Optional REST timeout in seconds.
     pub http_timeout_secs: Option<u64>,
     /// Optional maximum retry attempts for REST requests.
@@ -167,6 +189,18 @@ pub struct BitmexExecClientConfig {
     pub use_testnet: bool,
     /// Optional account identifier to associate with the execution client.
     pub account_id: Option<AccountId>,
+    /// Maximum number of requests per second (burst limit).
+    pub max_requests_per_second: Option<u32>,
+    /// Maximum number of requests per minute (rolling window).
+    pub max_requests_per_minute: Option<u32>,
+    /// Number of HTTP clients in the submit broadcaster pool (defaults to 1).
+    pub submitter_pool_size: Option<usize>,
+    /// Number of HTTP clients in the cancel broadcaster pool (defaults to 1).
+    pub canceller_pool_size: Option<usize>,
+    /// Optional list of proxy URLs for submit broadcaster pool (path diversity).
+    pub submitter_proxy_urls: Option<Vec<String>>,
+    /// Optional list of proxy URLs for cancel broadcaster pool (path diversity).
+    pub canceller_proxy_urls: Option<Vec<String>>,
 }
 
 impl Default for BitmexExecClientConfig {
@@ -176,6 +210,8 @@ impl Default for BitmexExecClientConfig {
             api_secret: None,
             base_url_http: None,
             base_url_ws: None,
+            http_proxy_url: None,
+            ws_proxy_url: None,
             http_timeout_secs: Some(60),
             max_retries: Some(3),
             retry_delay_initial_ms: Some(1_000),
@@ -185,6 +221,12 @@ impl Default for BitmexExecClientConfig {
             active_only: true,
             use_testnet: false,
             account_id: None,
+            max_requests_per_second: Some(10),
+            max_requests_per_minute: Some(120),
+            submitter_pool_size: None,
+            canceller_pool_size: None,
+            submitter_proxy_urls: None,
+            canceller_proxy_urls: None,
         }
     }
 }

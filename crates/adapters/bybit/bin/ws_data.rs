@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -21,18 +21,14 @@ use std::error::Error;
 use futures_util::StreamExt;
 use nautilus_bybit::{
     common::enums::{BybitEnvironment, BybitProductType},
-    websocket::{client::BybitWebSocketClient, messages::BybitWebSocketMessage},
+    websocket::{client::BybitWebSocketClient, messages::NautilusWsMessage},
 };
+use nautilus_model::data::Data;
 use tokio::{pin, signal};
-use tracing::level_filters::LevelFilter;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    tracing_subscriber::fmt()
-        .with_max_level(LevelFilter::INFO)
-        .with_target(false)
-        .compact()
-        .init();
+    nautilus_common::logging::ensure_logging_initialized();
 
     let mut client = BybitWebSocketClient::new_public_with(
         BybitProductType::Linear,
@@ -55,64 +51,89 @@ async fn main() -> Result<(), Box<dyn Error>> {
     pin!(stream);
     pin!(shutdown);
 
-    tracing::info!("Streaming Bybit market data; press Ctrl+C to exit");
+    log::info!("Streaming Bybit market data; press Ctrl+C to exit");
 
     loop {
         tokio::select! {
             Some(event) = stream.next() => {
                 match event {
-                    BybitWebSocketMessage::Orderbook(msg) => {
-                        tracing::info!(topic = %msg.topic, "orderbook update");
+                    NautilusWsMessage::Data(data_vec) => {
+                        log::info!("data update: count={}", data_vec.len());
+                        for data in data_vec {
+                            match data {
+                                Data::Trade(tick) => {
+                                    log::info!("trade: instrument={}, price={}, size={}", tick.instrument_id, tick.price, tick.size);
+                                }
+                                Data::Quote(quote) => {
+                                    log::info!("quote: instrument={}, bid={}, ask={}", quote.instrument_id, quote.bid_price, quote.ask_price);
+                                }
+                                Data::Bar(bar) => {
+                                    log::info!("bar: bar_type={}, close={}", bar.bar_type, bar.close);
+                                }
+                                _ => {
+                                    log::debug!("other data type");
+                                }
+                            }
+                        }
                     }
-                    BybitWebSocketMessage::Trade(msg) => {
-                        tracing::info!(topic = %msg.topic, trades = msg.data.len(), "trade update");
+                    NautilusWsMessage::Deltas(deltas) => {
+                        log::info!("orderbook deltas: instrument={}, sequence={}", deltas.instrument_id, deltas.sequence);
                     }
-                    BybitWebSocketMessage::TickerLinear(msg) => {
-                        tracing::info!(topic = %msg.topic, bid = ?msg.data.bid1_price, ask = ?msg.data.ask1_price, "linear ticker update");
+                    NautilusWsMessage::FundingRates(rates) => {
+                        log::info!("funding rate updates: count={}", rates.len());
+                        for rate in rates {
+                            log::info!(
+                                "funding rate: instrument={}, rate={}, next_funding={:?}",
+                                rate.instrument_id, rate.rate, rate.next_funding_ns
+                            );
+                        }
                     }
-                    BybitWebSocketMessage::TickerOption(msg) => {
-                        tracing::info!(topic = %msg.topic, bid = %msg.data.bid_price, ask = %msg.data.ask_price, "option ticker update");
+                    NautilusWsMessage::OrderStatusReports(reports) => {
+                        log::info!("order status reports: count={}", reports.len());
+                        for report in reports {
+                            log::info!(
+                                "order status report: instrument={}, client_order_id={:?}, venue_order_id={:?}, status={:?}",
+                                report.instrument_id, report.client_order_id, report.venue_order_id, report.order_status
+                            );
+                        }
                     }
-                    BybitWebSocketMessage::Response(msg) => {
-                        tracing::debug!(?msg, "response frame");
+                    NautilusWsMessage::FillReports(reports) => {
+                        log::info!("fill reports: count={}", reports.len());
+                        for report in reports {
+                            log::info!(
+                                "fill report: instrument={}, client_order_id={:?}, venue_order_id={:?}, last_qty={}, last_px={}",
+                                report.instrument_id, report.client_order_id, report.venue_order_id, report.last_qty, report.last_px
+                            );
+                        }
                     }
-                    BybitWebSocketMessage::Subscription(msg) => {
-                        tracing::info!(op = %msg.op, success = msg.success, "subscription ack");
+                    NautilusWsMessage::PositionStatusReport(report) => {
+                        log::info!("position status report: instrument={}, quantity={}", report.instrument_id, report.quantity);
                     }
-                    BybitWebSocketMessage::Auth(msg) => {
-                        tracing::info!(op = %msg.op, "auth ack");
+                    NautilusWsMessage::AccountState(state) => {
+                        log::info!("account state: account_id={}, balances={}", state.account_id, state.balances.len());
                     }
-                    BybitWebSocketMessage::Error(err) => {
-                        tracing::error!(code = err.code, message = %err.message, "bybit websocket error");
+                    NautilusWsMessage::OrderRejected(event) => {
+                        log::warn!("order rejected: trader_id={}, client_order_id={}, reason={}", event.trader_id, event.client_order_id, event.reason);
                     }
-                    BybitWebSocketMessage::Raw(value) => {
-                        tracing::debug!(payload = %value, "raw message");
+                    NautilusWsMessage::OrderCancelRejected(event) => {
+                        log::warn!("order cancel rejected: trader_id={}, client_order_id={}, reason={}", event.trader_id, event.client_order_id, event.reason);
                     }
-                    BybitWebSocketMessage::Reconnected => {
-                        tracing::warn!("WebSocket reconnected");
+                    NautilusWsMessage::OrderModifyRejected(event) => {
+                        log::warn!("order modify rejected: trader_id={}, client_order_id={}, reason={}", event.trader_id, event.client_order_id, event.reason);
                     }
-                    BybitWebSocketMessage::Pong => {
-                        tracing::trace!("Received pong");
+                    NautilusWsMessage::Error(err) => {
+                        log::error!("websocket error: code={}, message={}", err.code, err.message);
                     }
-                    BybitWebSocketMessage::Kline(msg) => {
-                        tracing::info!(topic = %msg.topic, bars = msg.data.len(), "kline update");
+                    NautilusWsMessage::Reconnected => {
+                        log::warn!("WebSocket reconnected");
                     }
-                    BybitWebSocketMessage::AccountOrder(msg) => {
-                        tracing::info!(topic = %msg.topic, orders = msg.data.len(), "account order update");
-                    }
-                    BybitWebSocketMessage::AccountExecution(msg) => {
-                        tracing::info!(topic = %msg.topic, executions = msg.data.len(), "account execution update");
-                    }
-                    BybitWebSocketMessage::AccountWallet(msg) => {
-                        tracing::info!(topic = %msg.topic, wallets = msg.data.len(), "account wallet update");
-                    }
-                    BybitWebSocketMessage::AccountPosition(msg) => {
-                        tracing::info!(topic = %msg.topic, positions = msg.data.len(), "account position update");
+                    NautilusWsMessage::Authenticated => {
+                        log::info!("Authenticated successfully");
                     }
                 }
             }
             _ = &mut shutdown => {
-                tracing::info!("Received Ctrl+C, closing connection");
+                log::info!("Received Ctrl+C, closing connection");
                 client.close().await?;
                 break;
             }

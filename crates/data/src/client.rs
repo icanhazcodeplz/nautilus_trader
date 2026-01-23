@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -15,34 +15,28 @@
 
 //! Base data client functionality.
 //!
-//! Defines the `DataClient` trait, the `DataClientAdapter` for managing subscriptions and requests,
+//! Provides the `DataClientAdapter` for managing subscriptions and requests,
 //! and utilities for constructing data responses.
 
 use std::{
-    any::Any,
-    fmt::{Debug, Display},
+    fmt::Debug,
     ops::{Deref, DerefMut},
 };
 
 use ahash::AHashSet;
-use nautilus_common::messages::data::{
-    RequestBars, RequestBookDepth, RequestBookSnapshot, RequestCustomData, RequestInstrument,
-    RequestInstruments, RequestQuotes, RequestTrades, SubscribeBars, SubscribeBookDeltas,
-    SubscribeBookDepth10, SubscribeBookSnapshots, SubscribeCommand, SubscribeCustomData,
-    SubscribeFundingRates, SubscribeIndexPrices, SubscribeInstrument, SubscribeInstrumentClose,
-    SubscribeInstrumentStatus, SubscribeInstruments, SubscribeMarkPrices, SubscribeQuotes,
-    SubscribeTrades, UnsubscribeBars, UnsubscribeBookDeltas, UnsubscribeBookDepth10,
-    UnsubscribeBookSnapshots, UnsubscribeCommand, UnsubscribeCustomData, UnsubscribeFundingRates,
-    UnsubscribeIndexPrices, UnsubscribeInstrument, UnsubscribeInstrumentClose,
-    UnsubscribeInstrumentStatus, UnsubscribeInstruments, UnsubscribeMarkPrices, UnsubscribeQuotes,
-    UnsubscribeTrades,
-};
-#[cfg(feature = "defi")]
-use nautilus_common::messages::defi::{
-    DefiSubscribeCommand, DefiUnsubscribeCommand, SubscribeBlocks, SubscribePool,
-    SubscribePoolFeeCollects, SubscribePoolLiquidityUpdates, SubscribePoolSwaps, UnsubscribeBlocks,
-    UnsubscribePool, UnsubscribePoolFeeCollects, UnsubscribePoolLiquidityUpdates,
-    UnsubscribePoolSwaps,
+use nautilus_common::{
+    clients::{DataClient, log_command_error},
+    messages::data::{
+        RequestBars, RequestBookDepth, RequestBookSnapshot, RequestCustomData, RequestInstrument,
+        RequestInstruments, RequestQuotes, RequestTrades, SubscribeBars, SubscribeBookDeltas,
+        SubscribeBookDepth10, SubscribeCommand, SubscribeCustomData, SubscribeFundingRates,
+        SubscribeIndexPrices, SubscribeInstrument, SubscribeInstrumentClose,
+        SubscribeInstrumentStatus, SubscribeInstruments, SubscribeMarkPrices, SubscribeQuotes,
+        SubscribeTrades, UnsubscribeBars, UnsubscribeBookDeltas, UnsubscribeBookDepth10,
+        UnsubscribeCommand, UnsubscribeCustomData, UnsubscribeFundingRates, UnsubscribeIndexPrices,
+        UnsubscribeInstrument, UnsubscribeInstrumentClose, UnsubscribeInstrumentStatus,
+        UnsubscribeInstruments, UnsubscribeMarkPrices, UnsubscribeQuotes, UnsubscribeTrades,
+    },
 };
 #[cfg(feature = "defi")]
 use nautilus_model::defi::Blockchain;
@@ -51,558 +45,13 @@ use nautilus_model::{
     identifiers::{ClientId, InstrumentId, Venue},
 };
 
-/// Defines the interface for a data client, managing connections, subscriptions, and requests.
-#[async_trait::async_trait]
-pub trait DataClient: Any + Sync + Send {
-    /// Returns the unique identifier for this data client.
-    fn client_id(&self) -> ClientId;
-
-    /// Returns the optional venue this client is associated with.
-    fn venue(&self) -> Option<Venue>;
-
-    /// Starts the data client.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the operation fails.
-    fn start(&mut self) -> anyhow::Result<()>;
-
-    /// Stops the data client.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the operation fails.
-    fn stop(&mut self) -> anyhow::Result<()>;
-
-    /// Resets the data client to its initial state.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the operation fails.
-    fn reset(&mut self) -> anyhow::Result<()>;
-
-    /// Disposes of client resources and cleans up.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the operation fails.
-    fn dispose(&mut self) -> anyhow::Result<()>;
-
-    /// Connects external API's if needed.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the operation fails.
-    async fn connect(&mut self) -> anyhow::Result<()>;
-
-    /// Disconnects external API's if needed.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the operation fails.
-    async fn disconnect(&mut self) -> anyhow::Result<()>;
-
-    /// Returns `true` if the client is currently connected.
-    fn is_connected(&self) -> bool;
-
-    /// Returns `true` if the client is currently disconnected.
-    fn is_disconnected(&self) -> bool;
-
-    /// Subscribes to custom data types according to the command.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the subscribe operation fails.
-    fn subscribe(&mut self, cmd: &SubscribeCustomData) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    /// Subscribes to instruments list for the specified venue.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the subscribe operation fails.
-    fn subscribe_instruments(&mut self, cmd: &SubscribeInstruments) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    /// Subscribes to data for a single instrument.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the subscribe operation fails.
-    fn subscribe_instrument(&mut self, cmd: &SubscribeInstrument) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    /// Subscribes to order book delta updates for the specified instrument.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the subscribe operation fails.
-    fn subscribe_book_deltas(&mut self, cmd: &SubscribeBookDeltas) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    /// Subscribes to top 10 order book depth updates for the specified instrument.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the subscribe operation fails.
-    fn subscribe_book_depth10(&mut self, cmd: &SubscribeBookDepth10) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    /// Subscribes to periodic order book snapshots for the specified instrument.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the subscribe operation fails.
-    fn subscribe_book_snapshots(&mut self, cmd: &SubscribeBookSnapshots) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    /// Subscribes to quote updates for the specified instrument.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the subscribe operation fails.
-    fn subscribe_quotes(&mut self, cmd: &SubscribeQuotes) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    /// Subscribes to trade updates for the specified instrument.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the subscribe operation fails.
-    fn subscribe_trades(&mut self, cmd: &SubscribeTrades) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    /// Subscribes to mark price updates for the specified instrument.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the subscribe operation fails.
-    fn subscribe_mark_prices(&mut self, cmd: &SubscribeMarkPrices) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    /// Subscribes to index price updates for the specified instrument.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the subscribe operation fails.
-    fn subscribe_index_prices(&mut self, cmd: &SubscribeIndexPrices) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    /// Subscribes to funding rate updates for the specified instrument.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the subscribe operation fails.
-    fn subscribe_funding_rates(&mut self, cmd: &SubscribeFundingRates) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    /// Subscribes to bar updates of the specified bar type.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the subscribe operation fails.
-    fn subscribe_bars(&mut self, cmd: &SubscribeBars) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    /// Subscribes to status updates for the specified instrument.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the subscribe operation fails.
-    fn subscribe_instrument_status(
-        &mut self,
-        cmd: &SubscribeInstrumentStatus,
-    ) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    /// Subscribes to instrument close events for the specified instrument.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the subscription operation fails.
-    fn subscribe_instrument_close(&mut self, cmd: &SubscribeInstrumentClose) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    #[cfg(feature = "defi")]
-    /// Subscribes to blocks for a specified blockchain.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the subscription operation fails.
-    fn subscribe_blocks(&mut self, cmd: &SubscribeBlocks) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    #[cfg(feature = "defi")]
-    /// Subscribes to pool definition updates for a specified AMM pool.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the subscription operation fails.
-    fn subscribe_pool(&mut self, cmd: &SubscribePool) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    #[cfg(feature = "defi")]
-    /// Subscribes to pool swaps for a specified AMM pool.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the subscription operation fails.
-    fn subscribe_pool_swaps(&mut self, cmd: &SubscribePoolSwaps) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    #[cfg(feature = "defi")]
-    /// Subscribes to pool liquidity updates for a specified AMM pool.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the subscription operation fails.
-    fn subscribe_pool_liquidity_updates(
-        &mut self,
-        cmd: &SubscribePoolLiquidityUpdates,
-    ) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    #[cfg(feature = "defi")]
-    /// Subscribes to pool fee collects for a specified AMM pool.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the subscription operation fails.
-    fn subscribe_pool_fee_collects(
-        &mut self,
-        cmd: &SubscribePoolFeeCollects,
-    ) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    /// Unsubscribes from custom data types according to the command.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the unsubscribe operation fails.
-    fn unsubscribe(&mut self, cmd: &UnsubscribeCustomData) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    /// Unsubscribes from instruments list for the specified venue.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the unsubscribe operation fails.
-    fn unsubscribe_instruments(&mut self, cmd: &UnsubscribeInstruments) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    /// Unsubscribes from data for the specified instrument.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the unsubscribe operation fails.
-    fn unsubscribe_instrument(&mut self, cmd: &UnsubscribeInstrument) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    /// Unsubscribes from order book delta updates for the specified instrument.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the unsubscribe operation fails.
-    fn unsubscribe_book_deltas(&mut self, cmd: &UnsubscribeBookDeltas) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    /// Unsubscribes from top 10 order book depth updates for the specified instrument.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the unsubscribe operation fails.
-    fn unsubscribe_book_depth10(&mut self, cmd: &UnsubscribeBookDepth10) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    /// Unsubscribes from periodic order book snapshots for the specified instrument.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the unsubscribe operation fails.
-    fn unsubscribe_book_snapshots(&mut self, cmd: &UnsubscribeBookSnapshots) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    /// Unsubscribes from quote updates for the specified instrument.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the unsubscribe operation fails.
-    fn unsubscribe_quotes(&mut self, cmd: &UnsubscribeQuotes) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    /// Unsubscribes from trade updates for the specified instrument.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the unsubscribe operation fails.
-    fn unsubscribe_trades(&mut self, cmd: &UnsubscribeTrades) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    /// Unsubscribes from mark price updates for the specified instrument.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the unsubscribe operation fails.
-    fn unsubscribe_mark_prices(&mut self, cmd: &UnsubscribeMarkPrices) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    /// Unsubscribes from index price updates for the specified instrument.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the unsubscribe operation fails.
-    fn unsubscribe_index_prices(&mut self, cmd: &UnsubscribeIndexPrices) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    /// Unsubscribes from funding rate updates for the specified instrument.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the unsubscribe operation fails.
-    fn unsubscribe_funding_rates(&mut self, cmd: &UnsubscribeFundingRates) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    /// Unsubscribes from bar updates of the specified bar type.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the unsubscribe operation fails.
-    fn unsubscribe_bars(&mut self, cmd: &UnsubscribeBars) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    /// Unsubscribes from instrument status updates for the specified instrument.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the unsubscribe operation fails.
-    fn unsubscribe_instrument_status(
-        &mut self,
-        cmd: &UnsubscribeInstrumentStatus,
-    ) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    /// Unsubscribes from instrument close events for the specified instrument.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the unsubscribe operation fails.
-    fn unsubscribe_instrument_close(
-        &mut self,
-        cmd: &UnsubscribeInstrumentClose,
-    ) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    #[cfg(feature = "defi")]
-    /// Unsubscribes from blocks for a specified blockchain.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the subscription operation fails.
-    fn unsubscribe_blocks(&mut self, cmd: &UnsubscribeBlocks) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    #[cfg(feature = "defi")]
-    /// Unsubscribes from pool definition updates for a specified AMM pool.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the subscription operation fails.
-    fn unsubscribe_pool(&mut self, cmd: &UnsubscribePool) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    #[cfg(feature = "defi")]
-    /// Unsubscribes from swaps for a specified AMM pool.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the subscription operation fails.
-    fn unsubscribe_pool_swaps(&mut self, cmd: &UnsubscribePoolSwaps) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    #[cfg(feature = "defi")]
-    /// Unsubscribes from pool liquidity updates for a specified AMM pool.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the subscription operation fails.
-    fn unsubscribe_pool_liquidity_updates(
-        &mut self,
-        cmd: &UnsubscribePoolLiquidityUpdates,
-    ) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    #[cfg(feature = "defi")]
-    /// Unsubscribes from pool fee collects for a specified AMM pool.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the subscription operation fails.
-    fn unsubscribe_pool_fee_collects(
-        &mut self,
-        cmd: &UnsubscribePoolFeeCollects,
-    ) -> anyhow::Result<()> {
-        log_not_implemented(&cmd);
-        Ok(())
-    }
-
-    /// Sends a custom data request to the provider.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the data request fails.
-    fn request_data(&self, request: &RequestCustomData) -> anyhow::Result<()> {
-        log_not_implemented(&request);
-        Ok(())
-    }
-
-    /// Requests a list of instruments from the provider for a given venue.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the instruments request fails.
-    fn request_instruments(&self, request: &RequestInstruments) -> anyhow::Result<()> {
-        log_not_implemented(&request);
-        Ok(())
-    }
-
-    /// Requests detailed data for a single instrument.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the instrument request fails.
-    fn request_instrument(&self, request: &RequestInstrument) -> anyhow::Result<()> {
-        log_not_implemented(&request);
-        Ok(())
-    }
-
-    /// Requests a snapshot of the order book for a specified instrument.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the book snapshot request fails.
-    fn request_book_snapshot(&self, request: &RequestBookSnapshot) -> anyhow::Result<()> {
-        log_not_implemented(&request);
-        Ok(())
-    }
-
-    /// Requests historical or streaming quote data for a specified instrument.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the quotes request fails.
-    fn request_quotes(&self, request: &RequestQuotes) -> anyhow::Result<()> {
-        log_not_implemented(&request);
-        Ok(())
-    }
-
-    /// Requests historical or streaming trade data for a specified instrument.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the trades request fails.
-    fn request_trades(&self, request: &RequestTrades) -> anyhow::Result<()> {
-        log_not_implemented(&request);
-        Ok(())
-    }
-
-    /// Requests historical or streaming bar data for a specified instrument and bar type.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the bars request fails.
-    fn request_bars(&self, request: &RequestBars) -> anyhow::Result<()> {
-        log_not_implemented(&request);
-        Ok(())
-    }
-
-    /// Requests historical order book depth data for a specified instrument.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the order book depths request fails.
-    fn request_book_depth(&self, request: &RequestBookDepth) -> anyhow::Result<()> {
-        log_not_implemented(&request);
-        Ok(())
-    }
-}
+#[cfg(feature = "defi")]
+#[allow(unused_imports)] // Brings DeFi impl blocks into scope
+use crate::defi::client as _;
 
 /// Wraps a [`DataClient`], managing subscription state and forwarding commands.
 pub struct DataClientAdapter {
-    client: Box<dyn DataClient>,
+    pub(crate) client: Box<dyn DataClient>,
     pub client_id: ClientId,
     pub venue: Option<Venue>,
     pub handles_book_deltas: bool,
@@ -610,7 +59,6 @@ pub struct DataClientAdapter {
     pub subscriptions_custom: AHashSet<DataType>,
     pub subscriptions_book_deltas: AHashSet<InstrumentId>,
     pub subscriptions_book_depth10: AHashSet<InstrumentId>,
-    pub subscriptions_book_snapshots: AHashSet<InstrumentId>,
     pub subscriptions_quotes: AHashSet<InstrumentId>,
     pub subscriptions_trades: AHashSet<InstrumentId>,
     pub subscriptions_bars: AHashSet<BarType>,
@@ -631,6 +79,8 @@ pub struct DataClientAdapter {
     pub subscriptions_pool_liquidity_updates: AHashSet<InstrumentId>,
     #[cfg(feature = "defi")]
     pub subscriptions_pool_fee_collects: AHashSet<InstrumentId>,
+    #[cfg(feature = "defi")]
+    pub subscriptions_pool_flash: AHashSet<InstrumentId>,
 }
 
 impl Deref for DataClientAdapter {
@@ -658,7 +108,6 @@ impl Debug for DataClientAdapter {
             .field("subscriptions_custom", &self.subscriptions_custom)
             .field("subscriptions_book_deltas", &self.subscriptions_book_deltas)
             .field("subscriptions_book_depth10", &self.subscriptions_book_depth10)
-            .field("subscriptions_book_snapshot", &self.subscriptions_book_snapshots)
             .field("subscriptions_quotes", &self.subscriptions_quotes)
             .field("subscriptions_trades", &self.subscriptions_trades)
             .field("subscriptions_bars", &self.subscriptions_bars)
@@ -691,7 +140,6 @@ impl DataClientAdapter {
             subscriptions_custom: AHashSet::new(),
             subscriptions_book_deltas: AHashSet::new(),
             subscriptions_book_depth10: AHashSet::new(),
-            subscriptions_book_snapshots: AHashSet::new(),
             subscriptions_quotes: AHashSet::new(),
             subscriptions_trades: AHashSet::new(),
             subscriptions_mark_prices: AHashSet::new(),
@@ -712,6 +160,8 @@ impl DataClientAdapter {
             subscriptions_pool_liquidity_updates: AHashSet::new(),
             #[cfg(feature = "defi")]
             subscriptions_pool_fee_collects: AHashSet::new(),
+            #[cfg(feature = "defi")]
+            subscriptions_pool_flash: AHashSet::new(),
         }
     }
 
@@ -719,6 +169,24 @@ impl DataClientAdapter {
     #[must_use]
     pub fn get_client(&self) -> &Box<dyn DataClient> {
         &self.client
+    }
+
+    /// Connects the underlying client to the data provider.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection fails.
+    pub async fn connect(&mut self) -> anyhow::Result<()> {
+        self.client.connect().await
+    }
+
+    /// Disconnects the underlying client from the data provider.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the disconnection fails.
+    pub async fn disconnect(&mut self) -> anyhow::Result<()> {
+        self.client.disconnect().await
     }
 
     #[inline]
@@ -729,7 +197,7 @@ impl DataClientAdapter {
             SubscribeCommand::Instruments(cmd) => self.subscribe_instruments(cmd),
             SubscribeCommand::BookDeltas(cmd) => self.subscribe_book_deltas(cmd),
             SubscribeCommand::BookDepth10(cmd) => self.subscribe_book_depth10(cmd),
-            SubscribeCommand::BookSnapshots(cmd) => self.subscribe_book_snapshots(cmd),
+            SubscribeCommand::BookSnapshots(_) => Ok(()), // Handled internally by engine
             SubscribeCommand::Quotes(cmd) => self.subscribe_quotes(cmd),
             SubscribeCommand::Trades(cmd) => self.subscribe_trades(cmd),
             SubscribeCommand::MarkPrices(cmd) => self.subscribe_mark_prices(cmd),
@@ -743,22 +211,6 @@ impl DataClientAdapter {
         }
     }
 
-    #[cfg(feature = "defi")]
-    #[inline]
-    pub fn execute_defi_subscribe(&mut self, cmd: &DefiSubscribeCommand) {
-        if let Err(e) = match cmd {
-            DefiSubscribeCommand::Blocks(cmd) => self.subscribe_blocks(cmd),
-            DefiSubscribeCommand::Pool(cmd) => self.subscribe_pool(cmd),
-            DefiSubscribeCommand::PoolSwaps(cmd) => self.subscribe_pool_swaps(cmd),
-            DefiSubscribeCommand::PoolLiquidityUpdates(cmd) => {
-                self.subscribe_pool_liquidity_updates(cmd)
-            }
-            DefiSubscribeCommand::PoolFeeCollects(cmd) => self.subscribe_pool_fee_collects(cmd),
-        } {
-            log_command_error(&cmd, &e);
-        }
-    }
-
     #[inline]
     pub fn execute_unsubscribe(&mut self, cmd: &UnsubscribeCommand) {
         if let Err(e) = match cmd {
@@ -767,7 +219,7 @@ impl DataClientAdapter {
             UnsubscribeCommand::Instruments(cmd) => self.unsubscribe_instruments(cmd),
             UnsubscribeCommand::BookDeltas(cmd) => self.unsubscribe_book_deltas(cmd),
             UnsubscribeCommand::BookDepth10(cmd) => self.unsubscribe_book_depth10(cmd),
-            UnsubscribeCommand::BookSnapshots(cmd) => self.unsubscribe_book_snapshots(cmd),
+            UnsubscribeCommand::BookSnapshots(_) => Ok(()), // Handled internally by engine
             UnsubscribeCommand::Quotes(cmd) => self.unsubscribe_quotes(cmd),
             UnsubscribeCommand::Trades(cmd) => self.unsubscribe_trades(cmd),
             UnsubscribeCommand::Bars(cmd) => self.unsubscribe_bars(cmd),
@@ -776,22 +228,6 @@ impl DataClientAdapter {
             UnsubscribeCommand::FundingRates(cmd) => self.unsubscribe_funding_rates(cmd),
             UnsubscribeCommand::InstrumentStatus(cmd) => self.unsubscribe_instrument_status(cmd),
             UnsubscribeCommand::InstrumentClose(cmd) => self.unsubscribe_instrument_close(cmd),
-        } {
-            log_command_error(&cmd, &e);
-        }
-    }
-
-    #[cfg(feature = "defi")]
-    #[inline]
-    pub fn execute_defi_unsubscribe(&mut self, cmd: &DefiUnsubscribeCommand) {
-        if let Err(e) = match cmd {
-            DefiUnsubscribeCommand::Blocks(cmd) => self.unsubscribe_blocks(cmd),
-            DefiUnsubscribeCommand::Pool(cmd) => self.unsubscribe_pool(cmd),
-            DefiUnsubscribeCommand::PoolSwaps(cmd) => self.unsubscribe_pool_swaps(cmd),
-            DefiUnsubscribeCommand::PoolLiquidityUpdates(cmd) => {
-                self.unsubscribe_pool_liquidity_updates(cmd)
-            }
-            DefiUnsubscribeCommand::PoolFeeCollects(cmd) => self.unsubscribe_pool_fee_collects(cmd),
         } {
             log_command_error(&cmd, &e);
         }
@@ -932,40 +368,6 @@ impl DataClientAdapter {
         if self.subscriptions_book_depth10.contains(&cmd.instrument_id) {
             self.subscriptions_book_depth10.remove(&cmd.instrument_id);
             self.client.unsubscribe_book_depth10(cmd)?;
-        }
-
-        Ok(())
-    }
-
-    /// Subscribes to book snapshots for an instrument, updating internal state and forwarding to the client.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the underlying client subscribe operation fails.
-    fn subscribe_book_snapshots(&mut self, cmd: &SubscribeBookSnapshots) -> anyhow::Result<()> {
-        if !self
-            .subscriptions_book_snapshots
-            .contains(&cmd.instrument_id)
-        {
-            self.subscriptions_book_snapshots.insert(cmd.instrument_id);
-            self.client.subscribe_book_snapshots(cmd)?;
-        }
-
-        Ok(())
-    }
-
-    /// Unsubscribes from book snapshots for an instrument, updating internal state and forwarding to the client.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the underlying client unsubscribe operation fails.
-    fn unsubscribe_book_snapshots(&mut self, cmd: &UnsubscribeBookSnapshots) -> anyhow::Result<()> {
-        if self
-            .subscriptions_book_snapshots
-            .contains(&cmd.instrument_id)
-        {
-            self.subscriptions_book_snapshots.remove(&cmd.instrument_id);
-            self.client.unsubscribe_book_snapshots(cmd)?;
         }
 
         Ok(())
@@ -1210,174 +612,6 @@ impl DataClientAdapter {
         Ok(())
     }
 
-    #[cfg(feature = "defi")]
-    /// Subscribes to block events for the specified blockchain.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the underlying client subscribe operation fails.
-    fn subscribe_blocks(&mut self, cmd: &SubscribeBlocks) -> anyhow::Result<()> {
-        if !self.subscriptions_blocks.contains(&cmd.chain) {
-            self.subscriptions_blocks.insert(cmd.chain);
-            self.client.subscribe_blocks(cmd)?;
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "defi")]
-    /// Unsubscribes from block events for the specified blockchain.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the underlying client unsubscribe operation fails.
-    fn unsubscribe_blocks(&mut self, cmd: &UnsubscribeBlocks) -> anyhow::Result<()> {
-        if self.subscriptions_blocks.contains(&cmd.chain) {
-            self.subscriptions_blocks.remove(&cmd.chain);
-            self.client.unsubscribe_blocks(cmd)?;
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "defi")]
-    /// Subscribes to pool definition updates for the specified AMM pool.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the underlying client subscribe operation fails.
-    fn subscribe_pool(&mut self, cmd: &SubscribePool) -> anyhow::Result<()> {
-        if !self.subscriptions_pools.contains(&cmd.instrument_id) {
-            self.subscriptions_pools.insert(cmd.instrument_id);
-            self.client.subscribe_pool(cmd)?;
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "defi")]
-    /// Subscribes to pool swap events for the specified AMM pool.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the underlying client subscribe operation fails.
-    fn subscribe_pool_swaps(&mut self, cmd: &SubscribePoolSwaps) -> anyhow::Result<()> {
-        if !self.subscriptions_pool_swaps.contains(&cmd.instrument_id) {
-            self.subscriptions_pool_swaps.insert(cmd.instrument_id);
-            self.client.subscribe_pool_swaps(cmd)?;
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "defi")]
-    /// Subscribes to pool liquidity update events for the specified AMM pool.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the underlying client subscribe operation fails.
-    fn subscribe_pool_liquidity_updates(
-        &mut self,
-        cmd: &SubscribePoolLiquidityUpdates,
-    ) -> anyhow::Result<()> {
-        if !self
-            .subscriptions_pool_liquidity_updates
-            .contains(&cmd.instrument_id)
-        {
-            self.subscriptions_pool_liquidity_updates
-                .insert(cmd.instrument_id);
-            self.client.subscribe_pool_liquidity_updates(cmd)?;
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "defi")]
-    /// Subscribes to pool fee collect events for the specified AMM pool.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the underlying client subscribe operation fails.
-    fn subscribe_pool_fee_collects(
-        &mut self,
-        cmd: &SubscribePoolFeeCollects,
-    ) -> anyhow::Result<()> {
-        if !self
-            .subscriptions_pool_fee_collects
-            .contains(&cmd.instrument_id)
-        {
-            self.subscriptions_pool_fee_collects
-                .insert(cmd.instrument_id);
-            self.client.subscribe_pool_fee_collects(cmd)?;
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "defi")]
-    /// Unsubscribes from pool definition updates for the specified AMM pool.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the underlying client unsubscribe operation fails.
-    fn unsubscribe_pool(&mut self, cmd: &UnsubscribePool) -> anyhow::Result<()> {
-        if self.subscriptions_pools.contains(&cmd.instrument_id) {
-            self.subscriptions_pools.remove(&cmd.instrument_id);
-            self.client.unsubscribe_pool(cmd)?;
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "defi")]
-    /// Unsubscribes from swap events for the specified AMM pool.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the underlying client unsubscribe operation fails.
-    fn unsubscribe_pool_swaps(&mut self, cmd: &UnsubscribePoolSwaps) -> anyhow::Result<()> {
-        if self.subscriptions_pool_swaps.contains(&cmd.instrument_id) {
-            self.subscriptions_pool_swaps.remove(&cmd.instrument_id);
-            self.client.unsubscribe_pool_swaps(cmd)?;
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "defi")]
-    /// Unsubscribes from pool liquidity update events for the specified AMM pool.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the underlying client unsubscribe operation fails.
-    fn unsubscribe_pool_liquidity_updates(
-        &mut self,
-        cmd: &UnsubscribePoolLiquidityUpdates,
-    ) -> anyhow::Result<()> {
-        if self
-            .subscriptions_pool_liquidity_updates
-            .contains(&cmd.instrument_id)
-        {
-            self.subscriptions_pool_liquidity_updates
-                .remove(&cmd.instrument_id);
-            self.client.unsubscribe_pool_liquidity_updates(cmd)?;
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "defi")]
-    /// Unsubscribes from pool fee collect events for the specified AMM pool.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the underlying client unsubscribe operation fails.
-    fn unsubscribe_pool_fee_collects(
-        &mut self,
-        cmd: &UnsubscribePoolFeeCollects,
-    ) -> anyhow::Result<()> {
-        if self
-            .subscriptions_pool_fee_collects
-            .contains(&cmd.instrument_id)
-        {
-            self.subscriptions_pool_fee_collects
-                .remove(&cmd.instrument_id);
-            self.client.unsubscribe_pool_fee_collects(cmd)?;
-        }
-        Ok(())
-    }
-
     // -- REQUEST HANDLERS ------------------------------------------------------------------------
 
     /// Sends a data request to the underlying client.
@@ -1385,7 +619,7 @@ impl DataClientAdapter {
     /// # Errors
     ///
     /// Returns an error if the client request fails.
-    pub fn request_data(&self, req: &RequestCustomData) -> anyhow::Result<()> {
+    pub fn request_data(&self, req: RequestCustomData) -> anyhow::Result<()> {
         self.client.request_data(req)
     }
 
@@ -1394,7 +628,7 @@ impl DataClientAdapter {
     /// # Errors
     ///
     /// Returns an error if the client fails to process the request.
-    pub fn request_instrument(&self, req: &RequestInstrument) -> anyhow::Result<()> {
+    pub fn request_instrument(&self, req: RequestInstrument) -> anyhow::Result<()> {
         self.client.request_instrument(req)
     }
 
@@ -1403,8 +637,17 @@ impl DataClientAdapter {
     /// # Errors
     ///
     /// Returns an error if the client fails to process the request.
-    pub fn request_instruments(&self, req: &RequestInstruments) -> anyhow::Result<()> {
+    pub fn request_instruments(&self, req: RequestInstruments) -> anyhow::Result<()> {
         self.client.request_instruments(req)
+    }
+
+    /// Sends a book snapshot request for a given instrument.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the client fails to process the book snapshot request.
+    pub fn request_book_snapshot(&self, req: RequestBookSnapshot) -> anyhow::Result<()> {
+        self.client.request_book_snapshot(req)
     }
 
     /// Sends a quotes request for a given instrument.
@@ -1412,7 +655,7 @@ impl DataClientAdapter {
     /// # Errors
     ///
     /// Returns an error if the client fails to process the quotes request.
-    pub fn request_quotes(&self, req: &RequestQuotes) -> anyhow::Result<()> {
+    pub fn request_quotes(&self, req: RequestQuotes) -> anyhow::Result<()> {
         self.client.request_quotes(req)
     }
 
@@ -1421,7 +664,7 @@ impl DataClientAdapter {
     /// # Errors
     ///
     /// Returns an error if the client fails to process the trades request.
-    pub fn request_trades(&self, req: &RequestTrades) -> anyhow::Result<()> {
+    pub fn request_trades(&self, req: RequestTrades) -> anyhow::Result<()> {
         self.client.request_trades(req)
     }
 
@@ -1430,7 +673,7 @@ impl DataClientAdapter {
     /// # Errors
     ///
     /// Returns an error if the client fails to process the bars request.
-    pub fn request_bars(&self, req: &RequestBars) -> anyhow::Result<()> {
+    pub fn request_bars(&self, req: RequestBars) -> anyhow::Result<()> {
         self.client.request_bars(req)
     }
 
@@ -1439,17 +682,7 @@ impl DataClientAdapter {
     /// # Errors
     ///
     /// Returns an error if the client fails to process the order book depths request.
-    pub fn request_book_depth(&self, req: &RequestBookDepth) -> anyhow::Result<()> {
+    pub fn request_book_depth(&self, req: RequestBookDepth) -> anyhow::Result<()> {
         self.client.request_book_depth(req)
     }
-}
-
-#[inline(always)]
-fn log_not_implemented<T: Debug>(msg: &T) {
-    log::warn!("{msg:?} – handler not implemented");
-}
-
-#[inline(always)]
-fn log_command_error<C: Debug, E: Display>(cmd: &C, e: &E) {
-    log::error!("Error on {cmd:?}: {e}");
 }

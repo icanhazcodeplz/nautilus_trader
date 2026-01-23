@@ -6,12 +6,15 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
-description.workspace = true
+description = "Data persistence and storage for the Nautilus trading engine"
 categories.workspace = true
 keywords.workspace = true
 documentation.workspace = true
 repository.workspace = true
 homepage.workspace = true
+
+[lints]
+workspace = true
 
 [lib]
 name = "nautilus_persistence"
@@ -19,6 +22,12 @@ crate-type = ["rlib", "staticlib", "cdylib"]
 
 [features]
 default = []
+cloud = [
+  "object_store/aws",
+  "object_store/azure",
+  "object_store/gcp",
+  "object_store/http",
+]
 extension-module = [
   "nautilus-core/extension-module",
   "nautilus-model/extension-module",
@@ -33,6 +42,7 @@ python = [
   "nautilus-model/python",
   "nautilus-serialization/python",
   "pyo3",
+  "cloud",
 ]
 high-precision = [
   "nautilus-model/high-precision",
@@ -44,16 +54,14 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
-nautilus-common = { workspace = true }
+nautilus-common = { workspace = true, features = ["live"] }
 nautilus-core = { workspace = true, features = ["ffi"] }
 nautilus-model = { workspace = true, features = ["stubs"] }
 nautilus-serialization = { workspace = true }
 
+ahash = { workspace = true }
 anyhow = { workspace = true }
 arrow = { workspace = true }
-binary-heap-plus = { workspace = true }
-chrono = { workspace = true }
-compare = { workspace = true }
 datafusion = { workspace = true }
 futures = { workspace = true }
 heck = { workspace = true }
@@ -88,8 +96,10 @@ harness = false
 name = "to_json"
 path = "bin/to_json.rs"
 required-features = ["python"]
+doc = false
 
 [[bin]]
 name = "to_parquet"
 path = "bin/to_parquet.rs"
 required-features = ["python"]
+doc = false

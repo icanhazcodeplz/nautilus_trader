@@ -1,5 +1,5 @@
 # -------------------------------------------------------------------------------------------------
-#  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+#  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 #  https://nautechsystems.io
 #
 #  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -26,10 +26,11 @@ from nautilus_trader.core.rust.model cimport AssetClass
 from nautilus_trader.core.rust.model cimport InstrumentClass
 from nautilus_trader.model.functions cimport asset_class_from_str
 from nautilus_trader.model.functions cimport asset_class_to_str
-from nautilus_trader.model.functions cimport instrument_class_from_str
 from nautilus_trader.model.functions cimport instrument_class_to_str
 from nautilus_trader.model.identifiers cimport InstrumentId
 from nautilus_trader.model.identifiers cimport Symbol
+from nautilus_trader.model.identifiers cimport generic_spread_id_to_list
+from nautilus_trader.model.identifiers cimport is_generic_spread_id
 from nautilus_trader.model.instruments.base cimport Instrument
 from nautilus_trader.model.objects cimport Currency
 from nautilus_trader.model.objects cimport Price
@@ -208,7 +209,7 @@ cdef class FuturesSpread(Instrument):
     @property
     def expiration_utc(self) -> pd.Timestamp:
         """
-        Return the contract expriation timestamp (UTC).
+        Return the contract expiration timestamp (UTC).
 
         Returns
         -------
@@ -217,6 +218,24 @@ cdef class FuturesSpread(Instrument):
 
         """
         return pd.Timestamp(self.expiration_ns, tz=pytz.utc)
+
+    cpdef list legs(self):
+        """
+        Return the list of leg tuples (instrument_id, ratio) for this spread.
+
+        If the instrument ID corresponds to a generic spread ID, returns the
+        parsed legs using generic_spread_id_to_list. Otherwise returns an empty list.
+
+        Returns
+        -------
+        list[tuple[InstrumentId, int]]
+            List of tuples containing (instrument_id, ratio) for each leg.
+
+        """
+        if is_generic_spread_id(self.id):
+            return generic_spread_id_to_list(self.id)
+
+        return [(self.id, 1)]
 
     @staticmethod
     cdef FuturesSpread from_dict_c(dict values):
@@ -294,10 +313,14 @@ cdef class FuturesSpread(Instrument):
             strategy_type=pyo3_instrument.strategy_type,
             activation_ns=pyo3_instrument.activation_ns,
             expiration_ns=pyo3_instrument.expiration_ns,
-            info=pyo3_instrument.info,
+            margin_init=Decimal(pyo3_instrument.margin_init),
+            margin_maint=Decimal(pyo3_instrument.margin_maint),
+            maker_fee=Decimal(pyo3_instrument.maker_fee),
+            taker_fee=Decimal(pyo3_instrument.taker_fee),
+            exchange=pyo3_instrument.exchange,
             ts_event=pyo3_instrument.ts_event,
             ts_init=pyo3_instrument.ts_init,
-            exchange=pyo3_instrument.exchange,
+            info=pyo3_instrument.info,
         )
 
     @staticmethod

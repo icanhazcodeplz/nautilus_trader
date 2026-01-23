@@ -82,7 +82,7 @@ To facilitate this, nearly all configuration and domain objects can be serialize
 
 ## Common core
 
-The common system core is utilized by all node [environment contexts](/concepts/architecture.md#environment-contexts) (`backtest`, `sandbox`, and `live`).
+The common system core is utilized by all node [environment contexts](architecture.md#environment-contexts) (`backtest`, `sandbox`, and `live`).
 User-defined `Actor`, `Strategy` and `ExecAlgorithm` components are managed consistently across these environment contexts.
 
 ## Backtesting
@@ -92,11 +92,7 @@ a higher level `BacktestNode` and `ParquetDataCatalog`, and then running the dat
 
 ## Live trading
 
-A `TradingNode` can ingest data and events from multiple data and execution clients.
-Live deployments can use both demo/paper trading accounts, or real accounts.
-
-For live trading, a `TradingNode` can ingest data and events from multiple data and execution clients.
-The platform supports both demo/paper trading accounts and real accounts. High performance can be achieved by running
+A `TradingNode` can ingest data and events from multiple data and execution clients, supporting both demo/paper trading accounts and real accounts. High performance can be achieved by running
 asynchronously on a single [event loop](https://docs.python.org/3/library/asyncio-eventloop.html),
 with the potential to further boost performance by leveraging the [uvloop](https://github.com/MagicStack/uvloop) implementation (available for Linux and macOS).
 
@@ -140,7 +136,7 @@ A valid UUID v4 consists of:
 
 Example: `2d89666b-1a1e-4a75-b193-4eb3b454c757`
 
-For the complete specification, refer to [RFC 4122: A Universally Unique IDentifier (UUID) URN Namespace](https://datatracker.ietf.org/doc/html/rfc4122).
+For the complete specification, refer to [RFC 4122: A Universally Unique Identifier (UUID) URN Namespace](https://datatracker.ietf.org/doc/html/rfc4122).
 
 ## Data types
 

@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use strum::{Display, EnumIter, EnumString};
 
 use crate::{
-    defi::{Pool, SharedChain, SharedDex},
+    defi::{PoolIdentifier, SharedChain, SharedDex},
     identifiers::InstrumentId,
 };
 
@@ -64,8 +64,10 @@ pub struct PoolLiquidityUpdate {
     pub chain: SharedChain,
     /// The decentralized exchange where the liquidity update was executed.
     pub dex: SharedDex,
-    /// The blockchain address of the pool smart contract.
-    pub pool_address: Address,
+    /// The instrument ID for this pool's trading pair.
+    pub instrument_id: InstrumentId,
+    /// The unique identifier for this pool (could be an address or other protocol-specific hex string).
+    pub pool_identifier: PoolIdentifier,
     /// The type of the pool liquidity update.
     pub kind: PoolLiquidityUpdateType,
     /// The blockchain block number where the liquidity update occurred.
@@ -103,7 +105,8 @@ impl PoolLiquidityUpdate {
     pub const fn new(
         chain: SharedChain,
         dex: SharedDex,
-        pool_address: Address,
+        instrument_id: InstrumentId,
+        pool_identifier: PoolIdentifier,
         kind: PoolLiquidityUpdateType,
         block: u64,
         transaction_hash: String,
@@ -121,7 +124,8 @@ impl PoolLiquidityUpdate {
         Self {
             chain,
             dex,
-            pool_address,
+            instrument_id,
+            pool_identifier,
             kind,
             block,
             transaction_hash,
@@ -138,11 +142,6 @@ impl PoolLiquidityUpdate {
             ts_init: timestamp,
         }
     }
-
-    /// Returns the instrument ID for this pool's trading pair.
-    pub fn instrument_id(&self) -> InstrumentId {
-        Pool::create_instrument_id(self.chain.name, &self.dex, &self.pool_address)
-    }
 }
 
 impl Display for PoolLiquidityUpdate {
@@ -150,11 +149,7 @@ impl Display for PoolLiquidityUpdate {
         write!(
             f,
             "PoolLiquidityUpdate(instrument_id={}, kind={}, amount0={}, amount1={}, liquidity={})",
-            self.instrument_id(),
-            self.kind,
-            self.amount0,
-            self.amount1,
-            self.position_liquidity
+            self.instrument_id, self.kind, self.amount0, self.amount1, self.position_liquidity
         )
     }
 }

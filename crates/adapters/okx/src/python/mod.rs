@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -17,6 +17,7 @@
 
 pub mod enums;
 pub mod http;
+pub mod models;
 pub mod urls;
 pub mod websocket;
 
@@ -32,6 +33,7 @@ pub fn okx(_: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<super::websocket::OKXWebSocketClient>()?;
     m.add_class::<super::websocket::messages::OKXWebSocketError>()?;
     m.add_class::<super::http::OKXHttpClient>()?;
+    m.add_class::<crate::http::models::OKXBalanceDetail>()?;
     m.add_class::<crate::common::enums::OKXInstrumentType>()?;
     m.add_class::<crate::common::enums::OKXContractType>()?;
     m.add_class::<crate::common::enums::OKXMarginMode>()?;

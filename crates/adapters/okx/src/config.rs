@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -15,8 +15,10 @@
 
 //! Configuration structures for the OKX adapter.
 
+use nautilus_model::identifiers::{AccountId, TraderId};
+
 use crate::common::{
-    enums::{OKXContractType, OKXInstrumentType, OKXVipLevel},
+    enums::{OKXContractType, OKXInstrumentType, OKXMarginMode, OKXVipLevel},
     urls::{
         get_http_base_url, get_ws_base_url_business, get_ws_base_url_private,
         get_ws_base_url_public,
@@ -36,16 +38,32 @@ pub struct OKXDataClientConfig {
     pub instrument_types: Vec<OKXInstrumentType>,
     /// Contract type filter applied to loaded instruments.
     pub contract_types: Option<Vec<OKXContractType>>,
+    /// Instrument families to load (e.g., "BTC-USD", "ETH-USD").
+    /// Required for OPTIONS. Optional for FUTURES/SWAP. Not applicable for SPOT/MARGIN.
+    pub instrument_families: Option<Vec<String>>,
     /// Optional override for the HTTP base URL.
     pub base_url_http: Option<String>,
     /// Optional override for the public WebSocket URL.
     pub base_url_ws_public: Option<String>,
     /// Optional override for the business WebSocket URL.
     pub base_url_ws_business: Option<String>,
+    /// Optional HTTP proxy URL.
+    pub http_proxy_url: Option<String>,
+    /// Optional WebSocket proxy URL.
+    ///
+    /// Note: WebSocket proxy support is not yet implemented. This field is reserved
+    /// for future functionality. Use `http_proxy_url` for REST API proxy support.
+    pub ws_proxy_url: Option<String>,
     /// When true the client will use OKX demo endpoints.
     pub is_demo: bool,
     /// Optional HTTP timeout in seconds.
     pub http_timeout_secs: Option<u64>,
+    /// Optional maximum retry attempts for requests.
+    pub max_retries: Option<u32>,
+    /// Optional initial retry delay in milliseconds.
+    pub retry_delay_initial_ms: Option<u64>,
+    /// Optional maximum retry delay in milliseconds.
+    pub retry_delay_max_ms: Option<u64>,
     /// Optional interval for refreshing instruments.
     pub update_instruments_interval_mins: Option<u64>,
     /// Optional VIP level that unlocks additional subscriptions.
@@ -60,11 +78,17 @@ impl Default for OKXDataClientConfig {
             api_passphrase: None,
             instrument_types: vec![OKXInstrumentType::Spot],
             contract_types: None,
+            instrument_families: None,
             base_url_http: None,
             base_url_ws_public: None,
             base_url_ws_business: None,
+            http_proxy_url: None,
+            ws_proxy_url: None,
             is_demo: false,
             http_timeout_secs: Some(60),
+            max_retries: Some(3),
+            retry_delay_initial_ms: Some(1_000),
+            retry_delay_max_ms: Some(10_000),
             update_instruments_interval_mins: Some(60),
             vip_level: None,
         }
@@ -78,16 +102,22 @@ impl OKXDataClientConfig {
         Self::default()
     }
 
-    /// Returns `true` when all API credential fields are populated.
+    /// Returns `true` when all API credential fields are available (in config or env vars).
     #[must_use]
     pub fn has_api_credentials(&self) -> bool {
-        self.api_key.is_some() && self.api_secret.is_some() && self.api_passphrase.is_some()
+        let has_key = self.api_key.is_some() || std::env::var("OKX_API_KEY").is_ok();
+        let has_secret = self.api_secret.is_some() || std::env::var("OKX_API_SECRET").is_ok();
+        let has_passphrase =
+            self.api_passphrase.is_some() || std::env::var("OKX_API_PASSPHRASE").is_ok();
+        has_key && has_secret && has_passphrase
     }
 
     /// Returns the HTTP base URL, falling back to the default when unset.
     #[must_use]
     pub fn http_base_url(&self) -> String {
-        self.base_url_http.clone().unwrap_or_else(get_http_base_url)
+        self.base_url_http
+            .clone()
+            .unwrap_or_else(|| get_http_base_url().to_string())
     }
 
     /// Returns the public WebSocket URL, respecting the demo flag and overrides.
@@ -95,7 +125,7 @@ impl OKXDataClientConfig {
     pub fn ws_public_url(&self) -> String {
         self.base_url_ws_public
             .clone()
-            .unwrap_or_else(|| get_ws_base_url_public(self.is_demo))
+            .unwrap_or_else(|| get_ws_base_url_public(self.is_demo).to_string())
     }
 
     /// Returns the business WebSocket URL, respecting the demo flag and overrides.
@@ -103,7 +133,7 @@ impl OKXDataClientConfig {
     pub fn ws_business_url(&self) -> String {
         self.base_url_ws_business
             .clone()
-            .unwrap_or_else(|| get_ws_base_url_business(self.is_demo))
+            .unwrap_or_else(|| get_ws_base_url_business(self.is_demo).to_string())
     }
 
     /// Returns `true` when the business WebSocket should be instantiated.
@@ -116,6 +146,10 @@ impl OKXDataClientConfig {
 /// Configuration for the OKX execution client.
 #[derive(Clone, Debug)]
 pub struct OKXExecClientConfig {
+    /// The trader ID for the client.
+    pub trader_id: TraderId,
+    /// The account ID for the client.
+    pub account_id: AccountId,
     /// Optional API key for authenticated endpoints.
     pub api_key: Option<String>,
     /// Optional API secret for authenticated endpoints.
@@ -126,12 +160,22 @@ pub struct OKXExecClientConfig {
     pub instrument_types: Vec<OKXInstrumentType>,
     /// Contract type filter applied to operations.
     pub contract_types: Option<Vec<OKXContractType>>,
+    /// Instrument families to load (e.g., "BTC-USD", "ETH-USD").
+    /// Required for OPTIONS. Optional for FUTURES/SWAP. Not applicable for SPOT/MARGIN.
+    pub instrument_families: Option<Vec<String>>,
     /// Optional override for the HTTP base URL.
     pub base_url_http: Option<String>,
     /// Optional override for the private WebSocket URL.
     pub base_url_ws_private: Option<String>,
     /// Optional override for the business WebSocket URL.
     pub base_url_ws_business: Option<String>,
+    /// Optional HTTP proxy URL.
+    pub http_proxy_url: Option<String>,
+    /// Optional WebSocket proxy URL.
+    ///
+    /// Note: WebSocket proxy support is not yet implemented. This field is reserved
+    /// for future functionality. Use `http_proxy_url` for REST API proxy support.
+    pub ws_proxy_url: Option<String>,
     /// When true the client will use OKX demo endpoints.
     pub is_demo: bool,
     /// Optional HTTP timeout in seconds.
@@ -146,19 +190,28 @@ pub struct OKXExecClientConfig {
     pub retry_delay_initial_ms: Option<u64>,
     /// Optional maximum retry delay in milliseconds.
     pub retry_delay_max_ms: Option<u64>,
+    /// Optional margin mode (CROSS or ISOLATED) for margin/derivative accounts.
+    pub margin_mode: Option<OKXMarginMode>,
+    /// Enables margin/leverage for SPOT trading when true.
+    pub use_spot_margin: bool,
 }
 
 impl Default for OKXExecClientConfig {
     fn default() -> Self {
         Self {
+            trader_id: TraderId::from("TRADER-001"),
+            account_id: AccountId::from("OKX-001"),
             api_key: None,
             api_secret: None,
             api_passphrase: None,
             instrument_types: vec![OKXInstrumentType::Spot],
             contract_types: None,
+            instrument_families: None,
             base_url_http: None,
             base_url_ws_private: None,
             base_url_ws_business: None,
+            http_proxy_url: None,
+            ws_proxy_url: None,
             is_demo: false,
             http_timeout_secs: Some(60),
             use_fills_channel: false,
@@ -166,6 +219,8 @@ impl Default for OKXExecClientConfig {
             max_retries: Some(3),
             retry_delay_initial_ms: Some(1_000),
             retry_delay_max_ms: Some(10_000),
+            margin_mode: None,
+            use_spot_margin: false,
         }
     }
 }
@@ -177,16 +232,22 @@ impl OKXExecClientConfig {
         Self::default()
     }
 
-    /// Returns `true` when all API credential fields are populated.
+    /// Returns `true` when all API credential fields are available (in config or env vars).
     #[must_use]
     pub fn has_api_credentials(&self) -> bool {
-        self.api_key.is_some() && self.api_secret.is_some() && self.api_passphrase.is_some()
+        let has_key = self.api_key.is_some() || std::env::var("OKX_API_KEY").is_ok();
+        let has_secret = self.api_secret.is_some() || std::env::var("OKX_API_SECRET").is_ok();
+        let has_passphrase =
+            self.api_passphrase.is_some() || std::env::var("OKX_API_PASSPHRASE").is_ok();
+        has_key && has_secret && has_passphrase
     }
 
     /// Returns the HTTP base URL, falling back to the default when unset.
     #[must_use]
     pub fn http_base_url(&self) -> String {
-        self.base_url_http.clone().unwrap_or_else(get_http_base_url)
+        self.base_url_http
+            .clone()
+            .unwrap_or_else(|| get_http_base_url().to_string())
     }
 
     /// Returns the private WebSocket URL, respecting the demo flag and overrides.
@@ -194,7 +255,7 @@ impl OKXExecClientConfig {
     pub fn ws_private_url(&self) -> String {
         self.base_url_ws_private
             .clone()
-            .unwrap_or_else(|| get_ws_base_url_private(self.is_demo))
+            .unwrap_or_else(|| get_ws_base_url_private(self.is_demo).to_string())
     }
 
     /// Returns the business WebSocket URL, respecting the demo flag and overrides.
@@ -202,6 +263,6 @@ impl OKXExecClientConfig {
     pub fn ws_business_url(&self) -> String {
         self.base_url_ws_business
             .clone()
-            .unwrap_or_else(|| get_ws_base_url_business(self.is_demo))
+            .unwrap_or_else(|| get_ws_base_url_business(self.is_demo).to_string())
     }
 }

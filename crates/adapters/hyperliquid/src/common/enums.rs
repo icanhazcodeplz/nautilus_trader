@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -13,9 +13,94 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
-use nautilus_model::enums::{AggressorSide, OrderSide, OrderStatus};
+use std::{fmt::Display, str::FromStr};
+
+use nautilus_model::enums::{AggressorSide, OrderSide, OrderStatus, OrderType, TriggerType};
 use serde::{Deserialize, Serialize};
 use strum::{AsRefStr, Display, EnumIter, EnumString};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum HyperliquidBarInterval {
+    #[serde(rename = "1m")]
+    OneMinute,
+    #[serde(rename = "3m")]
+    ThreeMinutes,
+    #[serde(rename = "5m")]
+    FiveMinutes,
+    #[serde(rename = "15m")]
+    FifteenMinutes,
+    #[serde(rename = "30m")]
+    ThirtyMinutes,
+    #[serde(rename = "1h")]
+    OneHour,
+    #[serde(rename = "2h")]
+    TwoHours,
+    #[serde(rename = "4h")]
+    FourHours,
+    #[serde(rename = "8h")]
+    EightHours,
+    #[serde(rename = "12h")]
+    TwelveHours,
+    #[serde(rename = "1d")]
+    OneDay,
+    #[serde(rename = "3d")]
+    ThreeDays,
+    #[serde(rename = "1w")]
+    OneWeek,
+    #[serde(rename = "1M")]
+    OneMonth,
+}
+
+impl HyperliquidBarInterval {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::OneMinute => "1m",
+            Self::ThreeMinutes => "3m",
+            Self::FiveMinutes => "5m",
+            Self::FifteenMinutes => "15m",
+            Self::ThirtyMinutes => "30m",
+            Self::OneHour => "1h",
+            Self::TwoHours => "2h",
+            Self::FourHours => "4h",
+            Self::EightHours => "8h",
+            Self::TwelveHours => "12h",
+            Self::OneDay => "1d",
+            Self::ThreeDays => "3d",
+            Self::OneWeek => "1w",
+            Self::OneMonth => "1M",
+        }
+    }
+}
+
+impl FromStr for HyperliquidBarInterval {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "1m" => Ok(Self::OneMinute),
+            "3m" => Ok(Self::ThreeMinutes),
+            "5m" => Ok(Self::FiveMinutes),
+            "15m" => Ok(Self::FifteenMinutes),
+            "30m" => Ok(Self::ThirtyMinutes),
+            "1h" => Ok(Self::OneHour),
+            "2h" => Ok(Self::TwoHours),
+            "4h" => Ok(Self::FourHours),
+            "8h" => Ok(Self::EightHours),
+            "12h" => Ok(Self::TwelveHours),
+            "1d" => Ok(Self::OneDay),
+            "3d" => Ok(Self::ThreeDays),
+            "1w" => Ok(Self::OneWeek),
+            "1M" => Ok(Self::OneMonth),
+            _ => anyhow::bail!("Invalid Hyperliquid bar interval: {s}"),
+        }
+    }
+}
+
+impl Display for HyperliquidBarInterval {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
 
 /// Represents the order side (Buy or Sell).
 #[derive(
@@ -177,7 +262,7 @@ pub enum HyperliquidTriggerPriceType {
     Oracle,
 }
 
-impl From<HyperliquidTriggerPriceType> for nautilus_model::enums::TriggerType {
+impl From<HyperliquidTriggerPriceType> for TriggerType {
     fn from(value: HyperliquidTriggerPriceType) -> Self {
         match value {
             HyperliquidTriggerPriceType::Last => Self::LastPrice,
@@ -187,12 +272,12 @@ impl From<HyperliquidTriggerPriceType> for nautilus_model::enums::TriggerType {
     }
 }
 
-impl From<nautilus_model::enums::TriggerType> for HyperliquidTriggerPriceType {
-    fn from(value: nautilus_model::enums::TriggerType) -> Self {
+impl From<TriggerType> for HyperliquidTriggerPriceType {
+    fn from(value: TriggerType) -> Self {
         match value {
-            nautilus_model::enums::TriggerType::LastPrice => Self::Last,
-            nautilus_model::enums::TriggerType::MarkPrice => Self::Mark,
-            nautilus_model::enums::TriggerType::IndexPrice => Self::Oracle,
+            TriggerType::LastPrice => Self::Last,
+            TriggerType::MarkPrice => Self::Mark,
+            TriggerType::IndexPrice => Self::Oracle,
             _ => Self::Last, // Default fallback
         }
     }
@@ -237,7 +322,7 @@ pub enum HyperliquidConditionalOrderType {
     TrailingStopLimit,
 }
 
-impl From<HyperliquidConditionalOrderType> for nautilus_model::enums::OrderType {
+impl From<HyperliquidConditionalOrderType> for OrderType {
     fn from(value: HyperliquidConditionalOrderType) -> Self {
         match value {
             HyperliquidConditionalOrderType::StopMarket => Self::StopMarket,
@@ -250,16 +335,16 @@ impl From<HyperliquidConditionalOrderType> for nautilus_model::enums::OrderType 
     }
 }
 
-impl From<nautilus_model::enums::OrderType> for HyperliquidConditionalOrderType {
-    fn from(value: nautilus_model::enums::OrderType) -> Self {
+impl From<OrderType> for HyperliquidConditionalOrderType {
+    fn from(value: OrderType) -> Self {
         match value {
-            nautilus_model::enums::OrderType::StopMarket => Self::StopMarket,
-            nautilus_model::enums::OrderType::StopLimit => Self::StopLimit,
-            nautilus_model::enums::OrderType::MarketIfTouched => Self::TakeProfitMarket,
-            nautilus_model::enums::OrderType::LimitIfTouched => Self::TakeProfitLimit,
-            nautilus_model::enums::OrderType::TrailingStopMarket => Self::TrailingStopMarket,
-            nautilus_model::enums::OrderType::TrailingStopLimit => Self::TrailingStopLimit,
-            _ => panic!("Unsupported OrderType for conditional orders: {:?}", value),
+            OrderType::StopMarket => Self::StopMarket,
+            OrderType::StopLimit => Self::StopLimit,
+            OrderType::MarketIfTouched => Self::TakeProfitMarket,
+            OrderType::LimitIfTouched => Self::TakeProfitLimit,
+            OrderType::TrailingStopMarket => Self::TrailingStopMarket,
+            OrderType::TrailingStopLimit => Self::TrailingStopLimit,
+            _ => panic!("Unsupported OrderType for conditional orders: {value:?}"),
         }
     }
 }
@@ -345,12 +430,42 @@ impl From<bool> for HyperliquidLiquidityFlag {
     ///
     /// `true` (crossed) -> Taker, `false` -> Maker
     fn from(crossed: bool) -> Self {
-        if crossed {
-            HyperliquidLiquidityFlag::Taker
-        } else {
-            HyperliquidLiquidityFlag::Maker
-        }
+        if crossed { Self::Taker } else { Self::Maker }
     }
+}
+
+/// Hyperliquid liquidation method.
+#[derive(
+    Clone, Copy, Debug, Display, PartialEq, Eq, Hash, Serialize, Deserialize, AsRefStr, EnumString,
+)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum HyperliquidLiquidationMethod {
+    Market,
+    Backstop,
+}
+
+/// Hyperliquid position type/mode.
+#[derive(
+    Clone, Copy, Debug, Display, PartialEq, Eq, Hash, Serialize, Deserialize, AsRefStr, EnumString,
+)]
+#[serde(rename_all = "camelCase")]
+#[strum(serialize_all = "camelCase")]
+pub enum HyperliquidPositionType {
+    OneWay,
+}
+
+/// Hyperliquid TWAP order status.
+#[derive(
+    Clone, Copy, Debug, Display, PartialEq, Eq, Hash, Serialize, Deserialize, AsRefStr, EnumString,
+)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum HyperliquidTwapStatus {
+    Activated,
+    Terminated,
+    Finished,
+    Error,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -395,57 +510,81 @@ pub enum HyperliquidRejectCode {
 }
 
 impl HyperliquidRejectCode {
+    /// Parse reject code from Hyperliquid API error message.
     pub fn from_api_error(error_message: &str) -> Self {
-        // TODO: Research Hyperliquid's actual error response format
-        // Check if they provide:
-        // - Numeric error codes
-        // - Error type/category fields
-        // - Structured error objects
-        // If so, parse those instead of string matching
-
-        // For now, we still fall back to string matching, but this method provides
-        // a clear migration path when better error information becomes available
         Self::from_error_string_internal(error_message)
     }
 
-    /// Internal string parsing method - not exposed publicly.
-    ///
-    /// This encapsulates the fragile string matching logic and makes it clear
-    /// that it should only be used internally until we have better error handling.
     fn from_error_string_internal(error: &str) -> Self {
-        match error {
-            s if s.contains("tick size") => HyperliquidRejectCode::Tick,
-            s if s.contains("minimum value of $10") => HyperliquidRejectCode::MinTradeNtl,
-            s if s.contains("minimum value of 10") => HyperliquidRejectCode::MinTradeSpotNtl,
-            s if s.contains("Insufficient margin") => HyperliquidRejectCode::PerpMargin,
-            s if s.contains("Reduce only order would increase") => {
-                HyperliquidRejectCode::ReduceOnly
+        // Normalize: trim whitespace and convert to lowercase for robust matching
+        let normalized = error.trim().to_lowercase();
+
+        match normalized.as_str() {
+            // Tick size validation errors
+            s if s.contains("tick size") => Self::Tick,
+
+            // Minimum notional value errors (perp: $10, spot: 10 USDC)
+            s if s.contains("minimum value of $10") => Self::MinTradeNtl,
+            s if s.contains("minimum value of 10") => Self::MinTradeSpotNtl,
+
+            // Margin errors
+            s if s.contains("insufficient margin") => Self::PerpMargin,
+
+            // Reduce-only order violations
+            s if s.contains("reduce only order would increase")
+                || s.contains("reduce-only order would increase") =>
+            {
+                Self::ReduceOnly
             }
-            s if s.contains("Post only order would have immediately matched") => {
-                HyperliquidRejectCode::BadAloPx
+
+            // Post-only order matching errors
+            s if s.contains("post only order would have immediately matched")
+                || s.contains("post-only order would have immediately matched") =>
+            {
+                Self::BadAloPx
             }
-            s if s.contains("could not immediately match") => HyperliquidRejectCode::IocCancel,
-            s if s.contains("Invalid TP/SL price") => HyperliquidRejectCode::BadTriggerPx,
-            s if s.contains("No liquidity available for market order") => {
-                HyperliquidRejectCode::MarketOrderNoLiquidity
+
+            // IOC (Immediate-or-Cancel) order errors
+            s if s.contains("could not immediately match") => Self::IocCancel,
+
+            // TP/SL trigger price errors
+            s if s.contains("invalid tp/sl price") => Self::BadTriggerPx,
+
+            // Market order liquidity errors
+            s if s.contains("no liquidity available for market order") => {
+                Self::MarketOrderNoLiquidity
             }
-            s if s.contains("PositionIncreaseAtOpenInterestCap") => {
-                HyperliquidRejectCode::PositionIncreaseAtOpenInterestCap
+
+            // Open interest cap errors (various types)
+            // Note: These patterns are case-insensitive due to normalization
+            s if s.contains("positionincreaseatopeninterestcap") => {
+                Self::PositionIncreaseAtOpenInterestCap
             }
-            s if s.contains("PositionFlipAtOpenInterestCap") => {
-                HyperliquidRejectCode::PositionFlipAtOpenInterestCap
+            s if s.contains("positionflipatopeninterestcap") => Self::PositionFlipAtOpenInterestCap,
+            s if s.contains("tooaggressiveatopeninterestcap") => {
+                Self::TooAggressiveAtOpenInterestCap
             }
-            s if s.contains("TooAggressiveAtOpenInterestCap") => {
-                HyperliquidRejectCode::TooAggressiveAtOpenInterestCap
+            s if s.contains("openinterestincrease") => Self::OpenInterestIncrease,
+
+            // Spot balance errors
+            s if s.contains("insufficient spot balance") => Self::InsufficientSpotBalance,
+
+            // Oracle errors
+            s if s.contains("oracle") => Self::Oracle,
+
+            // Position size limit errors
+            s if s.contains("max position") => Self::PerpMaxPosition,
+
+            // Missing order errors (cancel/modify non-existent order)
+            s if s.contains("missingorder") => Self::MissingOrder,
+
+            // Unknown error - log for monitoring and return with original message
+            _ => {
+                log::warn!(
+                    "Unknown Hyperliquid error pattern (consider updating error parsing): {error}" // Use original error, not normalized
+                );
+                Self::Unknown(error.to_string())
             }
-            s if s.contains("OpenInterestIncrease") => HyperliquidRejectCode::OpenInterestIncrease,
-            s if s.contains("Insufficient spot balance") => {
-                HyperliquidRejectCode::InsufficientSpotBalance
-            }
-            s if s.contains("Oracle") => HyperliquidRejectCode::Oracle,
-            s if s.contains("max position") => HyperliquidRejectCode::PerpMaxPosition,
-            s if s.contains("MissingOrder") => HyperliquidRejectCode::MissingOrder,
-            s => HyperliquidRejectCode::Unknown(s.to_string()),
         }
     }
 
@@ -523,9 +662,159 @@ pub fn hyperliquid_status_to_order_status(status: &str) -> OrderStatus {
     }
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// Tests
-////////////////////////////////////////////////////////////////////////////////
+/// Represents the direction of a fill (open/close position).
+///
+/// For perpetuals:
+/// - OpenLong: Opening a long position
+/// - OpenShort: Opening a short position
+/// - CloseLong: Closing an existing long position
+/// - CloseShort: Closing an existing short position
+///
+/// For spot:
+/// - Sell: Selling an asset
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Display,
+    PartialEq,
+    Eq,
+    Hash,
+    AsRefStr,
+    EnumIter,
+    EnumString,
+    Serialize,
+    Deserialize,
+)]
+#[serde(rename_all = "PascalCase")]
+#[strum(serialize_all = "PascalCase")]
+pub enum HyperliquidFillDirection {
+    /// Opening a long position.
+    #[serde(rename = "Open Long")]
+    #[strum(serialize = "Open Long")]
+    OpenLong,
+    /// Opening a short position.
+    #[serde(rename = "Open Short")]
+    #[strum(serialize = "Open Short")]
+    OpenShort,
+    /// Closing an existing long position.
+    #[serde(rename = "Close Long")]
+    #[strum(serialize = "Close Long")]
+    CloseLong,
+    /// Closing an existing short position.
+    #[serde(rename = "Close Short")]
+    #[strum(serialize = "Close Short")]
+    CloseShort,
+    /// Selling an asset (spot only).
+    Sell,
+}
+
+/// Represents info request types for the Hyperliquid info endpoint.
+///
+/// These correspond to the "type" field in info endpoint requests.
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Display,
+    PartialEq,
+    Eq,
+    Hash,
+    AsRefStr,
+    EnumIter,
+    EnumString,
+    Serialize,
+    Deserialize,
+)]
+#[serde(rename_all = "camelCase")]
+#[strum(serialize_all = "camelCase")]
+pub enum HyperliquidInfoRequestType {
+    /// Get metadata about available markets.
+    Meta,
+    /// Get spot metadata (tokens and pairs).
+    SpotMeta,
+    /// Get metadata with asset contexts (for price precision).
+    MetaAndAssetCtxs,
+    /// Get spot metadata with asset contexts.
+    SpotMetaAndAssetCtxs,
+    /// Get L2 order book for a coin.
+    L2Book,
+    /// Get user fills.
+    UserFills,
+    /// Get order status for a user.
+    OrderStatus,
+    /// Get all open orders for a user.
+    OpenOrders,
+    /// Get frontend open orders (includes more detail).
+    FrontendOpenOrders,
+    /// Get user state (balances, positions, margin).
+    ClearinghouseState,
+    /// Get candle/bar data.
+    CandleSnapshot,
+}
+
+impl HyperliquidInfoRequestType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Meta => "meta",
+            Self::SpotMeta => "spotMeta",
+            Self::MetaAndAssetCtxs => "metaAndAssetCtxs",
+            Self::SpotMetaAndAssetCtxs => "spotMetaAndAssetCtxs",
+            Self::L2Book => "l2Book",
+            Self::UserFills => "userFills",
+            Self::OrderStatus => "orderStatus",
+            Self::OpenOrders => "openOrders",
+            Self::FrontendOpenOrders => "frontendOpenOrders",
+            Self::ClearinghouseState => "clearinghouseState",
+            Self::CandleSnapshot => "candleSnapshot",
+        }
+    }
+}
+
+/// Hyperliquid product type.
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Display,
+    PartialEq,
+    Eq,
+    Hash,
+    AsRefStr,
+    EnumIter,
+    EnumString,
+    Serialize,
+    Deserialize,
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.hyperliquid")
+)]
+#[serde(rename_all = "UPPERCASE")]
+#[strum(serialize_all = "UPPERCASE")]
+pub enum HyperliquidProductType {
+    /// Perpetual futures.
+    Perp,
+    /// Spot markets.
+    Spot,
+}
+
+impl HyperliquidProductType {
+    /// Extract product type from an instrument symbol.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if symbol doesn't match expected format.
+    pub fn from_symbol(symbol: &str) -> anyhow::Result<Self> {
+        if symbol.ends_with("-PERP") {
+            Ok(Self::Perp)
+        } else if symbol.ends_with("-SPOT") {
+            Ok(Self::Spot)
+        } else {
+            anyhow::bail!("Invalid Hyperliquid symbol format: {symbol}")
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -770,10 +1059,6 @@ mod tests {
         );
     }
 
-    // ========================================================================
-    // Conditional Order Tests
-    // ========================================================================
-
     #[rstest]
     fn test_hyperliquid_tpsl_serialization() {
         let tp = HyperliquidTpSl::Tp;
@@ -858,6 +1143,211 @@ mod tests {
             OrderType::from(HyperliquidConditionalOrderType::TrailingStopMarket),
             OrderType::TrailingStopMarket
         );
+    }
+
+    // Tests for error parsing with real and simulated error messages
+    mod error_parsing_tests {
+        use super::*;
+
+        #[rstest]
+        fn test_parse_tick_size_error() {
+            let error = "Price must be divisible by tick size 0.01";
+            let code = HyperliquidRejectCode::from_api_error(error);
+            assert_eq!(code, HyperliquidRejectCode::Tick);
+        }
+
+        #[rstest]
+        fn test_parse_tick_size_error_case_insensitive() {
+            let error = "PRICE MUST BE DIVISIBLE BY TICK SIZE 0.01";
+            let code = HyperliquidRejectCode::from_api_error(error);
+            assert_eq!(code, HyperliquidRejectCode::Tick);
+        }
+
+        #[rstest]
+        fn test_parse_min_notional_perp() {
+            let error = "Order must have minimum value of $10";
+            let code = HyperliquidRejectCode::from_api_error(error);
+            assert_eq!(code, HyperliquidRejectCode::MinTradeNtl);
+        }
+
+        #[rstest]
+        fn test_parse_min_notional_spot() {
+            let error = "Order must have minimum value of 10 USDC";
+            let code = HyperliquidRejectCode::from_api_error(error);
+            assert_eq!(code, HyperliquidRejectCode::MinTradeSpotNtl);
+        }
+
+        #[rstest]
+        fn test_parse_insufficient_margin() {
+            let error = "Insufficient margin to place order";
+            let code = HyperliquidRejectCode::from_api_error(error);
+            assert_eq!(code, HyperliquidRejectCode::PerpMargin);
+        }
+
+        #[rstest]
+        fn test_parse_insufficient_margin_case_variations() {
+            let variations = vec![
+                "insufficient margin to place order",
+                "INSUFFICIENT MARGIN TO PLACE ORDER",
+                "  Insufficient margin to place order  ", // with whitespace
+            ];
+
+            for error in variations {
+                let code = HyperliquidRejectCode::from_api_error(error);
+                assert_eq!(code, HyperliquidRejectCode::PerpMargin);
+            }
+        }
+
+        #[rstest]
+        fn test_parse_reduce_only_violation() {
+            let error = "Reduce only order would increase position";
+            let code = HyperliquidRejectCode::from_api_error(error);
+            assert_eq!(code, HyperliquidRejectCode::ReduceOnly);
+        }
+
+        #[rstest]
+        fn test_parse_reduce_only_with_hyphen() {
+            let error = "Reduce-only order would increase position";
+            let code = HyperliquidRejectCode::from_api_error(error);
+            assert_eq!(code, HyperliquidRejectCode::ReduceOnly);
+        }
+
+        #[rstest]
+        fn test_parse_post_only_match() {
+            let error = "Post only order would have immediately matched";
+            let code = HyperliquidRejectCode::from_api_error(error);
+            assert_eq!(code, HyperliquidRejectCode::BadAloPx);
+        }
+
+        #[rstest]
+        fn test_parse_post_only_with_hyphen() {
+            let error = "Post-only order would have immediately matched";
+            let code = HyperliquidRejectCode::from_api_error(error);
+            assert_eq!(code, HyperliquidRejectCode::BadAloPx);
+        }
+
+        #[rstest]
+        fn test_parse_ioc_no_match() {
+            let error = "Order could not immediately match";
+            let code = HyperliquidRejectCode::from_api_error(error);
+            assert_eq!(code, HyperliquidRejectCode::IocCancel);
+        }
+
+        #[rstest]
+        fn test_parse_invalid_trigger_price() {
+            let error = "Invalid TP/SL price";
+            let code = HyperliquidRejectCode::from_api_error(error);
+            assert_eq!(code, HyperliquidRejectCode::BadTriggerPx);
+        }
+
+        #[rstest]
+        fn test_parse_no_liquidity() {
+            let error = "No liquidity available for market order";
+            let code = HyperliquidRejectCode::from_api_error(error);
+            assert_eq!(code, HyperliquidRejectCode::MarketOrderNoLiquidity);
+        }
+
+        #[rstest]
+        fn test_parse_position_increase_at_oi_cap() {
+            let error = "PositionIncreaseAtOpenInterestCap";
+            let code = HyperliquidRejectCode::from_api_error(error);
+            assert_eq!(
+                code,
+                HyperliquidRejectCode::PositionIncreaseAtOpenInterestCap
+            );
+        }
+
+        #[rstest]
+        fn test_parse_position_flip_at_oi_cap() {
+            let error = "PositionFlipAtOpenInterestCap";
+            let code = HyperliquidRejectCode::from_api_error(error);
+            assert_eq!(code, HyperliquidRejectCode::PositionFlipAtOpenInterestCap);
+        }
+
+        #[rstest]
+        fn test_parse_too_aggressive_at_oi_cap() {
+            let error = "TooAggressiveAtOpenInterestCap";
+            let code = HyperliquidRejectCode::from_api_error(error);
+            assert_eq!(code, HyperliquidRejectCode::TooAggressiveAtOpenInterestCap);
+        }
+
+        #[rstest]
+        fn test_parse_open_interest_increase() {
+            let error = "OpenInterestIncrease";
+            let code = HyperliquidRejectCode::from_api_error(error);
+            assert_eq!(code, HyperliquidRejectCode::OpenInterestIncrease);
+        }
+
+        #[rstest]
+        fn test_parse_insufficient_spot_balance() {
+            let error = "Insufficient spot balance";
+            let code = HyperliquidRejectCode::from_api_error(error);
+            assert_eq!(code, HyperliquidRejectCode::InsufficientSpotBalance);
+        }
+
+        #[rstest]
+        fn test_parse_oracle_error() {
+            let error = "Oracle price unavailable";
+            let code = HyperliquidRejectCode::from_api_error(error);
+            assert_eq!(code, HyperliquidRejectCode::Oracle);
+        }
+
+        #[rstest]
+        fn test_parse_max_position() {
+            let error = "Exceeds max position size";
+            let code = HyperliquidRejectCode::from_api_error(error);
+            assert_eq!(code, HyperliquidRejectCode::PerpMaxPosition);
+        }
+
+        #[rstest]
+        fn test_parse_missing_order() {
+            let error = "MissingOrder";
+            let code = HyperliquidRejectCode::from_api_error(error);
+            assert_eq!(code, HyperliquidRejectCode::MissingOrder);
+        }
+
+        #[rstest]
+        fn test_parse_unknown_error() {
+            let error = "This is a completely new error message";
+            let code = HyperliquidRejectCode::from_api_error(error);
+            assert!(matches!(code, HyperliquidRejectCode::Unknown(_)));
+
+            // Verify the original message is preserved
+            if let HyperliquidRejectCode::Unknown(msg) = code {
+                assert_eq!(msg, error);
+            }
+        }
+
+        #[rstest]
+        fn test_parse_empty_error() {
+            let error = "";
+            let code = HyperliquidRejectCode::from_api_error(error);
+            assert!(matches!(code, HyperliquidRejectCode::Unknown(_)));
+        }
+
+        #[rstest]
+        fn test_parse_whitespace_only() {
+            let error = "   ";
+            let code = HyperliquidRejectCode::from_api_error(error);
+            assert!(matches!(code, HyperliquidRejectCode::Unknown(_)));
+        }
+
+        #[rstest]
+        fn test_normalization_preserves_original_in_unknown() {
+            let error = "  UNKNOWN ERROR MESSAGE  ";
+            let code = HyperliquidRejectCode::from_api_error(error);
+
+            // Should be Unknown, and should contain original message (not normalized)
+            if let HyperliquidRejectCode::Unknown(msg) = code {
+                assert_eq!(msg, error);
+            } else {
+                panic!("Expected Unknown variant");
+            }
+        }
+    }
+
+    #[rstest]
+    fn test_conditional_order_type_round_trip() {
         assert_eq!(
             OrderType::from(HyperliquidConditionalOrderType::TrailingStopLimit),
             OrderType::TrailingStopLimit

@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -13,55 +13,96 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
+use std::fmt::Display;
+
+use alloy_primitives::Address;
 use rust_decimal::Decimal;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use ustr::Ustr;
 
 use crate::common::enums::{
-    HyperliquidSide, HyperliquidTpSl, HyperliquidTrailingOffsetType, HyperliquidTriggerPriceType,
+    HyperliquidFillDirection, HyperliquidOrderStatus as HyperliquidOrderStatusEnum,
+    HyperliquidPositionType, HyperliquidSide, HyperliquidTpSl, HyperliquidTrailingOffsetType,
+    HyperliquidTriggerPriceType,
 };
 
-/// Represents metadata about available markets from `POST /info`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HyperliquidMeta {
-    #[serde(default)]
-    pub universe: Vec<HyperliquidAssetInfo>,
+/// Response from candleSnapshot endpoint (returns array directly).
+pub type HyperliquidCandleSnapshot = Vec<HyperliquidCandle>;
+
+/// A 128-bit client order ID represented as a hex string with `0x` prefix.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct Cloid(pub [u8; 16]);
+
+impl Cloid {
+    /// Creates a new `Cloid` from a hex string.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the string is not a valid 128-bit hex with `0x` prefix.
+    pub fn from_hex<S: AsRef<str>>(s: S) -> Result<Self, String> {
+        let hex_str = s.as_ref();
+        let without_prefix = hex_str
+            .strip_prefix("0x")
+            .ok_or("CLOID must start with '0x'")?;
+
+        if without_prefix.len() != 32 {
+            return Err("CLOID must be exactly 32 hex characters (128 bits)".to_string());
+        }
+
+        let mut bytes = [0u8; 16];
+        for i in 0..16 {
+            let byte_str = &without_prefix[i * 2..i * 2 + 2];
+            bytes[i] = u8::from_str_radix(byte_str, 16)
+                .map_err(|_| "Invalid hex character in CLOID".to_string())?;
+        }
+
+        Ok(Self(bytes))
+    }
+
+    /// Converts the CLOID to a hex string with `0x` prefix.
+    pub fn to_hex(&self) -> String {
+        let mut result = String::with_capacity(34);
+        result.push_str("0x");
+        for byte in &self.0 {
+            result.push_str(&format!("{byte:02x}"));
+        }
+        result
+    }
 }
 
-/// Represents a single candle (OHLCV bar) from Hyperliquid.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HyperliquidCandle {
-    /// Candle open timestamp in milliseconds.
-    #[serde(rename = "t")]
-    pub timestamp: u64,
-    /// Open price.
-    #[serde(rename = "o")]
-    pub open: String,
-    /// High price.
-    #[serde(rename = "h")]
-    pub high: String,
-    /// Low price.
-    #[serde(rename = "l")]
-    pub low: String,
-    /// Close price.
-    #[serde(rename = "c")]
-    pub close: String,
-    /// Volume.
-    #[serde(rename = "v")]
-    pub volume: String,
-    /// Number of trades (optional).
-    #[serde(rename = "n", default)]
-    pub num_trades: Option<u64>,
+impl Display for Cloid {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_hex())
+    }
 }
 
-/// Response from candleSnapshot endpoint.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HyperliquidCandleSnapshot {
-    /// Array of candles.
-    #[serde(default)]
-    pub data: Vec<HyperliquidCandle>,
+impl Serialize for Cloid {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_hex())
+    }
 }
+
+impl<'de> Deserialize<'de> for Cloid {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Self::from_hex(&s).map_err(serde::de::Error::custom)
+    }
+}
+
+/// Asset ID type for Hyperliquid.
+///
+/// For perpetuals, this is the index in `meta.universe`.
+/// For spot trading, this is `10000 + index` from `spotMeta.universe`.
+pub type AssetId = u32;
+
+/// Order ID assigned by Hyperliquid.
+pub type OrderId = u64;
 
 /// Represents asset information from the meta endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -147,6 +188,16 @@ pub struct SpotMeta {
     pub universe: Vec<SpotPair>,
 }
 
+/// EVM contract information for a spot token.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct EvmContract {
+    /// EVM contract address (20 bytes).
+    pub address: Address,
+    /// Extra wei decimals for EVM precision (can be negative).
+    pub evm_extra_wei_decimals: i32,
+}
+
 /// A single spot token from the tokens list.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -163,12 +214,15 @@ pub struct SpotToken {
     pub token_id: String,
     /// Whether this is the canonical token.
     pub is_canonical: bool,
-    /// Optional EVM contract address.
+    /// Optional EVM contract information.
     #[serde(default)]
-    pub evm_contract: Option<String>,
+    pub evm_contract: Option<EvmContract>,
     /// Optional full name.
     #[serde(default)]
     pub full_name: Option<String>,
+    /// Optional deployer trading fee share.
+    #[serde(default)]
+    pub deployer_trading_fee_share: Option<String>,
 }
 
 /// A single spot pair from the universe.
@@ -261,10 +315,45 @@ pub struct HyperliquidLevel {
 }
 
 /// Represents user fills response from `POST /info`.
+///
+/// The Hyperliquid API returns fills directly as an array, not wrapped in an object.
+pub type HyperliquidFills = Vec<HyperliquidFill>;
+
+/// Represents metadata about available markets from `POST /info`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HyperliquidFills {
+pub struct HyperliquidMeta {
     #[serde(default)]
-    pub fills: Vec<HyperliquidFill>,
+    pub universe: Vec<HyperliquidAssetInfo>,
+}
+
+/// Represents a single candle (OHLCV bar) from Hyperliquid.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HyperliquidCandle {
+    /// Candle start timestamp in milliseconds.
+    #[serde(rename = "t")]
+    pub timestamp: u64,
+    /// Candle end timestamp in milliseconds.
+    #[serde(rename = "T")]
+    pub end_timestamp: u64,
+    /// Open price.
+    #[serde(rename = "o")]
+    pub open: String,
+    /// High price.
+    #[serde(rename = "h")]
+    pub high: String,
+    /// Low price.
+    #[serde(rename = "l")]
+    pub low: String,
+    /// Close price.
+    #[serde(rename = "c")]
+    pub close: String,
+    /// Volume.
+    #[serde(rename = "v")]
+    pub volume: String,
+    /// Number of trades (optional).
+    #[serde(rename = "n", default)]
+    pub num_trades: Option<u64>,
 }
 
 /// Represents an individual fill from user fills.
@@ -283,8 +372,8 @@ pub struct HyperliquidFill {
     /// Position size before this fill.
     #[serde(rename = "startPosition")]
     pub start_position: String,
-    /// Directory (order book path).
-    pub dir: String,
+    /// Fill direction (open/close).
+    pub dir: HyperliquidFillDirection,
     /// Closed P&L from this fill.
     #[serde(rename = "closedPnl")]
     pub closed_pnl: String,
@@ -310,8 +399,8 @@ pub struct HyperliquidOrderStatus {
 pub struct HyperliquidOrderStatusEntry {
     /// Order information.
     pub order: HyperliquidOrderInfo,
-    /// Current status string.
-    pub status: String,
+    /// Current status.
+    pub status: HyperliquidOrderStatusEnum,
     /// Status timestamp in milliseconds.
     #[serde(rename = "statusTimestamp")]
     pub status_timestamp: u64,
@@ -338,20 +427,56 @@ pub struct HyperliquidOrderInfo {
     pub orig_sz: String,
 }
 
+/// ECC signature components for Hyperliquid exchange requests.
+#[derive(Debug, Clone, Serialize)]
+pub struct HyperliquidSignature {
+    /// R component of the signature.
+    pub r: String,
+    /// S component of the signature.
+    pub s: String,
+    /// V component (recovery ID) of the signature.
+    pub v: u64,
+}
+
+impl HyperliquidSignature {
+    /// Parse a hex signature string (0x + 64 hex r + 64 hex s + 2 hex v) into components.
+    pub fn from_hex(sig_hex: &str) -> Result<Self, String> {
+        let sig_hex = sig_hex.strip_prefix("0x").unwrap_or(sig_hex);
+
+        if sig_hex.len() != 130 {
+            return Err(format!(
+                "Invalid signature length: expected 130 hex chars, was {}",
+                sig_hex.len()
+            ));
+        }
+
+        let r = format!("0x{}", &sig_hex[0..64]);
+        let s = format!("0x{}", &sig_hex[64..128]);
+        let v = u64::from_str_radix(&sig_hex[128..130], 16)
+            .map_err(|e| format!("Failed to parse v component: {e}"))?;
+
+        Ok(Self { r, s, v })
+    }
+}
+
 /// Represents an exchange action request wrapper for `POST /exchange`.
 #[derive(Debug, Clone, Serialize)]
 pub struct HyperliquidExchangeRequest<T> {
     /// The action to perform.
+    #[serde(rename = "action")]
     pub action: T,
     /// Request nonce for replay protection.
     #[serde(rename = "nonce")]
     pub nonce: u64,
     /// ECC signature over the action.
     #[serde(rename = "signature")]
-    pub signature: String,
+    pub signature: HyperliquidSignature,
     /// Optional vault address for sub-account trading.
     #[serde(rename = "vaultAddress", skip_serializing_if = "Option::is_none")]
     pub vault_address: Option<String>,
+    /// Optional expiration time in milliseconds.
+    #[serde(rename = "expiresAfter", skip_serializing_if = "Option::is_none")]
+    pub expires_after: Option<u64>,
 }
 
 impl<T> HyperliquidExchangeRequest<T>
@@ -359,23 +484,30 @@ where
     T: Serialize,
 {
     /// Create a new exchange request with the given action.
-    pub fn new(action: T, nonce: u64, signature: String) -> Self {
-        Self {
+    pub fn new(action: T, nonce: u64, signature: String) -> Result<Self, String> {
+        Ok(Self {
             action,
             nonce,
-            signature,
+            signature: HyperliquidSignature::from_hex(&signature)?,
             vault_address: None,
-        }
+            expires_after: None,
+        })
     }
 
     /// Create a new exchange request with vault address for sub-account trading.
-    pub fn with_vault(action: T, nonce: u64, signature: String, vault_address: String) -> Self {
-        Self {
+    pub fn with_vault(
+        action: T,
+        nonce: u64,
+        signature: String,
+        vault_address: String,
+    ) -> Result<Self, String> {
+        Ok(Self {
             action,
             nonce,
-            signature,
+            signature: HyperliquidSignature::from_hex(&signature)?,
             vault_address: Some(vault_address),
-        }
+            expires_after: None,
+        })
     }
 
     /// Convert to JSON value for signing purposes.
@@ -516,8 +648,8 @@ pub struct HyperliquidCancelTriggerOrderRequest {
 pub struct HyperliquidTriggerOrderStatus {
     /// Order ID.
     pub oid: OrderId,
-    /// Order status string.
-    pub status: String,
+    /// Order status.
+    pub status: HyperliquidOrderStatusEnum,
     /// Timestamp when status was updated (milliseconds).
     #[serde(rename = "statusTimestamp")]
     pub status_timestamp: u64,
@@ -647,10 +779,6 @@ pub struct HyperliquidOcoOrderRequest {
     pub reduce_only: Option<bool>,
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// Tests
-////////////////////////////////////////////////////////////////////////////////
-
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
@@ -691,94 +819,6 @@ mod tests {
         }
     }
 }
-
-////////////////////////////////////////////////////////////////////////////////
-// Exchange execution endpoint models
-////////////////////////////////////////////////////////////////////////////////
-
-/// Custom serde module for handling 128-bit hex client order IDs.
-pub mod execution_cloid {
-    use std::fmt;
-
-    use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error};
-
-    /// A 128-bit client order ID represented as a hex string with `0x` prefix.
-    #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-    pub struct Cloid(pub [u8; 16]);
-
-    impl Cloid {
-        /// Creates a new `Cloid` from a hex string.
-        ///
-        /// # Errors
-        ///
-        /// Returns an error if the string is not a valid 128-bit hex with `0x` prefix.
-        pub fn from_hex<S: AsRef<str>>(s: S) -> Result<Self, String> {
-            let hex_str = s.as_ref();
-            let without_prefix = hex_str
-                .strip_prefix("0x")
-                .ok_or("CLOID must start with '0x'")?;
-
-            if without_prefix.len() != 32 {
-                return Err("CLOID must be exactly 32 hex characters (128 bits)".to_string());
-            }
-
-            let mut bytes = [0u8; 16];
-            for i in 0..16 {
-                let byte_str = &without_prefix[i * 2..i * 2 + 2];
-                bytes[i] = u8::from_str_radix(byte_str, 16)
-                    .map_err(|_| "Invalid hex character in CLOID".to_string())?;
-            }
-
-            Ok(Cloid(bytes))
-        }
-
-        /// Converts the CLOID to a hex string with `0x` prefix.
-        pub fn to_hex(&self) -> String {
-            let mut result = String::with_capacity(34);
-            result.push_str("0x");
-            for byte in &self.0 {
-                result.push_str(&format!("{:02x}", byte));
-            }
-            result
-        }
-    }
-
-    impl fmt::Display for Cloid {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "{}", self.to_hex())
-        }
-    }
-
-    impl Serialize for Cloid {
-        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: Serializer,
-        {
-            serializer.serialize_str(&self.to_hex())
-        }
-    }
-
-    impl<'de> Deserialize<'de> for Cloid {
-        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where
-            D: Deserializer<'de>,
-        {
-            let s = String::deserialize(deserializer)?;
-            Cloid::from_hex(&s).map_err(D::Error::custom)
-        }
-    }
-}
-
-pub use execution_cloid::Cloid;
-
-/// Asset ID type for Hyperliquid.
-///
-/// For perpetuals, this is the index in `meta.universe`.
-/// For spot trading, this is `10000 + index` from `spotMeta.universe`.
-pub type AssetId = u32;
-
-/// Order ID assigned by Hyperliquid.
-pub type OrderId = u64;
 
 /// Time-in-force for limit orders in exchange endpoint.
 ///
@@ -994,7 +1034,7 @@ pub struct HyperliquidExecTwapRequest {
 /// through the exchange API. The serialization uses the exact action type
 /// names expected by Hyperliquid.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(tag = "type")]
 pub enum HyperliquidExecAction {
     /// Place one or more orders.
     #[serde(rename = "order")]
@@ -1002,7 +1042,7 @@ pub enum HyperliquidExecAction {
         /// List of orders to place.
         orders: Vec<HyperliquidExecPlaceOrderRequest>,
         /// Grouping strategy for TP/SL orders.
-        #[serde(default, skip_serializing_if = "is_default_exec_grouping")]
+        #[serde(default)]
         grouping: HyperliquidExecGrouping,
         /// Optional builder fee.
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -1113,11 +1153,6 @@ pub enum HyperliquidExecAction {
     /// No-operation to invalidate pending nonces.
     #[serde(rename = "noop")]
     Noop,
-}
-
-/// Helper function to check if grouping is the default value for exchange endpoint.
-fn is_default_exec_grouping(grouping: &HyperliquidExecGrouping) -> bool {
-    matches!(grouping, HyperliquidExecGrouping::Na)
 }
 
 /// Exchange request envelope for the `/exchange` endpoint.
@@ -1299,9 +1334,9 @@ pub struct ClearinghouseState {
 pub struct AssetPosition {
     /// Position information.
     pub position: PositionData,
-    /// Type of position (e.g., "oneWay").
+    /// Type of position.
     #[serde(rename = "type")]
-    pub position_type: String,
+    pub position_type: HyperliquidPositionType,
 }
 
 /// Detailed position data for an asset.

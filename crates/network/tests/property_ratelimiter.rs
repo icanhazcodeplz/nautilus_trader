@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -360,5 +360,26 @@ proptest! {
                 "Replenish interval should match configured period"
             );
         }
+    }
+
+    /// Property: GCRA boundary edge case where t0 equals earliest_time exactly.
+    #[rstest]
+    fn gcra_boundary_exact_replenishment(
+        rate in 1u32..=20u32
+    ) {
+        let rate_nonzero = NonZeroU32::new(rate).unwrap();
+        let quota = Quota::per_second(rate_nonzero);
+        let rate_limiter = RateLimiter::<String, _>::new_with_quota(Some(quota), vec![]);
+
+        let key = "boundary_test".to_string();
+
+        // Consume burst capacity completely
+        for _ in 0..rate {
+            let _ = rate_limiter.check_key(&key);
+        }
+
+        // Next request should be denied (rate limited)
+        let denied = rate_limiter.check_key(&key).is_err();
+        prop_assert!(denied, "Should be rate limited after consuming burst");
     }
 }

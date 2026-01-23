@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -------------------------------------------------------------------------------------------------
-#  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+#  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 #  https://nautechsystems.io
 #
 #  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -21,23 +21,28 @@ mirroring the capabilities shown in crates/adapters/blockchain/bin/node_test.rs
 
 """
 
-# ruff: noqa (under development)
+# ruff: noqa: F401
 
 import os
 
+from dotenv import load_dotenv
+
 from nautilus_trader.adapters.blockchain import BlockchainDataClientConfig
 from nautilus_trader.adapters.blockchain import BlockchainDataClientFactory
-from nautilus_trader.common import ImportableActorConfig  # type: ignore[attr-defined]
 from nautilus_trader.common import Environment
+from nautilus_trader.common import ImportableActorConfig  # type: ignore[attr-defined]
 from nautilus_trader.infrastructure import PostgresConnectOptions
 from nautilus_trader.live import LiveNode  # type: ignore[attr-defined]
 from nautilus_trader.model import Chain  # type: ignore[attr-defined]
+from nautilus_trader.model import DexType  # type: ignore[attr-defined]
 from nautilus_trader.model import InstrumentId
 from nautilus_trader.model import TraderId
-from nautilus_trader.model import DexType  # type: ignore[attr-defined]
 
 
 def main() -> None:
+    # Load environment variables from .env file
+    load_dotenv()
+
     # Environment setup
     environment = Environment.LIVE
     trader_id = TraderId("TESTER-001")
@@ -100,7 +105,7 @@ def main() -> None:
             "chain": "Arbitrum",
             "client_id": "BLOCKCHAIN-Arbitrum",
             "pools": [
-                "0xC31E54c7a869B9FcBEcc14363CF510d1c41fa443.Arbitrum:UniswapV3",
+                "0xD491076C7316bC28fD4D35E3da9aB5286D079250.Arbitrum:UniswapV3",
             ],
         },
     )

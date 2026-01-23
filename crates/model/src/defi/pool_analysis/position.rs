@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -14,6 +14,7 @@
 // -------------------------------------------------------------------------------------------------
 
 use alloy_primitives::{Address, U256};
+use serde::{Deserialize, Serialize};
 
 use crate::defi::tick_map::full_math::{FullMath, Q128};
 
@@ -21,7 +22,11 @@ use crate::defi::tick_map::full_math::{FullMath, Q128};
 ///
 /// This struct tracks a specific liquidity provider's position within a price range,
 /// including the liquidity amount, fee accumulation, and token deposits/withdrawals.
-#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.model")
+)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PoolPosition {
     /// The owner of the position
     pub owner: Address,
@@ -43,8 +48,9 @@ pub struct PoolPosition {
     pub total_amount0_deposited: U256,
     /// Total amount of token1 deposited into this position
     pub total_amount1_deposited: U256,
-    /// Total amount of token0 withdrawn from this position
+    /// Total amount of token0 collected from this position
     pub total_amount0_collected: u128,
+    /// Total amount of token1 collected from this position
     pub total_amount1_collected: u128,
 }
 
@@ -71,7 +77,7 @@ impl PoolPosition {
     /// Generates a unique string key for a position based on owner and tick range.
     #[must_use]
     pub fn get_position_key(owner: &Address, tick_lower: i32, tick_upper: i32) -> String {
-        format!("{}:{}:{}", owner, tick_lower, tick_upper)
+        format!("{owner}:{tick_lower}:{tick_upper}")
     }
 
     /// Updates the liquidity amount by the given delta.
@@ -157,17 +163,14 @@ impl PoolPosition {
     }
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// Tests
-////////////////////////////////////////////////////////////////////////////////
-
 #[cfg(test)]
 mod tests {
     use alloy_primitives::address;
+    use rstest::rstest;
 
     use super::*;
 
-    #[test]
+    #[rstest]
     fn test_new_position() {
         let owner = address!("1234567890123456789012345678901234567890");
         let tick_lower = -100;
@@ -186,18 +189,18 @@ mod tests {
         assert_eq!(position.tokens_owed_1, 0);
     }
 
-    #[test]
+    #[rstest]
     fn test_get_position_key() {
         let owner = address!("1234567890123456789012345678901234567890");
         let tick_lower = -100;
         let tick_upper = 100;
 
         let key = PoolPosition::get_position_key(&owner, tick_lower, tick_upper);
-        let expected = format!("{:?}:{}:{}", owner, tick_lower, tick_upper);
+        let expected = format!("{owner:?}:{tick_lower}:{tick_upper}");
         assert_eq!(key, expected);
     }
 
-    #[test]
+    #[rstest]
     fn test_update_liquidity_positive() {
         let owner = address!("1234567890123456789012345678901234567890");
         let mut position = PoolPosition::new(owner, -100, 100, 1000);
@@ -206,7 +209,7 @@ mod tests {
         assert_eq!(position.liquidity, 1500);
     }
 
-    #[test]
+    #[rstest]
     fn test_update_liquidity_negative() {
         let owner = address!("1234567890123456789012345678901234567890");
         let mut position = PoolPosition::new(owner, -100, 100, 1000);
@@ -215,7 +218,7 @@ mod tests {
         assert_eq!(position.liquidity, 700);
     }
 
-    #[test]
+    #[rstest]
     fn test_update_liquidity_negative_saturating() {
         let owner = address!("1234567890123456789012345678901234567890");
         let mut position = PoolPosition::new(owner, -100, 100, 1000);
@@ -224,7 +227,7 @@ mod tests {
         assert_eq!(position.liquidity, 0);
     }
 
-    #[test]
+    #[rstest]
     fn test_update_fees() {
         let owner = address!("1234567890123456789012345678901234567890");
         let mut position = PoolPosition::new(owner, -100, 100, 1000);
@@ -240,7 +243,7 @@ mod tests {
         // In practice this would be larger numbers
     }
 
-    #[test]
+    #[rstest]
     fn test_collect_fees() {
         let owner = address!("1234567890123456789012345678901234567890");
         let mut position = PoolPosition::new(owner, -100, 100, 1000);
@@ -258,7 +261,7 @@ mod tests {
         assert_eq!(position.tokens_owed_1, 50);
     }
 
-    #[test]
+    #[rstest]
     fn test_collect_fees_more_than_owed() {
         let owner = address!("1234567890123456789012345678901234567890");
         let mut position = PoolPosition::new(owner, -100, 100, 1000);
@@ -275,7 +278,7 @@ mod tests {
         assert_eq!(position.tokens_owed_1, 0);
     }
 
-    #[test]
+    #[rstest]
     fn test_is_empty() {
         let owner = address!("1234567890123456789012345678901234567890");
         let mut position = PoolPosition::new(owner, -100, 100, 0);

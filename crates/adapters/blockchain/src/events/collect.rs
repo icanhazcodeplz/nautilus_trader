@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -15,15 +15,18 @@
 
 use alloy::primitives::Address;
 use nautilus_core::UnixNanos;
-use nautilus_model::defi::{SharedChain, SharedDex, data::PoolFeeCollect};
+use nautilus_model::{
+    defi::{PoolIdentifier, SharedChain, SharedDex, data::PoolFeeCollect},
+    identifiers::InstrumentId,
+};
 
 /// Represents a collect event that occurs when fees are collected from a position in a liquidity pool.
 #[derive(Debug, Clone)]
 pub struct CollectEvent {
     /// The decentralized exchange where the event happened.
     pub dex: SharedDex,
-    /// The address of the smart contract which emitted the event.
-    pub pool_address: Address,
+    /// The unique identifier for the pool.
+    pub pool_identifier: PoolIdentifier,
     /// The block number when the collect occurred.
     pub block_number: u64,
     /// The unique hash identifier of the transaction containing this event.
@@ -50,9 +53,9 @@ impl CollectEvent {
     /// Creates a new [`CollectEvent`] instance with the specified parameters.
     #[must_use]
     #[allow(clippy::too_many_arguments)]
-    pub const fn new(
+    pub fn new(
         dex: SharedDex,
-        pool_address: Address,
+        pool_identifier: PoolIdentifier,
         block_number: u64,
         transaction_hash: String,
         transaction_index: u32,
@@ -66,7 +69,7 @@ impl CollectEvent {
     ) -> Self {
         Self {
             dex,
-            pool_address,
+            pool_identifier,
             block_number,
             transaction_hash,
             transaction_index,
@@ -86,13 +89,14 @@ impl CollectEvent {
         &self,
         chain: SharedChain,
         dex: SharedDex,
-        pool_address: Address,
+        instrument_id: InstrumentId,
         timestamp: Option<UnixNanos>,
     ) -> PoolFeeCollect {
         PoolFeeCollect::new(
             chain,
             dex,
-            pool_address,
+            instrument_id,
+            self.pool_identifier,
             self.block_number,
             self.transaction_hash.clone(),
             self.transaction_index,

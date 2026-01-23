@@ -318,16 +318,18 @@ CREATE TABLE IF NOT EXISTS "token_default" PARTITION OF "token" DEFAULT;
 CREATE TABLE IF NOT EXISTS "dex" (
     chain_id INTEGER NOT NULL REFERENCES chain(chain_id) ON DELETE CASCADE,
     name TEXT NOT NULL,
-    factory_address TEXT UNIQUE,
+    factory_address TEXT NOT NULL,
     creation_block BIGINT NOT NULL,
     last_full_sync_pools_block_number BIGINT,
-    PRIMARY KEY (chain_id, name)
+    PRIMARY KEY (chain_id, name),
+    UNIQUE (chain_id, factory_address)
 );
 
 CREATE TABLE IF NOT EXISTS "pool" (
     chain_id INTEGER NOT NULL REFERENCES chain(chain_id) ON DELETE CASCADE,
     dex_name TEXT NOT NULL,
     address TEXT NOT NULL,
+    pool_identifier TEXT NOT NULL,
     creation_block BIGINT NOT NULL,
     token0_chain INTEGER NOT NULL,
     token0_address TEXT NOT NULL,
@@ -337,8 +339,9 @@ CREATE TABLE IF NOT EXISTS "pool" (
     tick_spacing INTEGER,
     initial_tick INTEGER,
     initial_sqrt_price_x96 TEXT,
+    hook_address TEXT,
     last_full_sync_block_number BIGINT,
-    PRIMARY KEY (chain_id, address),
+    PRIMARY KEY (chain_id, dex_name, pool_identifier),
     FOREIGN KEY (token0_chain, token0_address) REFERENCES token(chain_id, address),
     FOREIGN KEY (token1_chain, token1_address) REFERENCES token(chain_id, address),
     FOREIGN KEY (chain_id, dex_name) REFERENCES dex(chain_id, name)
@@ -347,30 +350,36 @@ CREATE TABLE IF NOT EXISTS "pool" (
 CREATE TABLE IF NOT EXISTS "pool_swap_event" (
     id BIGSERIAL PRIMARY KEY,
     chain_id INTEGER NOT NULL REFERENCES chain(chain_id) ON DELETE CASCADE,
-    pool_address TEXT NOT NULL,
+    pool_identifier TEXT NOT NULL,
+    dex_name TEXT NOT NULL,
     block BIGINT NOT NULL,
     transaction_hash TEXT NOT NULL,
     transaction_index INTEGER NOT NULL,
     log_index INTEGER NOT NULL,
     sender TEXT NOT NULL,
     recipient TEXT NOT NULL,
-    side TEXT NOT NULL,
-    size TEXT NOT NULL,
-    price TEXT NOT NULL,
     sqrt_price_x96 U160 NOT NULL,
     liquidity U128 NOT NULL,
     tick INTEGER NOT NULL,
     amount0 I256 NOT NULL,
     amount1 I256 NOT NULL,
-    FOREIGN KEY (chain_id, pool_address) REFERENCES pool(chain_id, address),
+    order_side TEXT,
+    base_quantity NUMERIC,
+    quote_quantity NUMERIC,
+    spot_price NUMERIC,
+    execution_price NUMERIC,
+    FOREIGN KEY (chain_id, dex_name, pool_identifier) REFERENCES pool(chain_id, dex_name, pool_identifier),
 --     FOREIGN KEY (chain_id, block) REFERENCES block(chain_id, number), // TODO temporarily disabled not to be blocked by full block sync
     UNIQUE(chain_id, transaction_hash, log_index)
 );
+CREATE INDEX IF NOT EXISTS idx_pool_swap_event_lookup
+    ON pool_swap_event(chain_id, pool_identifier, block, transaction_index, log_index);
 
 CREATE TABLE IF NOT EXISTS "pool_liquidity_event" (
     id BIGSERIAL PRIMARY KEY,
     chain_id INTEGER NOT NULL REFERENCES chain(chain_id) ON DELETE CASCADE,
-    pool_address TEXT NOT NULL,
+    pool_identifier TEXT NOT NULL,
+    dex_name TEXT NOT NULL,
     block BIGINT NOT NULL,
     transaction_hash TEXT NOT NULL,
     transaction_index INTEGER NOT NULL,
@@ -383,15 +392,18 @@ CREATE TABLE IF NOT EXISTS "pool_liquidity_event" (
     amount1 U160 NOT NULL,
     tick_lower INTEGER NOT NULL,
     tick_upper INTEGER NOT NULL,
-    FOREIGN KEY (chain_id, pool_address) REFERENCES pool(chain_id, address),
+    FOREIGN KEY (chain_id, dex_name, pool_identifier) REFERENCES pool(chain_id, dex_name, pool_identifier),
 --     FOREIGN KEY (chain_id, block) REFERENCES block(chain_id, number),  // TODO temporarily disabled not to be blocked by full block sync
     UNIQUE(chain_id, transaction_hash, log_index)
 );
+CREATE INDEX IF NOT EXISTS idx_pool_liquidity_event_lookup
+    ON pool_liquidity_event(chain_id, pool_identifier, block, transaction_index, log_index);
 
 CREATE TABLE IF NOT EXISTS "pool_collect_event" (
     id BIGSERIAL PRIMARY KEY,
     chain_id INTEGER NOT NULL REFERENCES chain(chain_id) ON DELETE CASCADE,
-    pool_address TEXT NOT NULL,
+    pool_identifier TEXT NOT NULL,
+    dex_name TEXT NOT NULL,
     block BIGINT NOT NULL,
     transaction_hash TEXT NOT NULL,
     transaction_index INTEGER NOT NULL,
@@ -401,14 +413,73 @@ CREATE TABLE IF NOT EXISTS "pool_collect_event" (
     amount1 U256 NOT NULL,
     tick_lower INTEGER NOT NULL,
     tick_upper INTEGER NOT NULL,
-    FOREIGN KEY (chain_id, pool_address) REFERENCES pool(chain_id, address),
+    FOREIGN KEY (chain_id, dex_name, pool_identifier) REFERENCES pool(chain_id, dex_name, pool_identifier),
 --     FOREIGN KEY (chain_id, block) REFERENCES block(chain_id, number),  // TODO temporarily disabled not to be blocked by full block sync
     UNIQUE(chain_id, transaction_hash, log_index)
 );
+CREATE INDEX IF NOT EXISTS idx_pool_collect_event_lookup
+    ON pool_collect_event(chain_id, pool_identifier, block, transaction_index, log_index);
+
+CREATE TABLE IF NOT EXISTS "pool_flash_event" (
+    id BIGSERIAL PRIMARY KEY,
+    chain_id INTEGER NOT NULL REFERENCES chain(chain_id) ON DELETE CASCADE,
+    pool_identifier TEXT NOT NULL,
+    dex_name TEXT NOT NULL,
+    block BIGINT NOT NULL,
+    transaction_hash TEXT NOT NULL,
+    transaction_index INTEGER NOT NULL,
+    log_index INTEGER NOT NULL,
+    sender TEXT NOT NULL,
+    recipient TEXT NOT NULL,
+    amount0 U256 NOT NULL,
+    amount1 U256 NOT NULL,
+    paid0 U256 NOT NULL,
+    paid1 U256 NOT NULL,
+    FOREIGN KEY (chain_id, dex_name, pool_identifier) REFERENCES pool(chain_id, dex_name, pool_identifier),
+--     FOREIGN KEY (chain_id, block) REFERENCES block(chain_id, number),  // TODO temporarily disabled not to be blocked by full block sync
+    UNIQUE(chain_id, transaction_hash, log_index)
+);
+CREATE INDEX IF NOT EXISTS idx_pool_flash_event_lookup
+    ON pool_flash_event(chain_id, pool_identifier, block, transaction_index, log_index);
+
+CREATE TABLE IF NOT EXISTS "pool_snapshot" (
+    chain_id INTEGER NOT NULL REFERENCES chain(chain_id) ON DELETE CASCADE,
+    pool_identifier TEXT NOT NULL,
+    dex_name TEXT NOT NULL,
+    block BIGINT NOT NULL,
+    transaction_index INTEGER NOT NULL,
+    log_index INTEGER NOT NULL,
+    transaction_hash TEXT NOT NULL,
+    current_tick INTEGER NOT NULL,
+    price_sqrt_ratio_x96 U160 NOT NULL,
+    liquidity U128 NOT NULL,
+    protocol_fees_token0 U256 NOT NULL,
+    protocol_fees_token1 U256 NOT NULL,
+    fee_protocol SMALLINT NOT NULL,
+    fee_growth_global_0 U256 NOT NULL,
+    fee_growth_global_1 U256 NOT NULL,
+    total_amount0_deposited U256 NOT NULL,
+    total_amount1_deposited U256 NOT NULL,
+    total_amount0_collected U256 NOT NULL,
+    total_amount1_collected U256 NOT NULL,
+    total_swaps INTEGER NOT NULL DEFAULT 0,
+    total_mints INTEGER NOT NULL DEFAULT 0,
+    total_burns INTEGER NOT NULL DEFAULT 0,
+    total_flashes INTEGER NOT NULL DEFAULT 0,
+    total_fee_collects INTEGER NOT NULL,
+    liquidity_utilization_rate  DOUBLE PRECISION DEFAULT 0,
+    is_valid BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (chain_id, pool_identifier, block, transaction_index, log_index),
+    FOREIGN KEY (chain_id, dex_name, pool_identifier) REFERENCES pool(chain_id, dex_name, pool_identifier)
+);
 
 CREATE TABLE IF NOT EXISTS "pool_position" (
-    chain_id INTEGER NOT NULL REFERENCES chain(chain_id) ON DELETE CASCADE,
-    pool_address TEXT NOT NULL,
+    chain_id INTEGER NOT NULL,
+    pool_identifier TEXT NOT NULL,
+    snapshot_block BIGINT NOT NULL,
+    snapshot_transaction_index INTEGER NOT NULL,
+    snapshot_log_index INTEGER NOT NULL,
     owner TEXT NOT NULL,
     tick_lower INTEGER NOT NULL,
     tick_upper INTEGER NOT NULL,
@@ -417,7 +488,30 @@ CREATE TABLE IF NOT EXISTS "pool_position" (
     fee_growth_inside_1_last U256 NOT NULL,
     tokens_owed_0 U128 NOT NULL,
     tokens_owed_1 U128 NOT NULL,
-    last_updated_block BIGINT,
-    PRIMARY KEY (chain_id, pool_address, owner, tick_lower, tick_upper),
-    FOREIGN KEY (chain_id, pool_address) REFERENCES pool(chain_id, address)
+    total_amount0_deposited U256,
+    total_amount1_deposited U256,
+    total_amount0_collected U128,
+    total_amount1_collected U128,
+    is_consistent BOOLEAN DEFAULT FALSE,
+    PRIMARY KEY (chain_id, pool_identifier, snapshot_block, snapshot_transaction_index, snapshot_log_index, owner, tick_lower, tick_upper),
+    FOREIGN KEY (chain_id, pool_identifier, snapshot_block, snapshot_transaction_index, snapshot_log_index)
+        REFERENCES pool_snapshot(chain_id, pool_identifier, block, transaction_index, log_index) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS "pool_tick" (
+    chain_id INTEGER NOT NULL,
+    pool_identifier TEXT NOT NULL,
+    snapshot_block BIGINT NOT NULL,
+    snapshot_transaction_index INTEGER NOT NULL,
+    snapshot_log_index INTEGER NOT NULL,
+    tick_value INTEGER NOT NULL,
+    liquidity_gross U128 NOT NULL,
+    liquidity_net I128 NOT NULL,
+    fee_growth_outside_0 U256 NOT NULL,
+    fee_growth_outside_1 U256 NOT NULL,
+    initialized BOOLEAN NOT NULL,
+    last_updated_block BIGINT NOT NULL,
+    PRIMARY KEY (chain_id, pool_identifier, snapshot_block, snapshot_transaction_index, snapshot_log_index, tick_value),
+    FOREIGN KEY (chain_id, pool_identifier, snapshot_block, snapshot_transaction_index, snapshot_log_index)
+        REFERENCES pool_snapshot(chain_id, pool_identifier, block, transaction_index, log_index) ON DELETE CASCADE
 );

@@ -15,7 +15,7 @@ The standalone TWS and IB Gateway applications require manually inputting userna
 To install NautilusTrader with Interactive Brokers (and Docker) support:
 
 ```bash
-pip install --upgrade "nautilus_trader[ib,docker]"
+uv pip install "nautilus_trader[ib,docker]"
 ```
 
 To build from source with all extras (including IB and Docker):
@@ -550,23 +550,23 @@ Interactive Brokers supports option spreads through BAG contracts, which combine
 
 ### Creating option spread instrument IDs
 
-Option spreads are created using the `InstrumentId.new_spread()` method, which combines individual option legs with their respective ratios:
+Option spreads are created using the `new_generic_spread_id()` function, which combines individual option legs with their respective ratios:
 
 ```python
-from nautilus_trader.model.identifiers import InstrumentId
+from nautilus_trader.model.identifiers import InstrumentId, new_generic_spread_id
 
 # Create individual option instrument IDs
 call_leg = InstrumentId.from_str("SPY C400.SMART")
 put_leg = InstrumentId.from_str("SPY P390.SMART")
 
 # Create a 1:1 call spread (long call, short call)
-call_spread_id = InstrumentId.new_spread([
+call_spread_id = new_generic_spread_id([
     (call_leg, 1),   # Long 1 contract
     (put_leg, -1),   # Short 1 contract
 ])
 
 # Create a 1:2 ratio spread
-ratio_spread_id = InstrumentId.new_spread([
+ratio_spread_id = new_generic_spread_id([
     (call_leg, 1),   # Long 1 contract
     (put_leg, 2),    # Long 2 contracts
 ])
@@ -988,13 +988,42 @@ production_data_config = InteractiveBrokersDataClientConfig(
 )
 ```
 
-#### Configuration options explained
+### Data client configuration options
+
+| Option                          | Default                                         | Description |
+|---------------------------------|-------------------------------------------------|-------------|
+| `instrument_provider`           | `InteractiveBrokersInstrumentProviderConfig()`  | Instrument provider settings controlling which contracts load at startup. |
+| `ibg_host`                      | `127.0.0.1`                                     | Hostname or IP for TWS/IB Gateway. |
+| `ibg_port`                      | `None`                                          | Port for TWS/IB Gateway (`7497`/`7496` for TWS, `4002`/`4001` for IBG). |
+| `ibg_client_id`                 | `1`                                             | Unique client identifier used when connecting to TWS/IB Gateway. |
+| `use_regular_trading_hours`     | `True`                                          | Request bars limited to regular trading hours when `True`. |
+| `market_data_type`              | `REALTIME`                                      | Market data feed type (`REALTIME`, `DELAYED`, `DELAYED_FROZEN`, etc.). |
+| `ignore_quote_tick_size_updates`| `False`                                         | Suppress quote ticks where only size changes when `True`. |
+| `dockerized_gateway`            | `None`                                          | Optional `DockerizedIBGatewayConfig` for containerized setups. |
+| `connection_timeout`            | `300`                                           | Seconds to wait for the initial API connection. |
+| `request_timeout`               | `60`                                            | Seconds to wait for historical data requests before timing out. |
+
+#### Notes
 
 - **`use_regular_trading_hours`**: When `True`, only requests data during regular trading hours. Primarily affects bar data for stocks.
 - **`ignore_quote_tick_size_updates`**: When `True`, filters out quote ticks where only the size changed (not price), reducing data volume.
 - **`handle_revised_bars`**: When `True`, processes bar revisions from IB (bars can be updated after initial publication).
 - **`connection_timeout`**: Maximum time to wait for initial connection establishment.
 - **`request_timeout`**: Maximum time to wait for historical data requests.
+
+### Execution client configuration options
+
+| Option                                  | Default                                         | Description |
+|-----------------------------------------|-------------------------------------------------|-------------|
+| `instrument_provider`                   | `InteractiveBrokersInstrumentProviderConfig()`  | Instrument provider settings controlling which contracts load at startup. |
+| `ibg_host`                              | `127.0.0.1`                                     | Hostname or IP for TWS/IB Gateway. |
+| `ibg_port`                              | `None`                                          | Port for TWS/IB Gateway (`7497`/`7496` for TWS, `4002`/`4001` for IBG). |
+| `ibg_client_id`                         | `1`                                             | Unique client identifier used when connecting to TWS/IB Gateway. |
+| `account_id`                            | `None`                                          | Interactive Brokers account identifier (falls back to `TWS_ACCOUNT` env var). |
+| `dockerized_gateway`                    | `None`                                          | Optional `DockerizedIBGatewayConfig` for containerized setups. |
+| `connection_timeout`                    | `300`                                           | Seconds to wait for the initial API connection. |
+| `fetch_all_open_orders`                 | `False`                                         | When `True`, pulls open orders for every API client ID (not just this session). |
+| `track_option_exercise_from_position_update` | `False`                                    | Subscribe to real-time position updates to detect option exercises when `True`. |
 
 ### Execution client configuration
 
@@ -1527,7 +1556,6 @@ node = TradingNode(config=config_node)
 node.add_data_client_factory(IB, InteractiveBrokersLiveDataClientFactory)
 node.add_exec_client_factory(IB, InteractiveBrokersLiveExecClientFactory)
 node.build()
-node.portfolio.set_specific_venue(IB_VENUE)
 
 if __name__ == "__main__":
     try:
@@ -1605,6 +1633,185 @@ exec_client_config = InteractiveBrokersExecClientConfig(
 )
 ```
 
+### Multiple IB execution clients for different accounts
+
+NautilusTrader supports using multiple Interactive Brokers execution clients simultaneously, each connected to a different IB account. This is useful when you need to trade with multiple accounts, such as:
+
+- Separate accounts for different strategies
+- Paper trading and live trading accounts running simultaneously
+- Multiple managed accounts under the same IB login
+
+To configure multiple IB execution clients, provide multiple entries in the `exec_clients` dictionary with unique keys. Each entry specifies a different `account_id`:
+
+```python
+from nautilus_trader.adapters.interactive_brokers.config import (
+    InteractiveBrokersDataClientConfig,
+    InteractiveBrokersExecClientConfig,
+    InteractiveBrokersInstrumentProviderConfig,
+    SymbologyMethod,
+    IBMarketDataTypeEnum,
+)
+from nautilus_trader.live.config import TradingNodeConfig, RoutingConfig, LoggingConfig
+from nautilus_trader.model.identifiers import AccountId, Venue, ClientId
+
+# Shared instrument provider configuration
+instrument_provider_config = InteractiveBrokersInstrumentProviderConfig(
+    symbology_method=SymbologyMethod.IB_SIMPLIFIED,
+)
+
+# Data client (shared across all accounts)
+data_client_config = InteractiveBrokersDataClientConfig(
+    ibg_host="127.0.0.1",
+    ibg_port=7497,
+    ibg_client_id=1,
+    market_data_type=IBMarketDataTypeEnum.REALTIME,
+    instrument_provider=instrument_provider_config,
+)
+
+# Configuration for multiple IB execution clients
+config_node = TradingNodeConfig(
+    trader_id="MULTI-ACCOUNT-001",
+    logging=LoggingConfig(log_level="INFO"),
+
+    # Single data client shared across accounts
+    data_clients={
+        "IB": data_client_config,
+    },
+
+    # Multiple execution clients, one per account
+    exec_clients={
+        # First account: Paper trading account
+        "IB-PAPER": InteractiveBrokersExecClientConfig(
+            ibg_host="127.0.0.1",
+            ibg_port=7497,
+            ibg_client_id=2,  # Unique IB API client ID
+            account_id="DU123456",  # Paper trading account ID
+            instrument_provider=instrument_provider_config,
+            routing=RoutingConfig(default=False),  # Not default
+        ),
+
+        # Second account: Live trading account
+        "IB-LIVE": InteractiveBrokersExecClientConfig(
+            ibg_host="127.0.0.1",
+            ibg_port=7497,
+            ibg_client_id=3,  # Unique IB API client ID
+            account_id="U987654",  # Live account ID
+            instrument_provider=instrument_provider_config,
+            routing=RoutingConfig(default=True),  # Set as default
+        ),
+
+        # Third account: Another managed account
+        "IB-ACCOUNT3": InteractiveBrokersExecClientConfig(
+            ibg_host="127.0.0.1",
+            ibg_port=7497,
+            ibg_client_id=4,  # Unique IB API client ID
+            account_id="U456789",  # Another account ID
+            instrument_provider=instrument_provider_config,
+            routing=RoutingConfig(default=False),
+        ),
+    },
+)
+```
+
+**Key points for multiple IB execution clients:**
+
+1. **Unique keys**: Each entry in `exec_clients` must have a unique key (e.g., `"IB-PAPER"`, `"IB-LIVE"`). This key becomes the `account_issuer` for that client.
+
+2. **Unique client IDs**: Each execution client must use a different `ibg_client_id` (2, 3, 4, etc.). IB Gateway/TWS requires each API connection to use a unique client ID.
+
+3. **Account ID**: Each execution client must specify a different `account_id` matching the account logged into IB Gateway/TWS.
+
+4. **Account identifiers**: The system creates `AccountId` instances like:
+   - `AccountId("IB-PAPER-DU123456")`
+   - `AccountId("IB-LIVE-U987654")`
+   - `AccountId("IB-ACCOUNT3-U456789")`
+
+5. **Routing**: Orders and queries are automatically routed to the correct execution client based on:
+   - Explicit `client_id` in the command
+   - `account_id` issuer (for `QueryAccount` commands or orders with account_id set)
+   - Default client (if one is marked with `routing=RoutingConfig(default=True)`)
+
+6. **Portfolio queries**: When querying portfolio properties, you can specify either:
+   - `account_id` for account-specific queries: `portfolio.realized_pnls(account_id=AccountId("IB-PAPER-DU123456"))`
+   - `venue` for aggregated queries across all accounts with that venue: `portfolio.realized_pnls(venue=Venue("IB-PAPER"))`
+
+**Example: Using multiple IB execution clients in a strategy:**
+
+```python
+from nautilus_trader.model.identifiers import AccountId, ClientId
+from nautilus_trader.trading.strategy import Strategy
+
+class MultiAccountStrategy(Strategy):
+    """Example strategy using multiple IB accounts."""
+
+    def on_start(self):
+        # Define account IDs for easy reference
+        self.paper_account = AccountId("IB-PAPER-DU123456")
+        self.live_account = AccountId("IB-LIVE-U987654")
+
+        # Query paper account balance
+        paper_account_state = self.cache.account(self.paper_account)
+        if paper_account_state:
+            self.log.info(f"Paper account balance: {paper_account_state.balance_total()}")
+
+        # Query live account balance
+        live_account_state = self.cache.account(self.live_account)
+        if live_account_state:
+            self.log.info(f"Live account balance: {live_account_state.balance_total()}")
+
+    def submit_order_to_paper(self, order):
+        """Submit order to paper trading account."""
+        self.submit_order(order, client_id=ClientId("IB-PAPER"))
+
+    def submit_order_to_live(self, order):
+        """Submit order to live trading account."""
+        self.submit_order(order, client_id=ClientId("IB-LIVE"))
+
+    def check_paper_pnl(self, instrument_id):
+        """Check realized PnL for paper account."""
+        pnl = self.portfolio.realized_pnl(
+            instrument_id=instrument_id,
+            account_id=self.paper_account
+        )
+        return pnl
+
+    def check_live_pnl(self, instrument_id):
+        """Check realized PnL for live account."""
+        pnl = self.portfolio.realized_pnl(
+            instrument_id=instrument_id,
+            account_id=self.live_account
+        )
+        return pnl
+```
+
+**Example: Querying account information with multiple IB clients:**
+
+```python
+from nautilus_trader.model.identifiers import AccountId
+
+# Query specific account
+paper_account = cache.account(AccountId("IB-PAPER-DU123456"))
+live_account = cache.account(AccountId("IB-LIVE-U987654"))
+
+# Query account using account_id (preferred method)
+paper_account_by_id = cache.account(AccountId("IB-PAPER-DU123456"))
+
+# Alternative: Query account using account_id parameter (also works)
+paper_account_via_account_id = cache.account_for_venue(
+    account_id=AccountId("IB-PAPER-DU123456")
+)
+
+# Query portfolio properties by account
+paper_realized_pnl = portfolio.realized_pnl(
+    instrument_id=instrument_id,
+    account_id=AccountId("IB-PAPER-DU123456")
+)
+
+# Query portfolio properties aggregated across all IB accounts
+# Note: This aggregates across all accounts with the same venue
+all_ib_realized_pnl = portfolio.realized_pnls(venue=Venue("IB"))
+```
+
 ### Running the trading node
 
 ```python
@@ -1617,9 +1824,6 @@ def run_trading_node():
         node.add_data_client_factory(IB, InteractiveBrokersLiveDataClientFactory)
         node.add_exec_client_factory(IB, InteractiveBrokersLiveExecClientFactory)
         node.build()
-
-        # Set venue for portfolio
-        node.portfolio.set_specific_venue(IB_VENUE)
 
         # Add your strategies here
         # node.trader.add_strategy(YourStrategy())
@@ -1804,4 +2008,11 @@ if not instruments:
 - **IB API Documentation**: [TWS API Guide](https://ibkrcampus.com/ibkr-api-page/trader-workstation-api/)
 - **NautilusTrader Examples**: [GitHub Examples](https://github.com/nautechsystems/nautilus_trader/tree/develop/examples/live/interactive_brokers)
 - **IB Contract Search**: [Contract Information Center](https://pennies.interactivebrokers.com/cstools/contract_info/)
-- **Market Data Subscriptions**: [IB Market Data](https://www.interactivebrokers.com/en/trading/market-data.php)
+- **Market Data Subscriptions**: [IB Market Data](https://www.interactivebrokers.com/en/pricing/market-data-pricing.php)
+
+## Contributing
+
+:::info
+For additional features or to contribute to the Interactive Brokers adapter, please see our
+[contributing guide](https://github.com/nautechsystems/nautilus_trader/blob/develop/CONTRIBUTING.md).
+:::

@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -69,11 +69,12 @@ use std::{
     sync::Arc,
 };
 
+use ahash::AHashMap;
 use datafusion::arrow::record_batch::RecordBatch;
 use futures::StreamExt;
 use heck::ToSnakeCase;
 use itertools::Itertools;
-use log::info;
+use nautilus_common::live::get_runtime;
 use nautilus_core::{
     UnixNanos,
     datetime::{iso8601_to_unix_nanos, unix_nanos_to_iso8601},
@@ -179,7 +180,7 @@ impl ParquetDataCatalog {
     #[must_use]
     pub fn new(
         base_path: PathBuf,
-        storage_options: Option<std::collections::HashMap<String, String>>,
+        storage_options: Option<AHashMap<String, String>>,
         batch_size: Option<usize>,
         compression: Option<parquet::basic::Compression>,
         max_row_group_size: Option<usize>,
@@ -204,7 +205,7 @@ impl ParquetDataCatalog {
     ///
     /// - **AWS S3**: `s3://bucket/path`.
     /// - **Google Cloud Storage**: `gs://bucket/path` or `gcs://bucket/path`.
-    /// - **Azure Blob Storage**: `azure://account/container/path` or `abfs://container@account.dfs.core.windows.net/path`.
+    /// - **Azure Blob Storage**: `az://container/path` or `abfs://container@account.dfs.core.windows.net/path`.
     /// - **HTTP/WebDAV**: `http://` or `https://`.
     /// - **Local files**: `file://path` or plain paths.
     ///
@@ -229,7 +230,7 @@ impl ParquetDataCatalog {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use std::collections::HashMap;
+    /// use ahash::AHashMap;
     /// use nautilus_persistence::backend::catalog::ParquetDataCatalog;
     ///
     /// // Local filesystem
@@ -252,8 +253,8 @@ impl ParquetDataCatalog {
     ///
     /// // Azure Blob Storage
     /// let azure_catalog = ParquetDataCatalog::from_uri(
-    ///     "azure://account/container/nautilus-data",
-    ///     None, None, None, None
+    ///     "az://container/nautilus-data",
+    ///     storage_options, None, None, None
     /// )?;
     ///
     /// // S3 with custom endpoint and credentials
@@ -271,7 +272,7 @@ impl ParquetDataCatalog {
     /// ```
     pub fn from_uri(
         uri: &str,
-        storage_options: Option<std::collections::HashMap<String, String>>,
+        storage_options: Option<AHashMap<String, String>>,
         batch_size: Option<usize>,
         compression: Option<parquet::basic::Compression>,
         max_row_group_size: Option<usize>,
@@ -415,6 +416,7 @@ impl ParquetDataCatalog {
     /// # Returns
     ///
     /// Returns the [`PathBuf`] of the created file, or an empty path if no data was provided.
+    /// If the target file already exists, returns the path without writing (skips write).
     ///
     /// # Errors
     ///
@@ -422,7 +424,7 @@ impl ParquetDataCatalog {
     /// - Data serialization to Arrow record batches fails.
     /// - Object store write operations fail.
     /// - File path construction fails.
-    /// - Timestamp interval validation fails after writing.
+    /// - Writing would create non-disjoint timestamp intervals.
     ///
     /// # Panics
     ///
@@ -471,15 +473,33 @@ impl ParquetDataCatalog {
         let directory = self.make_path(T::path_prefix(), instrument_id)?;
         let filename = timestamps_to_filename(start_ts, end_ts);
         let path = PathBuf::from(format!("{directory}/{filename}"));
+        let object_path = self.to_object_path(&path.to_string_lossy());
 
-        // Write all batches to parquet file
-        info!(
+        let file_exists =
+            self.execute_async(async { Ok(self.object_store.head(&object_path).await.is_ok()) })?;
+        if file_exists {
+            log::info!("File {path:?} already exists, skipping write");
+            return Ok(path);
+        }
+
+        if !skip_disjoint_check.unwrap_or(false) {
+            let current_intervals = self.get_directory_intervals(&directory)?;
+            let new_interval = (start_ts.as_u64(), end_ts.as_u64());
+            let mut new_intervals = current_intervals.clone();
+            new_intervals.push(new_interval);
+
+            if !are_intervals_disjoint(&new_intervals) {
+                anyhow::bail!(
+                    "Writing file {filename} with interval ({start_ts}, {end_ts}) would create \
+                    non-disjoint intervals. Existing intervals: {current_intervals:?}"
+                );
+            }
+        }
+
+        log::info!(
             "Writing {} batches of {type_name} data to {path:?}",
             batches.len()
         );
-
-        // Convert path to object store path
-        let object_path = self.to_object_path(&path.to_string_lossy());
 
         self.execute_async(async {
             write_batches_to_object_store(
@@ -491,14 +511,6 @@ impl ParquetDataCatalog {
             )
             .await
         })?;
-
-        if !skip_disjoint_check.unwrap_or(false) {
-            let intervals = self.get_directory_intervals(&directory)?;
-
-            if !are_intervals_disjoint(&intervals) {
-                anyhow::bail!("Intervals are not disjoint after writing a new file");
-            }
-        }
 
         Ok(path)
     }
@@ -574,7 +586,7 @@ impl ParquetDataCatalog {
         let filename = timestamps_to_filename(start_ts, end_ts).replace(".parquet", ".json");
         let json_path = directory.join(&filename);
 
-        info!(
+        log::info!(
             "Writing {} records of {type_name} data to {json_path:?}",
             data.len()
         );
@@ -582,7 +594,7 @@ impl ParquetDataCatalog {
         if write_metadata {
             let metadata = T::chunk_metadata(&data);
             let metadata_path = json_path.with_extension("metadata.json");
-            info!("Writing metadata to {metadata_path:?}");
+            log::info!("Writing metadata to {metadata_path:?}");
 
             // Use object store for metadata file
             let metadata_object_path = ObjectPath::from(metadata_path.to_string_lossy().as_ref());
@@ -853,7 +865,7 @@ impl ParquetDataCatalog {
         self.original_uri.starts_with("s3://")
             || self.original_uri.starts_with("gs://")
             || self.original_uri.starts_with("gcs://")
-            || self.original_uri.starts_with("azure://")
+            || self.original_uri.starts_with("az://")
             || self.original_uri.starts_with("abfs://")
             || self.original_uri.starts_with("http://")
             || self.original_uri.starts_with("https://")
@@ -1079,6 +1091,9 @@ impl ParquetDataCatalog {
     where
         T: DecodeDataFromRecordBatch + CatalogPathPrefix + TryFrom<Data>,
     {
+        // Reset session to allow repeated queries (streams are consumed on each query)
+        self.reset_session();
+
         let query_result = self.query::<T>(instrument_ids, start, end, where_clause, files)?;
         let all_data = query_result.collect();
 
@@ -1401,7 +1416,7 @@ impl ParquetDataCatalog {
     /// # Notes
     ///
     /// - Only files with valid timestamp-based filenames are included.
-    /// - Files with unparseable names are silently ignored.
+    /// - Files with unparsable names are silently ignored.
     /// - The method works with both local and remote object stores.
     /// - Results are automatically sorted by start timestamp.
     ///
@@ -1613,7 +1628,7 @@ impl ParquetDataCatalog {
     where
         F: std::future::Future<Output = anyhow::Result<R>>,
     {
-        let rt = nautilus_common::runtime::get_runtime();
+        let rt = get_runtime();
         rt.block_on(future)
     }
 }

@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -84,6 +84,9 @@ pub enum BybitHttpError {
     /// Build error for query parameters.
     #[error("Build error: {0}")]
     BuildError(#[from] BybitBuildError),
+    /// Request was canceled, typically due to shutdown or disconnect.
+    #[error("Request canceled: {0}")]
+    Canceled(String),
     /// Generic network error (for retries, cancellations, etc).
     #[error("Network error: {0}")]
     NetworkError(String),
@@ -120,10 +123,6 @@ impl From<BybitErrorResponse> for BybitHttpError {
         }
     }
 }
-
-////////////////////////////////////////////////////////////////////////////////
-// Tests
-////////////////////////////////////////////////////////////////////////////////
 
 #[cfg(test)]
 mod tests {

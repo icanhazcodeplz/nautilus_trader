@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -107,7 +107,7 @@ impl PositionSnapshot {
             realized_return: Some(position.realized_return), // TODO: Standardize
             realized_pnl: position.realized_pnl,
             unrealized_pnl,
-            commissions: position.commissions.values().cloned().collect(), // TODO: Optimize
+            commissions: position.commissions.values().copied().collect(), // TODO: Optimize
             duration_ns: Some(position.duration_ns),                       // TODO: Standardize
             ts_opened: position.ts_opened,
             ts_closed: position.ts_closed,
@@ -117,9 +117,6 @@ impl PositionSnapshot {
     }
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// Tests
-////////////////////////////////////////////////////////////////////////////////
 #[cfg(test)]
 mod tests {
     use nautilus_core::UnixNanos;

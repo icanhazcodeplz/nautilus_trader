@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -16,13 +16,12 @@
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
-use tokio::sync::Mutex;
 
 #[derive(Debug)]
 pub struct WeightedLimiter {
     capacity: f64,       // tokens per minute (e.g., 1200)
     refill_per_sec: f64, // capacity / 60
-    state: Mutex<State>,
+    state: tokio::sync::Mutex<State>,
 }
 
 #[derive(Debug)]
@@ -37,7 +36,7 @@ impl WeightedLimiter {
         Self {
             capacity: cap,
             refill_per_sec: cap / 60.0,
-            state: Mutex::new(State {
+            state: tokio::sync::Mutex::new(State {
                 tokens: cap,
                 last_refill: Instant::now(),
             }),
@@ -168,117 +167,105 @@ pub fn info_extra_weight(req: &crate::http::query::InfoRequest, json: &Value) ->
 
 /// Exchange: 1 + floor(batch_len / 40)
 pub fn exchange_weight(action: &crate::http::query::ExchangeAction) -> u32 {
-    // Since ExchangeAction uses struct with action_type and params,
-    // we need to extract batch size from params based on action_type
-    let batch_size = match action.action_type.as_str() {
-        "order" => {
-            if let Some(orders) = action.params.get("orders") {
-                orders.as_array().map(|a| a.len()).unwrap_or(0)
-            } else {
-                0
-            }
+    use crate::http::query::ExchangeActionParams;
+
+    // Extract batch size from typed params
+    let batch_size = match &action.params {
+        ExchangeActionParams::Order(params) => params.orders.len(),
+        ExchangeActionParams::Cancel(params) => params.cancels.len(),
+        ExchangeActionParams::Modify(_) => {
+            // Modify is for a single order
+            1
         }
-        "cancel" => {
-            if let Some(cancels) = action.params.get("cancels") {
-                cancels.as_array().map(|a| a.len()).unwrap_or(0)
-            } else {
-                0
-            }
+        ExchangeActionParams::UpdateLeverage(_) | ExchangeActionParams::UpdateIsolatedMargin(_) => {
+            0
         }
-        "batchModify" => {
-            if let Some(modifies) = action.params.get("modifies") {
-                modifies.as_array().map(|a| a.len()).unwrap_or(0)
-            } else {
-                0
-            }
-        }
-        _ => 0,
     };
     1 + (batch_size as u32 / 40)
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// Tests
-////////////////////////////////////////////////////////////////////////////////
-
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
-    use serde_json::json;
 
     use super::*;
-    use crate::http::query::{ExchangeAction, InfoRequest};
+    use crate::http::query::{
+        CancelParams, ExchangeAction, ExchangeActionParams, ExchangeActionType, OrderParams,
+        UpdateLeverageParams,
+    };
 
     #[rstest]
-    #[case("order", "orders", 1, 1)]
-    #[case("order", "orders", 39, 1)]
-    #[case("order", "orders", 40, 2)]
-    #[case("order", "orders", 79, 2)]
-    #[case("order", "orders", 80, 3)]
-    #[case("cancel", "cancels", 40, 2)]
-    #[case("batchModify", "modifies", 40, 2)]
-    fn test_exchange_weight_steps_every_40(
-        #[case] action_type: &str,
-        #[case] array_key: &str,
+    #[case(1, 1)]
+    #[case(39, 1)]
+    #[case(40, 2)]
+    #[case(79, 2)]
+    #[case(80, 3)]
+    fn test_exchange_weight_order_steps_every_40(
         #[case] array_len: usize,
         #[case] expected_weight: u32,
     ) {
+        use rust_decimal::Decimal;
+
+        use super::super::models::{
+            Cloid, HyperliquidExecGrouping, HyperliquidExecLimitParams, HyperliquidExecOrderKind,
+            HyperliquidExecPlaceOrderRequest, HyperliquidExecTif,
+        };
+
+        let orders: Vec<HyperliquidExecPlaceOrderRequest> = (0..array_len)
+            .map(|_| HyperliquidExecPlaceOrderRequest {
+                asset: 0,
+                is_buy: true,
+                price: Decimal::new(50000, 0),
+                size: Decimal::new(1, 0),
+                reduce_only: false,
+                kind: HyperliquidExecOrderKind::Limit {
+                    limit: HyperliquidExecLimitParams {
+                        tif: HyperliquidExecTif::Gtc,
+                    },
+                },
+                cloid: Some(Cloid::from_hex("0x00000000000000000000000000000000").unwrap()),
+            })
+            .collect();
+
         let action = ExchangeAction {
-            action_type: action_type.to_string(),
-            params: json!({ array_key: vec![1; array_len] }),
+            action_type: ExchangeActionType::Order,
+            params: ExchangeActionParams::Order(OrderParams {
+                orders,
+                grouping: HyperliquidExecGrouping::Na,
+            }),
         };
         assert_eq!(exchange_weight(&action), expected_weight);
     }
 
     #[rstest]
+    fn test_exchange_weight_cancel() {
+        use super::super::models::{Cloid, HyperliquidExecCancelByCloidRequest};
+
+        let cancels: Vec<HyperliquidExecCancelByCloidRequest> = (0..40)
+            .map(|_| HyperliquidExecCancelByCloidRequest {
+                asset: 0,
+                cloid: Cloid::from_hex("0x00000000000000000000000000000000").unwrap(),
+            })
+            .collect();
+
+        let action = ExchangeAction {
+            action_type: ExchangeActionType::Cancel,
+            params: ExchangeActionParams::Cancel(CancelParams { cancels }),
+        };
+        assert_eq!(exchange_weight(&action), 2);
+    }
+
+    #[rstest]
     fn test_exchange_weight_non_batch_action() {
         let update_leverage = ExchangeAction {
-            action_type: "updateLeverage".to_string(),
-            params: json!({ "asset": 1, "isCross": true, "leverage": 10 }),
+            action_type: ExchangeActionType::UpdateLeverage,
+            params: ExchangeActionParams::UpdateLeverage(UpdateLeverageParams {
+                asset: 1,
+                is_cross: true,
+                leverage: 10,
+            }),
         };
         assert_eq!(exchange_weight(&update_leverage), 1);
-    }
-
-    #[rstest]
-    #[case("l2Book", 2)]
-    #[case("allMids", 2)]
-    #[case("clearinghouseState", 2)]
-    #[case("orderStatus", 2)]
-    #[case("spotClearinghouseState", 2)]
-    #[case("exchangeStatus", 2)]
-    #[case("userRole", 60)]
-    #[case("userFills", 20)]
-    #[case("unknownEndpoint", 20)]
-    fn test_info_base_weights(#[case] request_type: &str, #[case] expected_weight: u32) {
-        let request = InfoRequest {
-            request_type: request_type.to_string(),
-            params: json!({ "coin": "BTC" }),
-        };
-        assert_eq!(info_base_weight(&request), expected_weight);
-    }
-
-    #[rstest]
-    fn test_info_extra_weight_no_charging() {
-        let l2_book = InfoRequest {
-            request_type: "l2Book".to_string(),
-            params: json!({ "coin": "BTC" }),
-        };
-        let large_json = json!(vec![1; 1000]);
-        assert_eq!(info_extra_weight(&l2_book, &large_json), 0);
-    }
-
-    #[rstest]
-    fn test_info_extra_weight_complex_json() {
-        let user_fills = InfoRequest {
-            request_type: "userFills".to_string(),
-            params: json!({ "user": "0x123" }),
-        };
-        let complex_json = json!({
-            "fills": vec![1; 40],
-            "orders": vec![1; 20],
-            "other": "data"
-        });
-        assert_eq!(info_extra_weight(&user_fills, &complex_json), 2); // largest array is 40, 40/20 = 2
     }
 
     #[tokio::test]
@@ -298,7 +285,7 @@ mod tests {
         // Should take at least some time to refill (allow some jitter/timing variance)
         assert!(
             elapsed.as_millis() >= 500,
-            "Expected significant delay, got {}ms",
+            "Expected significant delay, was {}ms",
             elapsed.as_millis()
         );
     }

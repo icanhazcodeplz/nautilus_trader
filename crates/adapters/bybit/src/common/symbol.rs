@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -15,7 +15,7 @@
 
 //! Helpers for working with Bybit-specific symbol strings.
 
-use std::fmt::{Display, Formatter};
+use std::{borrow::Cow, fmt::Display};
 
 use nautilus_model::identifiers::{InstrumentId, Symbol};
 use ustr::Ustr;
@@ -32,7 +32,7 @@ fn has_valid_suffix(value: &str) -> bool {
 /// Represents a Bybit symbol augmented with a product-type suffix.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct BybitSymbol {
-    value: String,
+    value: Ustr,
 }
 
 impl BybitSymbol {
@@ -41,14 +41,21 @@ impl BybitSymbol {
     /// # Errors
     ///
     /// Returns an error if the value does not contain one of the recognised Bybit suffixes.
-    pub fn new<S: Into<String>>(value: S) -> anyhow::Result<Self> {
-        let value = value.into();
-        let normalised = value.to_ascii_uppercase();
+    pub fn new<S: AsRef<str>>(value: S) -> anyhow::Result<Self> {
+        let value_ref = value.as_ref();
+        let needs_upper = value_ref.bytes().any(|b| b.is_ascii_lowercase());
+        let normalised: Cow<'_, str> = if needs_upper {
+            Cow::Owned(value_ref.to_ascii_uppercase())
+        } else {
+            Cow::Borrowed(value_ref)
+        };
         anyhow::ensure!(
-            has_valid_suffix(&normalised),
-            "invalid Bybit symbol '{value}': expected suffix in {VALID_SUFFIXES:?}"
+            has_valid_suffix(normalised.as_ref()),
+            "invalid Bybit symbol '{value_ref}': expected suffix in {VALID_SUFFIXES:?}"
         );
-        Ok(Self { value: normalised })
+        Ok(Self {
+            value: Ustr::from(normalised.as_ref()),
+        })
     }
 
     /// Returns the underlying symbol without the Bybit suffix.
@@ -56,8 +63,7 @@ impl BybitSymbol {
     pub fn raw_symbol(&self) -> &str {
         self.value
             .rsplit_once('-')
-            .map(|(prefix, _)| prefix)
-            .unwrap_or(&self.value)
+            .map_or(self.value.as_str(), |(prefix, _)| prefix)
     }
 
     /// Returns the product type identified by the suffix.
@@ -79,19 +85,19 @@ impl BybitSymbol {
     /// Returns the instrument identifier corresponding to this symbol.
     #[must_use]
     pub fn to_instrument_id(&self) -> InstrumentId {
-        InstrumentId::new(Symbol::new(&self.value), *BYBIT_VENUE)
+        InstrumentId::new(Symbol::from_ustr_unchecked(self.value), *BYBIT_VENUE)
     }
 
-    /// Returns the symbol value as `Ustr` for reuse where required.
+    /// Returns the symbol value as `Ustr`.
     #[must_use]
     pub fn as_ustr(&self) -> Ustr {
-        Ustr::from(self.value.as_str())
+        self.value
     }
 }
 
 impl Display for BybitSymbol {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.value)
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.value.as_str())
     }
 }
 
@@ -110,10 +116,6 @@ impl TryFrom<String> for BybitSymbol {
         Self::new(value)
     }
 }
-
-////////////////////////////////////////////////////////////////////////////////
-// Tests
-////////////////////////////////////////////////////////////////////////////////
 
 #[cfg(test)]
 mod tests {

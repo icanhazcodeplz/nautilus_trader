@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -19,6 +19,7 @@
 
 pub mod config;
 pub mod database;
+pub mod quote;
 
 mod index;
 
@@ -26,7 +27,7 @@ mod index;
 mod tests;
 
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::VecDeque,
     fmt::Debug,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -39,12 +40,11 @@ use index::CacheIndex;
 use nautilus_core::{
     UUID4, UnixNanos,
     correctness::{
-        check_key_not_in_map, check_predicate_false, check_slice_not_empty, check_valid_string,
+        check_key_not_in_map, check_predicate_false, check_slice_not_empty,
+        check_valid_string_ascii,
     },
-    datetime::secs_to_nanos,
+    datetime::secs_to_nanos_unchecked,
 };
-#[cfg(feature = "defi")]
-use nautilus_model::defi::{Pool, PoolProfiler};
 use nautilus_model::{
     accounts::{Account, AccountAny},
     data::{
@@ -99,9 +99,7 @@ pub struct Cache {
     positions: AHashMap<PositionId, Position>,
     position_snapshots: AHashMap<PositionId, Bytes>,
     #[cfg(feature = "defi")]
-    pools: AHashMap<InstrumentId, Pool>,
-    #[cfg(feature = "defi")]
-    pool_profilers: AHashMap<InstrumentId, PoolProfiler>,
+    pub(crate) defi: crate::defi::cache::DefiCache,
 }
 
 impl Debug for Cache {
@@ -175,9 +173,7 @@ impl Cache {
             positions: AHashMap::new(),
             position_snapshots: AHashMap::new(),
             #[cfg(feature = "defi")]
-            pools: AHashMap::new(),
-            #[cfg(feature = "defi")]
-            pool_profilers: AHashMap::new(),
+            defi: crate::defi::cache::DefiCache::default(),
         }
     }
 
@@ -185,6 +181,15 @@ impl Cache {
     #[must_use]
     pub fn memory_address(&self) -> String {
         format!("{:?}", std::ptr::from_ref(self))
+    }
+
+    /// Sets the cache database adapter for persistence.
+    ///
+    /// This allows setting or replacing the database adapter after cache construction.
+    pub fn set_database(&mut self, database: Box<dyn CacheDatabaseAdapter>) {
+        let type_name = std::any::type_name_of_val(&*database);
+        log::info!("Cache database adapter set: {type_name}");
+        self.database = Some(database);
     }
 
     // -- COMMANDS --------------------------------------------------------------------------------
@@ -380,7 +385,16 @@ impl Cache {
                 .or_default()
                 .insert(*client_order_id);
 
-            // 7: Build index.exec_algorithm_orders -> {ExecAlgorithmId, {ClientOrderId}}
+            // 7: Build index.account_orders -> {AccountId, {ClientOrderId}}
+            if let Some(account_id) = order.account_id() {
+                self.index
+                    .account_orders
+                    .entry(account_id)
+                    .or_default()
+                    .insert(*client_order_id);
+            }
+
+            // 8: Build index.exec_algorithm_orders -> {ExecAlgorithmId, {ClientOrderId}}
             if let Some(exec_algorithm_id) = order.exec_algorithm_id() {
                 self.index
                     .exec_algorithm_orders
@@ -472,20 +486,27 @@ impl Cache {
                 .or_default()
                 .insert(*position_id);
 
-            // 6: Build index.positions -> {PositionId}
+            // 6: Build index.account_positions -> {AccountId, {PositionId}}
+            self.index
+                .account_positions
+                .entry(position.account_id)
+                .or_default()
+                .insert(*position_id);
+
+            // 7: Build index.positions -> {PositionId}
             self.index.positions.insert(*position_id);
 
-            // 7: Build index.positions_open -> {PositionId}
+            // 8: Build index.positions_open -> {PositionId}
             if position.is_open() {
                 self.index.positions_open.insert(*position_id);
             }
 
-            // 8: Build index.positions_closed -> {PositionId}
+            // 9: Build index.positions_closed -> {PositionId}
             if position.is_closed() {
                 self.index.positions_closed.insert(*position_id);
             }
 
-            // 9: Build index.strategies -> {StrategyId}
+            // 10: Build index.strategies -> {StrategyId}
             self.index.strategies.insert(strategy_id);
         }
     }
@@ -510,12 +531,13 @@ impl Cache {
             return None;
         };
 
+        // Use exit price for mark-to-market: longs exit at bid, shorts exit at ask
         let last = match position.side {
             PositionSide::Flat | PositionSide::NoPositionSide => {
                 return Some(Money::new(0.0, position.settlement_currency));
             }
-            PositionSide::Long => quote.ask_price,
-            PositionSide::Short => quote.bid_price,
+            PositionSide::Long => quote.bid_price,
+            PositionSide::Short => quote.ask_price,
         };
 
         Some(position.unrealized_pnl(last))
@@ -871,13 +893,13 @@ impl Cache {
         let mut residuals = false;
 
         // Check for any open orders
-        for order in self.orders_open(None, None, None, None) {
+        for order in self.orders_open(None, None, None, None, None) {
             residuals = true;
-            log::warn!("Residual {order:?}");
+            log::warn!("Residual {order}");
         }
 
         // Check for any open positions
-        for position in self.positions_open(None, None, None, None) {
+        for position in self.positions_open(None, None, None, None, None) {
             residuals = true;
             log::warn!("Residual {position}");
         }
@@ -900,7 +922,9 @@ impl Cache {
             }
         );
 
-        let buffer_ns = secs_to_nanos(buffer_secs as f64);
+        let buffer_ns = secs_to_nanos_unchecked(buffer_secs as f64);
+
+        let mut affected_order_list_ids: AHashSet<OrderListId> = AHashSet::new();
 
         'outer: for client_order_id in self.index.orders_closed.clone() {
             if let Some(order) = self.orders.get(&client_order_id)
@@ -920,7 +944,24 @@ impl Cache {
                     }
                 }
 
+                if let Some(order_list_id) = order.order_list_id() {
+                    affected_order_list_ids.insert(order_list_id);
+                }
+
                 self.purge_order(client_order_id);
+            }
+        }
+
+        for order_list_id in affected_order_list_ids {
+            if let Some(order_list) = self.order_lists.get(&order_list_id) {
+                let all_purged = order_list
+                    .orders
+                    .iter()
+                    .all(|o| !self.orders.contains_key(&o.client_order_id()));
+                if all_purged {
+                    self.order_lists.remove(&order_list_id);
+                    log::info!("Purged {order_list_id}");
+                }
             }
         }
     }
@@ -936,7 +977,7 @@ impl Cache {
             }
         );
 
-        let buffer_ns = secs_to_nanos(buffer_secs as f64);
+        let buffer_ns = secs_to_nanos_unchecked(buffer_secs as f64);
 
         for position_id in self.index.positions_closed.clone() {
             if let Some(position) = self.positions.get(&position_id)
@@ -951,50 +992,83 @@ impl Cache {
 
     /// Purges the order with the `client_order_id` from the cache (if found).
     ///
-    /// All `OrderFilled` events for the order will also be purged from any associated position.
+    /// For safety, an order is prevented from being purged if it's open.
     pub fn purge_order(&mut self, client_order_id: ClientOrderId) {
-        // Purge events from associated position if exists
-        if let Some(position_id) = self.index.order_position.get(&client_order_id)
-            && let Some(position) = self.positions.get_mut(position_id)
+        // Check if order exists and is safe to purge before removing
+        let order = self.orders.get(&client_order_id).cloned();
+
+        // SAFETY: Prevent purging open orders
+        if let Some(ref ord) = order
+            && ord.is_open()
         {
-            position.purge_events_for_order(client_order_id);
+            log::warn!("Order {client_order_id} found open when purging, skipping purge");
+            return;
         }
 
-        if let Some(order) = self.orders.remove(&client_order_id) {
+        // If order exists in cache, remove it and clean up order-specific indices
+        if let Some(ref ord) = order {
+            // Safe to purge
+            self.orders.remove(&client_order_id);
+
             // Remove order from venue index
-            if let Some(venue_orders) = self
-                .index
-                .venue_orders
-                .get_mut(&order.instrument_id().venue)
+            if let Some(venue_orders) = self.index.venue_orders.get_mut(&ord.instrument_id().venue)
             {
                 venue_orders.remove(&client_order_id);
             }
 
             // Remove venue order ID index if exists
-            if let Some(venue_order_id) = order.venue_order_id() {
+            if let Some(venue_order_id) = ord.venue_order_id() {
                 self.index.venue_order_ids.remove(&venue_order_id);
             }
 
             // Remove from instrument orders index
             if let Some(instrument_orders) =
-                self.index.instrument_orders.get_mut(&order.instrument_id())
+                self.index.instrument_orders.get_mut(&ord.instrument_id())
             {
                 instrument_orders.remove(&client_order_id);
             }
 
             // Remove from position orders index if associated with a position
-            if let Some(position_id) = order.position_id()
+            if let Some(position_id) = ord.position_id()
                 && let Some(position_orders) = self.index.position_orders.get_mut(&position_id)
             {
                 position_orders.remove(&client_order_id);
             }
 
             // Remove from exec algorithm orders index if it has an exec algorithm
-            if let Some(exec_algorithm_id) = order.exec_algorithm_id()
+            if let Some(exec_algorithm_id) = ord.exec_algorithm_id()
                 && let Some(exec_algorithm_orders) =
                     self.index.exec_algorithm_orders.get_mut(&exec_algorithm_id)
             {
                 exec_algorithm_orders.remove(&client_order_id);
+            }
+
+            // Clean up strategy orders reverse index
+            if let Some(strategy_orders) = self.index.strategy_orders.get_mut(&ord.strategy_id()) {
+                strategy_orders.remove(&client_order_id);
+                if strategy_orders.is_empty() {
+                    self.index.strategy_orders.remove(&ord.strategy_id());
+                }
+            }
+
+            // Clean up account orders index
+            if let Some(account_id) = ord.account_id()
+                && let Some(account_orders) = self.index.account_orders.get_mut(&account_id)
+            {
+                account_orders.remove(&client_order_id);
+                if account_orders.is_empty() {
+                    self.index.account_orders.remove(&account_id);
+                }
+            }
+
+            // Clean up exec spawn reverse index (if this order is a spawned child)
+            if let Some(exec_spawn_id) = ord.exec_spawn_id()
+                && let Some(spawn_orders) = self.index.exec_spawn_orders.get_mut(&exec_spawn_id)
+            {
+                spawn_orders.remove(&client_order_id);
+                if spawn_orders.is_empty() {
+                    self.index.exec_spawn_orders.remove(&exec_spawn_id);
+                }
             }
 
             log::info!("Purged order {client_order_id}");
@@ -1002,13 +1076,27 @@ impl Cache {
             log::warn!("Order {client_order_id} not found when purging");
         }
 
-        // Remove from all other index collections regardless of whether order was found
+        // Always clean up order indices (even if order was not in cache)
         self.index.order_position.remove(&client_order_id);
-        self.index.order_strategy.remove(&client_order_id);
+        let strategy_id = self.index.order_strategy.remove(&client_order_id);
         self.index.order_client.remove(&client_order_id);
         self.index.client_order_ids.remove(&client_order_id);
+
+        // Clean up reverse index when order not in cache (using forward index)
+        if let Some(strategy_id) = strategy_id
+            && let Some(strategy_orders) = self.index.strategy_orders.get_mut(&strategy_id)
+        {
+            strategy_orders.remove(&client_order_id);
+            if strategy_orders.is_empty() {
+                self.index.strategy_orders.remove(&strategy_id);
+            }
+        }
+
+        // Remove spawn parent entry if this order was a spawn root
         self.index.exec_spawn_orders.remove(&client_order_id);
+
         self.index.orders.remove(&client_order_id);
+        self.index.orders_open.remove(&client_order_id);
         self.index.orders_closed.remove(&client_order_id);
         self.index.orders_emulated.remove(&client_order_id);
         self.index.orders_inflight.remove(&client_order_id);
@@ -1016,35 +1104,55 @@ impl Cache {
     }
 
     /// Purges the position with the `position_id` from the cache (if found).
+    ///
+    /// For safety, a position is prevented from being purged if it's open.
     pub fn purge_position(&mut self, position_id: PositionId) {
-        if let Some(position) = self.positions.remove(&position_id) {
+        // Check if position exists and is safe to purge before removing
+        let position = self.positions.get(&position_id).cloned();
+
+        // SAFETY: Prevent purging open positions
+        if let Some(ref pos) = position
+            && pos.is_open()
+        {
+            log::warn!("Position {position_id} found open when purging, skipping purge");
+            return;
+        }
+
+        // If position exists in cache, remove it and clean up position-specific indices
+        if let Some(ref pos) = position {
+            self.positions.remove(&position_id);
+
             // Remove from venue positions index
-            if let Some(venue_positions) = self
-                .index
-                .venue_positions
-                .get_mut(&position.instrument_id.venue)
+            if let Some(venue_positions) =
+                self.index.venue_positions.get_mut(&pos.instrument_id.venue)
             {
                 venue_positions.remove(&position_id);
             }
 
             // Remove from instrument positions index
-            if let Some(instrument_positions) = self
-                .index
-                .instrument_positions
-                .get_mut(&position.instrument_id)
+            if let Some(instrument_positions) =
+                self.index.instrument_positions.get_mut(&pos.instrument_id)
             {
                 instrument_positions.remove(&position_id);
             }
 
             // Remove from strategy positions index
             if let Some(strategy_positions) =
-                self.index.strategy_positions.get_mut(&position.strategy_id)
+                self.index.strategy_positions.get_mut(&pos.strategy_id)
             {
                 strategy_positions.remove(&position_id);
             }
 
+            // Remove from account positions index
+            if let Some(account_positions) = self.index.account_positions.get_mut(&pos.account_id) {
+                account_positions.remove(&position_id);
+                if account_positions.is_empty() {
+                    self.index.account_positions.remove(&pos.account_id);
+                }
+            }
+
             // Remove position ID from orders that reference it
-            for client_order_id in position.client_order_ids() {
+            for client_order_id in pos.client_order_ids() {
                 self.index.order_position.remove(&client_order_id);
             }
 
@@ -1053,12 +1161,15 @@ impl Cache {
             log::warn!("Position {position_id} not found when purging");
         }
 
-        // Remove from all other index collections regardless of whether position was found
+        // Always clean up position indices (even if position not in cache)
         self.index.position_strategy.remove(&position_id);
         self.index.position_orders.remove(&position_id);
         self.index.positions.remove(&position_id);
         self.index.positions_open.remove(&position_id);
         self.index.positions_closed.remove(&position_id);
+
+        // Always clean up position snapshots (even if position not in cache)
+        self.position_snapshots.remove(&position_id);
     }
 
     /// Purges all account state events which are outside the lookback window.
@@ -1122,7 +1233,10 @@ impl Cache {
         self.yield_curves.clear();
 
         #[cfg(feature = "defi")]
-        self.pools.clear();
+        {
+            self.defi.pools.clear();
+            self.defi.pool_profilers.clear();
+        }
 
         self.clear_index();
 
@@ -1131,23 +1245,23 @@ impl Cache {
 
     /// Dispose of the cache which will close any underlying database adapter.
     ///
-    /// # Panics
-    ///
-    /// Panics if closing the database connection fails.
+    /// If closing the database connection fails, an error is logged.
     pub fn dispose(&mut self) {
-        if let Some(database) = &mut self.database {
-            database.close().expect("Failed to close database");
+        if let Some(database) = &mut self.database
+            && let Err(e) = database.close()
+        {
+            log::error!("Failed to close database during dispose: {e}");
         }
     }
 
     /// Flushes the caches database which permanently removes all persisted data.
     ///
-    /// # Panics
-    ///
-    /// Panics if flushing the database connection fails.
+    /// If flushing the database connection fails, an error is logged.
     pub fn flush_db(&mut self) {
-        if let Some(database) = &mut self.database {
-            database.flush().expect("Failed to flush database");
+        if let Some(database) = &mut self.database
+            && let Err(e) = database.flush()
+        {
+            log::error!("Failed to flush database: {e}");
         }
     }
 
@@ -1159,7 +1273,7 @@ impl Cache {
     ///
     /// Returns an error if persisting the entry to the backing database fails.
     pub fn add(&mut self, key: &str, value: Bytes) -> anyhow::Result<()> {
-        check_valid_string(key, stringify!(key))?;
+        check_valid_string_ascii(key, stringify!(key))?;
         check_predicate_false(value.is_empty(), stringify!(value))?;
 
         log::debug!("Adding general {key}");
@@ -1198,33 +1312,6 @@ impl Cache {
         log::debug!("Adding `OwnOrderBook` {}", own_book.instrument_id);
 
         self.own_books.insert(own_book.instrument_id, own_book);
-        Ok(())
-    }
-
-    /// Adds a `Pool` to the cache.
-    ///
-    /// # Errors
-    ///
-    /// This function currently does not return errors but follows the same pattern as other add methods for consistency.
-    #[cfg(feature = "defi")]
-    pub fn add_pool(&mut self, pool: Pool) -> anyhow::Result<()> {
-        log::debug!("Adding `Pool` {}", pool.instrument_id);
-
-        self.pools.insert(pool.instrument_id, pool);
-        Ok(())
-    }
-
-    /// Adds a `PoolProfiler` to the cache.
-    ///
-    /// # Errors
-    ///
-    /// This function currently does not return errors but follows the same pattern as other add methods for consistency.
-    #[cfg(feature = "defi")]
-    pub fn add_pool_profiler(&mut self, pool_profiler: PoolProfiler) -> anyhow::Result<()> {
-        let instrument_id = pool_profiler.pool.instrument_id;
-        log::debug!("Adding `PoolProfiler` {instrument_id}");
-
-        self.pool_profilers.insert(instrument_id, pool_profiler);
         Ok(())
     }
 
@@ -1504,6 +1591,9 @@ impl Cache {
     ///
     /// Returns an error if persisting the currency to the backing database fails.
     pub fn add_currency(&mut self, currency: Currency) -> anyhow::Result<()> {
+        if self.currencies.contains_key(&currency.code) {
+            return Ok(());
+        }
         log::debug!("Adding `Currency` {}", currency.code);
 
         if let Some(database) = &mut self.database {
@@ -1521,6 +1611,13 @@ impl Cache {
     /// Returns an error if persisting the instrument to the backing database fails.
     pub fn add_instrument(&mut self, instrument: InstrumentAny) -> anyhow::Result<()> {
         log::debug!("Adding `Instrument` {}", instrument.id());
+
+        // Ensure currencies exist in cache - safe to call repeatedly as add_currency is idempotent
+        if let Some(base_currency) = instrument.base_currency() {
+            self.add_currency(base_currency)?;
+        }
+        self.add_currency(instrument.quote_currency())?;
+        self.add_currency(instrument.settlement_currency())?;
 
         if let Some(database) = &mut self.database {
             database.add_instrument(&instrument)?;
@@ -1664,9 +1761,17 @@ impl Cache {
             .or_default()
             .insert(client_order_id);
 
+        // Update account -> orders index (if account_id known at creation)
+        if let Some(account_id) = order.account_id() {
+            self.index
+                .account_orders
+                .entry(account_id)
+                .or_default()
+                .insert(client_order_id);
+        }
+
         // Update exec_algorithm -> orders index
-        // Update exec_algorithm -> orders index
-        if let (Some(exec_algorithm_id), Some(exec_spawn_id)) = (exec_algorithm_id, exec_spawn_id) {
+        if let Some(exec_algorithm_id) = exec_algorithm_id {
             self.index.exec_algorithms.insert(exec_algorithm_id);
 
             self.index
@@ -1674,7 +1779,10 @@ impl Cache {
                 .entry(exec_algorithm_id)
                 .or_default()
                 .insert(client_order_id);
+        }
 
+        // Update exec_spawn -> orders index
+        if let Some(exec_spawn_id) = exec_spawn_id {
             self.index
                 .exec_spawn_orders
                 .entry(exec_spawn_id)
@@ -1683,13 +1791,10 @@ impl Cache {
         }
 
         // Update emulation index
-        match order.emulation_trigger() {
-            Some(_) => {
-                self.index.orders_emulated.remove(&client_order_id);
-            }
-            None => {
-                self.index.orders_emulated.insert(client_order_id);
-            }
+        if let Some(emulation_trigger) = order.emulation_trigger()
+            && emulation_trigger != TriggerType::NoTrigger
+        {
+            self.index.orders_emulated.insert(client_order_id);
         }
 
         // Index position ID if provided
@@ -1718,6 +1823,25 @@ impl Cache {
 
         self.orders.insert(client_order_id, order);
 
+        Ok(())
+    }
+
+    /// Adds the `order_list` to the cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the order list ID is already contained in the cache.
+    pub fn add_order_list(&mut self, order_list: OrderList) -> anyhow::Result<()> {
+        let order_list_id = order_list.id;
+        check_key_not_in_map(
+            &order_list_id,
+            &self.order_lists,
+            stringify!(order_list_id),
+            stringify!(order_lists),
+        )?;
+
+        log::debug!("Adding {order_list:?}");
+        self.order_lists.insert(order_list_id, order_list);
         Ok(())
     }
 
@@ -1780,6 +1904,7 @@ impl Cache {
         self.positions.insert(position.id, position.clone());
         self.index.positions.insert(position.id);
         self.index.positions_open.insert(position.id);
+        self.index.positions_closed.remove(&position.id); // Cleanup for NETTING reopen
 
         log::debug!("Adding {position}");
 
@@ -1802,6 +1927,13 @@ impl Cache {
             .entry(instrument_id)
             .or_default();
         instrument_positions.insert(position.id);
+
+        // Index: AccountId -> AHashSet<PositionId>
+        self.index
+            .account_positions
+            .entry(position.account_id)
+            .or_default()
+            .insert(position.id);
 
         if let Some(database) = &mut self.database {
             database.add_position(&position)?;
@@ -1865,12 +1997,23 @@ impl Cache {
             self.index.orders_closed.insert(client_order_id);
         }
 
-        // Update emulation
-        if let Some(emulation_trigger) = order.emulation_trigger() {
-            match emulation_trigger {
-                TriggerType::NoTrigger => self.index.orders_emulated.remove(&client_order_id),
-                _ => self.index.orders_emulated.insert(client_order_id),
-            };
+        // Update emulation index
+        if let Some(emulation_trigger) = order.emulation_trigger()
+            && emulation_trigger != TriggerType::NoTrigger
+            && !order.is_closed()
+        {
+            self.index.orders_emulated.insert(client_order_id);
+        } else {
+            self.index.orders_emulated.remove(&client_order_id);
+        }
+
+        // Update account orders index when account_id becomes available
+        if let Some(account_id) = order.account_id() {
+            self.index
+                .account_orders
+                .entry(account_id)
+                .or_default()
+                .insert(client_order_id);
         }
 
         // Update own book
@@ -1943,7 +2086,7 @@ impl Cache {
         let new_id = format!("{}-{}", position_id.as_str(), UUID4::new());
         copied_position.id = PositionId::new(new_id);
 
-        // Serialize the position (TODO: temporily just to JSON to remove a dependency)
+        // Serialize the position (TODO: temporarily just to JSON to remove a dependency)
         let position_serialized = serde_json::to_vec(&copied_position)?;
 
         let snapshots: Option<&Bytes> = self.position_snapshots.get(&position_id);
@@ -2019,9 +2162,9 @@ impl Cache {
 
     /// Gets position snapshot IDs for the `instrument_id`.
     #[must_use]
-    pub fn position_snapshot_ids(&self, instrument_id: &InstrumentId) -> HashSet<PositionId> {
+    pub fn position_snapshot_ids(&self, instrument_id: &InstrumentId) -> AHashSet<PositionId> {
         // Get snapshot position IDs that match the instrument
-        let mut result = HashSet::new();
+        let mut result = AHashSet::new();
         for (position_id, _) in &self.position_snapshots {
             // Check if this position is for the requested instrument
             if let Some(position) = self.positions.get(position_id)
@@ -2059,6 +2202,7 @@ impl Cache {
         venue: Option<&Venue>,
         instrument_id: Option<&InstrumentId>,
         strategy_id: Option<&StrategyId>,
+        account_id: Option<&AccountId>,
     ) -> Option<AHashSet<ClientOrderId>> {
         let mut query: Option<AHashSet<ClientOrderId>> = None;
 
@@ -2108,6 +2252,24 @@ impl Cache {
             }
         }
 
+        if let Some(account_id) = account_id {
+            let account_orders = self
+                .index
+                .account_orders
+                .get(account_id)
+                .cloned()
+                .unwrap_or_default();
+
+            if let Some(existing_query) = &mut query {
+                *existing_query = existing_query
+                    .intersection(&account_orders)
+                    .copied()
+                    .collect();
+            } else {
+                query = Some(account_orders);
+            }
+        }
+
         query
     }
 
@@ -2116,6 +2278,7 @@ impl Cache {
         venue: Option<&Venue>,
         instrument_id: Option<&InstrumentId>,
         strategy_id: Option<&StrategyId>,
+        account_id: Option<&AccountId>,
     ) -> Option<AHashSet<PositionId>> {
         let mut query: Option<AHashSet<PositionId>> = None;
 
@@ -2166,6 +2329,26 @@ impl Cache {
                 );
             } else {
                 query = Some(strategy_positions);
+            }
+        }
+
+        if let Some(account_id) = account_id {
+            let account_positions = self
+                .index
+                .account_positions
+                .get(account_id)
+                .cloned()
+                .unwrap_or_default();
+
+            if let Some(existing_query) = query {
+                query = Some(
+                    existing_query
+                        .intersection(&account_positions)
+                        .copied()
+                        .collect(),
+                );
+            } else {
+                query = Some(account_positions);
             }
         }
 
@@ -2231,8 +2414,10 @@ impl Cache {
         venue: Option<&Venue>,
         instrument_id: Option<&InstrumentId>,
         strategy_id: Option<&StrategyId>,
+        account_id: Option<&AccountId>,
     ) -> AHashSet<ClientOrderId> {
-        let query = self.build_order_query_filter_set(venue, instrument_id, strategy_id);
+        let query =
+            self.build_order_query_filter_set(venue, instrument_id, strategy_id, account_id);
         match query {
             Some(query) => self.index.orders.intersection(&query).copied().collect(),
             None => self.index.orders.clone(),
@@ -2246,8 +2431,10 @@ impl Cache {
         venue: Option<&Venue>,
         instrument_id: Option<&InstrumentId>,
         strategy_id: Option<&StrategyId>,
+        account_id: Option<&AccountId>,
     ) -> AHashSet<ClientOrderId> {
-        let query = self.build_order_query_filter_set(venue, instrument_id, strategy_id);
+        let query =
+            self.build_order_query_filter_set(venue, instrument_id, strategy_id, account_id);
         match query {
             Some(query) => self
                 .index
@@ -2266,8 +2453,10 @@ impl Cache {
         venue: Option<&Venue>,
         instrument_id: Option<&InstrumentId>,
         strategy_id: Option<&StrategyId>,
+        account_id: Option<&AccountId>,
     ) -> AHashSet<ClientOrderId> {
-        let query = self.build_order_query_filter_set(venue, instrument_id, strategy_id);
+        let query =
+            self.build_order_query_filter_set(venue, instrument_id, strategy_id, account_id);
         match query {
             Some(query) => self
                 .index
@@ -2286,8 +2475,10 @@ impl Cache {
         venue: Option<&Venue>,
         instrument_id: Option<&InstrumentId>,
         strategy_id: Option<&StrategyId>,
+        account_id: Option<&AccountId>,
     ) -> AHashSet<ClientOrderId> {
-        let query = self.build_order_query_filter_set(venue, instrument_id, strategy_id);
+        let query =
+            self.build_order_query_filter_set(venue, instrument_id, strategy_id, account_id);
         match query {
             Some(query) => self
                 .index
@@ -2306,8 +2497,10 @@ impl Cache {
         venue: Option<&Venue>,
         instrument_id: Option<&InstrumentId>,
         strategy_id: Option<&StrategyId>,
+        account_id: Option<&AccountId>,
     ) -> AHashSet<ClientOrderId> {
-        let query = self.build_order_query_filter_set(venue, instrument_id, strategy_id);
+        let query =
+            self.build_order_query_filter_set(venue, instrument_id, strategy_id, account_id);
         match query {
             Some(query) => self
                 .index
@@ -2326,8 +2519,10 @@ impl Cache {
         venue: Option<&Venue>,
         instrument_id: Option<&InstrumentId>,
         strategy_id: Option<&StrategyId>,
+        account_id: Option<&AccountId>,
     ) -> AHashSet<PositionId> {
-        let query = self.build_position_query_filter_set(venue, instrument_id, strategy_id);
+        let query =
+            self.build_position_query_filter_set(venue, instrument_id, strategy_id, account_id);
         match query {
             Some(query) => self.index.positions.intersection(&query).copied().collect(),
             None => self.index.positions.clone(),
@@ -2341,8 +2536,10 @@ impl Cache {
         venue: Option<&Venue>,
         instrument_id: Option<&InstrumentId>,
         strategy_id: Option<&StrategyId>,
+        account_id: Option<&AccountId>,
     ) -> AHashSet<PositionId> {
-        let query = self.build_position_query_filter_set(venue, instrument_id, strategy_id);
+        let query =
+            self.build_position_query_filter_set(venue, instrument_id, strategy_id, account_id);
         match query {
             Some(query) => self
                 .index
@@ -2361,8 +2558,10 @@ impl Cache {
         venue: Option<&Venue>,
         instrument_id: Option<&InstrumentId>,
         strategy_id: Option<&StrategyId>,
+        account_id: Option<&AccountId>,
     ) -> AHashSet<PositionId> {
-        let query = self.build_position_query_filter_set(venue, instrument_id, strategy_id);
+        let query =
+            self.build_position_query_filter_set(venue, instrument_id, strategy_id, account_id);
         match query {
             Some(query) => self
                 .index
@@ -2431,9 +2630,10 @@ impl Cache {
         venue: Option<&Venue>,
         instrument_id: Option<&InstrumentId>,
         strategy_id: Option<&StrategyId>,
+        account_id: Option<&AccountId>,
         side: Option<OrderSide>,
     ) -> Vec<&OrderAny> {
-        let client_order_ids = self.client_order_ids(venue, instrument_id, strategy_id);
+        let client_order_ids = self.client_order_ids(venue, instrument_id, strategy_id, account_id);
         self.get_orders_for_ids(&client_order_ids, side)
     }
 
@@ -2444,9 +2644,11 @@ impl Cache {
         venue: Option<&Venue>,
         instrument_id: Option<&InstrumentId>,
         strategy_id: Option<&StrategyId>,
+        account_id: Option<&AccountId>,
         side: Option<OrderSide>,
     ) -> Vec<&OrderAny> {
-        let client_order_ids = self.client_order_ids_open(venue, instrument_id, strategy_id);
+        let client_order_ids =
+            self.client_order_ids_open(venue, instrument_id, strategy_id, account_id);
         self.get_orders_for_ids(&client_order_ids, side)
     }
 
@@ -2457,9 +2659,11 @@ impl Cache {
         venue: Option<&Venue>,
         instrument_id: Option<&InstrumentId>,
         strategy_id: Option<&StrategyId>,
+        account_id: Option<&AccountId>,
         side: Option<OrderSide>,
     ) -> Vec<&OrderAny> {
-        let client_order_ids = self.client_order_ids_closed(venue, instrument_id, strategy_id);
+        let client_order_ids =
+            self.client_order_ids_closed(venue, instrument_id, strategy_id, account_id);
         self.get_orders_for_ids(&client_order_ids, side)
     }
 
@@ -2470,9 +2674,11 @@ impl Cache {
         venue: Option<&Venue>,
         instrument_id: Option<&InstrumentId>,
         strategy_id: Option<&StrategyId>,
+        account_id: Option<&AccountId>,
         side: Option<OrderSide>,
     ) -> Vec<&OrderAny> {
-        let client_order_ids = self.client_order_ids_emulated(venue, instrument_id, strategy_id);
+        let client_order_ids =
+            self.client_order_ids_emulated(venue, instrument_id, strategy_id, account_id);
         self.get_orders_for_ids(&client_order_ids, side)
     }
 
@@ -2483,9 +2689,11 @@ impl Cache {
         venue: Option<&Venue>,
         instrument_id: Option<&InstrumentId>,
         strategy_id: Option<&StrategyId>,
+        account_id: Option<&AccountId>,
         side: Option<OrderSide>,
     ) -> Vec<&OrderAny> {
-        let client_order_ids = self.client_order_ids_inflight(venue, instrument_id, strategy_id);
+        let client_order_ids =
+            self.client_order_ids_inflight(venue, instrument_id, strategy_id, account_id);
         self.get_orders_for_ids(&client_order_ids, side)
     }
 
@@ -2544,9 +2752,10 @@ impl Cache {
         venue: Option<&Venue>,
         instrument_id: Option<&InstrumentId>,
         strategy_id: Option<&StrategyId>,
+        account_id: Option<&AccountId>,
         side: Option<OrderSide>,
     ) -> usize {
-        self.orders_open(venue, instrument_id, strategy_id, side)
+        self.orders_open(venue, instrument_id, strategy_id, account_id, side)
             .len()
     }
 
@@ -2557,9 +2766,10 @@ impl Cache {
         venue: Option<&Venue>,
         instrument_id: Option<&InstrumentId>,
         strategy_id: Option<&StrategyId>,
+        account_id: Option<&AccountId>,
         side: Option<OrderSide>,
     ) -> usize {
-        self.orders_closed(venue, instrument_id, strategy_id, side)
+        self.orders_closed(venue, instrument_id, strategy_id, account_id, side)
             .len()
     }
 
@@ -2570,9 +2780,10 @@ impl Cache {
         venue: Option<&Venue>,
         instrument_id: Option<&InstrumentId>,
         strategy_id: Option<&StrategyId>,
+        account_id: Option<&AccountId>,
         side: Option<OrderSide>,
     ) -> usize {
-        self.orders_emulated(venue, instrument_id, strategy_id, side)
+        self.orders_emulated(venue, instrument_id, strategy_id, account_id, side)
             .len()
     }
 
@@ -2583,9 +2794,10 @@ impl Cache {
         venue: Option<&Venue>,
         instrument_id: Option<&InstrumentId>,
         strategy_id: Option<&StrategyId>,
+        account_id: Option<&AccountId>,
         side: Option<OrderSide>,
     ) -> usize {
-        self.orders_inflight(venue, instrument_id, strategy_id, side)
+        self.orders_inflight(venue, instrument_id, strategy_id, account_id, side)
             .len()
     }
 
@@ -2596,9 +2808,11 @@ impl Cache {
         venue: Option<&Venue>,
         instrument_id: Option<&InstrumentId>,
         strategy_id: Option<&StrategyId>,
+        account_id: Option<&AccountId>,
         side: Option<OrderSide>,
     ) -> usize {
-        self.orders(venue, instrument_id, strategy_id, side).len()
+        self.orders(venue, instrument_id, strategy_id, account_id, side)
+            .len()
     }
 
     /// Returns the order list for the `order_list_id`.
@@ -2614,6 +2828,7 @@ impl Cache {
         venue: Option<&Venue>,
         instrument_id: Option<&InstrumentId>,
         strategy_id: Option<&StrategyId>,
+        account_id: Option<&AccountId>,
     ) -> Vec<&OrderList> {
         let mut order_lists = self.order_lists.values().collect::<Vec<&OrderList>>();
 
@@ -2627,6 +2842,13 @@ impl Cache {
 
         if let Some(strategy_id) = strategy_id {
             order_lists.retain(|ol| &ol.strategy_id == strategy_id);
+        }
+
+        if let Some(account_id) = account_id {
+            order_lists.retain(|ol| {
+                ol.first()
+                    .is_some_and(|order| order.account_id().as_ref() == Some(account_id))
+            });
         }
 
         order_lists
@@ -2649,9 +2871,11 @@ impl Cache {
         venue: Option<&Venue>,
         instrument_id: Option<&InstrumentId>,
         strategy_id: Option<&StrategyId>,
+        account_id: Option<&AccountId>,
         side: Option<OrderSide>,
     ) -> Vec<&OrderAny> {
-        let query = self.build_order_query_filter_set(venue, instrument_id, strategy_id);
+        let query =
+            self.build_order_query_filter_set(venue, instrument_id, strategy_id, account_id);
         let exec_algorithm_order_ids = self.index.exec_algorithm_orders.get(exec_algorithm_id);
 
         if let Some(query) = query
@@ -2691,12 +2915,13 @@ impl Cache {
         let mut total_quantity: Option<Quantity> = None;
 
         for spawn_order in exec_spawn_orders {
-            if !active_only || !spawn_order.is_closed() {
-                if let Some(mut total_quantity) = total_quantity {
-                    total_quantity += spawn_order.quantity();
-                }
-            } else {
-                total_quantity = Some(spawn_order.quantity());
+            if active_only && spawn_order.is_closed() {
+                continue;
+            }
+
+            match total_quantity.as_mut() {
+                Some(total) => *total = *total + spawn_order.quantity(),
+                None => total_quantity = Some(spawn_order.quantity()),
             }
         }
 
@@ -2715,12 +2940,13 @@ impl Cache {
         let mut total_quantity: Option<Quantity> = None;
 
         for spawn_order in exec_spawn_orders {
-            if !active_only || !spawn_order.is_closed() {
-                if let Some(mut total_quantity) = total_quantity {
-                    total_quantity += spawn_order.filled_qty();
-                }
-            } else {
-                total_quantity = Some(spawn_order.filled_qty());
+            if active_only && spawn_order.is_closed() {
+                continue;
+            }
+
+            match total_quantity.as_mut() {
+                Some(total) => *total = *total + spawn_order.filled_qty(),
+                None => total_quantity = Some(spawn_order.filled_qty()),
             }
         }
 
@@ -2739,12 +2965,13 @@ impl Cache {
         let mut total_quantity: Option<Quantity> = None;
 
         for spawn_order in exec_spawn_orders {
-            if !active_only || !spawn_order.is_closed() {
-                if let Some(mut total_quantity) = total_quantity {
-                    total_quantity += spawn_order.leaves_qty();
-                }
-            } else {
-                total_quantity = Some(spawn_order.leaves_qty());
+            if active_only && spawn_order.is_closed() {
+                continue;
+            }
+
+            match total_quantity.as_mut() {
+                Some(total) => *total = *total + spawn_order.leaves_qty(),
+                None => total_quantity = Some(spawn_order.leaves_qty()),
             }
         }
 
@@ -2781,9 +3008,10 @@ impl Cache {
         venue: Option<&Venue>,
         instrument_id: Option<&InstrumentId>,
         strategy_id: Option<&StrategyId>,
+        account_id: Option<&AccountId>,
         side: Option<PositionSide>,
     ) -> Vec<&Position> {
-        let position_ids = self.position_ids(venue, instrument_id, strategy_id);
+        let position_ids = self.position_ids(venue, instrument_id, strategy_id, account_id);
         self.get_positions_for_ids(&position_ids, side)
     }
 
@@ -2794,9 +3022,10 @@ impl Cache {
         venue: Option<&Venue>,
         instrument_id: Option<&InstrumentId>,
         strategy_id: Option<&StrategyId>,
+        account_id: Option<&AccountId>,
         side: Option<PositionSide>,
     ) -> Vec<&Position> {
-        let position_ids = self.position_open_ids(venue, instrument_id, strategy_id);
+        let position_ids = self.position_open_ids(venue, instrument_id, strategy_id, account_id);
         self.get_positions_for_ids(&position_ids, side)
     }
 
@@ -2807,9 +3036,10 @@ impl Cache {
         venue: Option<&Venue>,
         instrument_id: Option<&InstrumentId>,
         strategy_id: Option<&StrategyId>,
+        account_id: Option<&AccountId>,
         side: Option<PositionSide>,
     ) -> Vec<&Position> {
-        let position_ids = self.position_closed_ids(venue, instrument_id, strategy_id);
+        let position_ids = self.position_closed_ids(venue, instrument_id, strategy_id, account_id);
         self.get_positions_for_ids(&position_ids, side)
     }
 
@@ -2838,9 +3068,10 @@ impl Cache {
         venue: Option<&Venue>,
         instrument_id: Option<&InstrumentId>,
         strategy_id: Option<&StrategyId>,
+        account_id: Option<&AccountId>,
         side: Option<PositionSide>,
     ) -> usize {
-        self.positions_open(venue, instrument_id, strategy_id, side)
+        self.positions_open(venue, instrument_id, strategy_id, account_id, side)
             .len()
     }
 
@@ -2851,9 +3082,10 @@ impl Cache {
         venue: Option<&Venue>,
         instrument_id: Option<&InstrumentId>,
         strategy_id: Option<&StrategyId>,
+        account_id: Option<&AccountId>,
         side: Option<PositionSide>,
     ) -> usize {
-        self.positions_closed(venue, instrument_id, strategy_id, side)
+        self.positions_closed(venue, instrument_id, strategy_id, account_id, side)
             .len()
     }
 
@@ -2864,9 +3096,10 @@ impl Cache {
         venue: Option<&Venue>,
         instrument_id: Option<&InstrumentId>,
         strategy_id: Option<&StrategyId>,
+        account_id: Option<&AccountId>,
         side: Option<PositionSide>,
     ) -> usize {
-        self.positions(venue, instrument_id, strategy_id, side)
+        self.positions(venue, instrument_id, strategy_id, account_id, side)
             .len()
     }
 
@@ -2892,7 +3125,7 @@ impl Cache {
     ///
     /// Returns an error if the `key` is invalid.
     pub fn get(&self, key: &str) -> anyhow::Result<Option<&Bytes>> {
-        check_valid_string(key, stringify!(key))?;
+        check_valid_string_ascii(key, stringify!(key))?;
 
         Ok(self.general.get(key))
     }
@@ -2997,92 +3230,6 @@ impl Cache {
         self.own_books.get_mut(instrument_id)
     }
 
-    /// Gets a reference to the pool for the `instrument_id`.
-    #[cfg(feature = "defi")]
-    #[must_use]
-    pub fn pool(&self, instrument_id: &InstrumentId) -> Option<&Pool> {
-        self.pools.get(instrument_id)
-    }
-
-    /// Gets a mutable reference to the pool for the `instrument_id`.
-    #[cfg(feature = "defi")]
-    #[must_use]
-    pub fn pool_mut(&mut self, instrument_id: &InstrumentId) -> Option<&mut Pool> {
-        self.pools.get_mut(instrument_id)
-    }
-
-    /// Returns the instrument IDs of all pools in the cache, optionally filtered by `venue`.
-    #[cfg(feature = "defi")]
-    #[must_use]
-    pub fn pool_ids(&self, venue: Option<&Venue>) -> Vec<InstrumentId> {
-        match venue {
-            Some(v) => self
-                .pools
-                .keys()
-                .filter(|id| &id.venue == v)
-                .copied()
-                .collect(),
-            None => self.pools.keys().copied().collect(),
-        }
-    }
-
-    /// Returns references to all pools in the cache, optionally filtered by `venue`.
-    #[cfg(feature = "defi")]
-    #[must_use]
-    pub fn pools(&self, venue: Option<&Venue>) -> Vec<&Pool> {
-        match venue {
-            Some(v) => self
-                .pools
-                .values()
-                .filter(|p| &p.instrument_id.venue == v)
-                .collect(),
-            None => self.pools.values().collect(),
-        }
-    }
-
-    /// Gets a reference to the pool profiler for the `instrument_id`.
-    #[cfg(feature = "defi")]
-    #[must_use]
-    pub fn pool_profiler(&self, instrument_id: &InstrumentId) -> Option<&PoolProfiler> {
-        self.pool_profilers.get(instrument_id)
-    }
-
-    /// Gets a mutable reference to the pool profiler for the `instrument_id`.
-    #[cfg(feature = "defi")]
-    #[must_use]
-    pub fn pool_profiler_mut(&mut self, instrument_id: &InstrumentId) -> Option<&mut PoolProfiler> {
-        self.pool_profilers.get_mut(instrument_id)
-    }
-
-    /// Returns the instrument IDs of all pool profilers in the cache, optionally filtered by `venue`.
-    #[cfg(feature = "defi")]
-    #[must_use]
-    pub fn pool_profiler_ids(&self, venue: Option<&Venue>) -> Vec<InstrumentId> {
-        match venue {
-            Some(v) => self
-                .pool_profilers
-                .keys()
-                .filter(|id| &id.venue == v)
-                .copied()
-                .collect(),
-            None => self.pool_profilers.keys().copied().collect(),
-        }
-    }
-
-    /// Returns references to all pool profilers in the cache, optionally filtered by `venue`.
-    #[cfg(feature = "defi")]
-    #[must_use]
-    pub fn pool_profilers(&self, venue: Option<&Venue>) -> Vec<&PoolProfiler> {
-        match venue {
-            Some(v) => self
-                .pool_profilers
-                .values()
-                .filter(|p| &p.pool.instrument_id.venue == v)
-                .collect(),
-            None => self.pool_profilers.values().collect(),
-        }
-    }
-
     /// Gets a reference to the latest quote for the `instrument_id`.
     #[must_use]
     pub fn quote(&self, instrument_id: &InstrumentId) -> Option<&QuoteTick> {
@@ -3099,7 +3246,7 @@ impl Cache {
             .and_then(|trades| trades.front())
     }
 
-    /// Gets a referenece to the latest mark price update for the `instrument_id`.
+    /// Gets a reference to the latest mark price update for the `instrument_id`.
     #[must_use]
     pub fn mark_price(&self, instrument_id: &InstrumentId) -> Option<&MarkPriceUpdate> {
         self.mark_prices
@@ -3107,7 +3254,7 @@ impl Cache {
             .and_then(|mark_prices| mark_prices.front())
     }
 
-    /// Gets a referenece to the latest index price update for the `instrument_id`.
+    /// Gets a reference to the latest index price update for the `instrument_id`.
     #[must_use]
     pub fn index_price(&self, instrument_id: &InstrumentId) -> Option<&IndexPriceUpdate> {
         self.index_prices
@@ -3250,10 +3397,13 @@ impl Cache {
 
                 match (bid_bar, ask_bar) {
                     (Some(bid), Some(ask)) => {
-                        let bid_price = bid.front().unwrap().close;
-                        let ask_price = ask.front().unwrap().close;
-
-                        (bid_price, ask_price)
+                        match (bid.front(), ask.front()) {
+                            (Some(bid_bar), Some(ask_bar)) => (bid_bar.close, ask_bar.close),
+                            _ => {
+                                // Empty bar VecDeques
+                                continue;
+                            }
+                        }
                     }
                     _ => continue,
                 }
@@ -3430,12 +3580,13 @@ impl Cache {
             }
         } else {
             // Add or update the order in the own book
-            own_book.update(own_book_order).unwrap_or_else(|e| {
+            if let Err(e) = own_book.update(own_book_order) {
                 log::debug!(
-                    "Failed to update order {} in own book: {e}",
+                    "Failed to update order {} in own book: {e}; inserting instead",
                     order.client_order_id(),
                 );
-            });
+                own_book.add(own_book_order);
+            }
             log::debug!("Updated order {} in own book", order.client_order_id());
         }
     }
@@ -3482,7 +3633,7 @@ impl Cache {
 
         // Build union of open and inflight orders for audit,
         // this prevents false positives for SUBMITTED orders during venue latency.
-        let valid_order_ids: HashSet<ClientOrderId> = self
+        let valid_order_ids: AHashSet<ClientOrderId> = self
             .index
             .orders_open
             .union(&self.index.orders_inflight)

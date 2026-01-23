@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -81,8 +81,8 @@ impl PositionChanged {
         fill: &OrderFilled,
         event_id: UUID4,
         ts_init: UnixNanos,
-    ) -> PositionChanged {
-        PositionChanged {
+    ) -> Self {
+        Self {
             trader_id: position.trader_id,
             strategy_id: position.strategy_id,
             instrument_id: position.instrument_id,
@@ -110,9 +110,6 @@ impl PositionChanged {
     }
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// Tests
-////////////////////////////////////////////////////////////////////////////////
 #[cfg(test)]
 mod tests {
     use nautilus_core::UnixNanos;

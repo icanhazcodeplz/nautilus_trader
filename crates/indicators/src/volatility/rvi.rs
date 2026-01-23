@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -23,7 +23,7 @@ use crate::{
     indicator::{Indicator, MovingAverage},
 };
 
-/// An indicator which calculates a Average True Range (ATR) across a rolling window.
+/// An indicator which calculates a Relative Volatility Index (RVI) across a rolling window.
 #[repr(C)]
 #[derive(Debug)]
 #[cfg_attr(
@@ -170,9 +170,6 @@ impl RelativeVolatilityIndex {
     }
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// Tests
-////////////////////////////////////////////////////////////////////////////////
 #[cfg(test)]
 mod tests {
     use rstest::rstest;

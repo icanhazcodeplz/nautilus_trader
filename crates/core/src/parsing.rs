@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -18,7 +18,10 @@
 /// Clamps a length to `u8::MAX` with optional debug logging.
 #[inline]
 #[must_use]
-#[allow(clippy::cast_possible_truncation)]
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "Intentional for parsing, value range validated"
+)]
 fn clamp_precision_with_log(len: usize, context: &str, input: &str) -> u8 {
     if len > u8::MAX as usize {
         log::debug!(
@@ -39,23 +42,26 @@ fn clamp_precision_with_log(len: usize, context: &str, input: &str) -> u8 {
 #[inline]
 #[must_use]
 fn parse_scientific_exponent(exponent_str: &str, strict: bool) -> Option<u8> {
-    match exponent_str.parse::<u64>() {
-        Ok(exp) => Some(exp.min(u8::MAX as u64) as u8),
-        Err(_) => {
-            if exponent_str.is_empty() && strict {
-                panic!("Invalid scientific notation format: missing exponent after 'e-'");
-            }
-            // If it's all digits but overflows u64, clamp to u8::MAX
-            if exponent_str.chars().all(|c| c.is_ascii_digit()) {
-                Some(u8::MAX)
-            } else if strict {
-                panic!(
-                    "Invalid scientific notation exponent '{}': must be a valid number",
-                    exponent_str
-                )
-            } else {
-                None // Return None for lenient parsing
-            }
+    if let Ok(exp) = exponent_str.parse::<u64>() {
+        Some(exp.min(u64::from(u8::MAX)) as u8)
+    } else {
+        assert!(
+            !(exponent_str.is_empty() && strict),
+            "Invalid scientific notation format: missing exponent after 'e-'"
+        );
+
+        // Empty string is invalid (not a large number that overflowed)
+        if exponent_str.is_empty() {
+            return None;
+        }
+
+        // If it's all digits but overflows u64, clamp to u8::MAX
+        if exponent_str.chars().all(|c| c.is_ascii_digit()) {
+            Some(u8::MAX)
+        } else if strict {
+            panic!("Invalid scientific notation exponent '{exponent_str}': must be a valid number")
+        } else {
+            None
         }
     }
 }
@@ -71,7 +77,10 @@ fn parse_scientific_exponent(exponent_str: &str, strict: bool) -> Option<u8> {
 /// Panics if the input string is malformed (e.g., "1e-" with no exponent value, or non-numeric
 /// exponents like "1e-abc").
 #[must_use]
-#[allow(clippy::cast_possible_truncation)]
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "Intentional for parsing, value range validated"
+)]
 pub fn precision_from_str(s: &str) -> u8 {
     let s = s.trim().to_ascii_lowercase();
 
@@ -100,7 +109,10 @@ pub fn precision_from_str(s: &str) -> u8 {
 /// For scientific notation with large negative exponents (e.g., "1e-300"), the precision
 /// is clamped to `u8::MAX` (255) to match the behavior of `precision_from_str`.
 #[must_use]
-#[allow(clippy::cast_possible_truncation)]
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "Intentional for parsing, value range validated"
+)]
 pub fn min_increment_precision_from_str(s: &str) -> u8 {
     let s = s.trim().to_ascii_lowercase();
 
@@ -143,9 +155,6 @@ pub fn bytes_to_usize(bytes: &[u8]) -> anyhow::Result<usize> {
     }
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// Tests
-////////////////////////////////////////////////////////////////////////////////
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
@@ -310,5 +319,12 @@ mod tests {
         let min_precision = min_increment_precision_from_str(input);
         assert_eq!(precision, min_precision);
         assert_eq!(precision, 255);
+    }
+
+    #[rstest]
+    fn test_min_increment_precision_from_str_empty_exponent() {
+        // Empty exponent should return 0, not u8::MAX
+        let result = min_increment_precision_from_str("1e-");
+        assert_eq!(result, 0);
     }
 }

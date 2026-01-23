@@ -6,12 +6,15 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
-description.workspace = true
+description = "Cryptographic primitives and management for the Nautilus trading engine"
 categories.workspace = true
 keywords.workspace = true
 documentation.workspace = true
 repository.workspace = true
 homepage.workspace = true
+
+[lints]
+workspace = true
 
 [lib]
 name = "nautilus_cryptography"
@@ -38,10 +41,9 @@ aws-lc-rs = { workspace = true }
 base64 = { workspace = true }
 ed25519-dalek = { workspace = true }
 hex = { workspace = true }
+log = { workspace = true }
 pem = { workspace = true }
-rand = { workspace = true }
 rustls = { workspace = true }
-tracing = { workspace = true }
 webpki-roots = { workspace = true }
 
 pyo3 = { workspace = true, optional = true }

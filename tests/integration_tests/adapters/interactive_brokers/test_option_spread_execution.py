@@ -1,3 +1,17 @@
+# -------------------------------------------------------------------------------------------------
+#  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
+#  https://nautechsystems.io
+#
+#  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
+#  You may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at https://www.gnu.org/licenses/lgpl-3.0.en.html
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+# -------------------------------------------------------------------------------------------------
 """
 Integration tests for Interactive Brokers option spread execution.
 
@@ -22,9 +36,9 @@ from nautilus_trader.model.enums import TimeInForce
 from nautilus_trader.model.events.order import OrderFilled
 from nautilus_trader.model.identifiers import ClientOrderId
 from nautilus_trader.model.identifiers import InstrumentId
-from nautilus_trader.model.identifiers import PositionId
 from nautilus_trader.model.identifiers import TradeId
 from nautilus_trader.model.identifiers import VenueOrderId
+from nautilus_trader.model.identifiers import new_generic_spread_id
 from nautilus_trader.model.objects import Money
 from nautilus_trader.model.objects import Price
 from nautilus_trader.model.objects import Quantity
@@ -114,6 +128,7 @@ class TestOptionSpreadExecution:
         from nautilus_trader.model.identifiers import Symbol
         from nautilus_trader.model.identifiers import Venue
         from nautilus_trader.model.instruments import OptionContract
+        from nautilus_trader.model.instruments import OptionSpread
         from nautilus_trader.model.objects import Currency
         from nautilus_trader.model.objects import Price
         from nautilus_trader.model.objects import Quantity
@@ -156,10 +171,16 @@ class TestOptionSpreadExecution:
             ts_init=0,
         )
 
-        # Create a simple spread instrument for testing
-        self.option_spread = OptionContract(
-            instrument_id=InstrumentId(Symbol("(1)E1AQ5 C6400_(2)E1AQ5 P6440"), Venue("XCME")),
-            raw_symbol=Symbol("(1)E1AQ5 C6400_(2)E1AQ5 P6440"),
+        # Create a spread instrument for testing
+        spread_id = new_generic_spread_id(
+            [
+                (self.call_option.id, 1),
+                (self.put_option.id, 2),
+            ],
+        )
+        self.option_spread = OptionSpread(
+            instrument_id=spread_id,
+            raw_symbol=spread_id.symbol,
             asset_class=AssetClass.EQUITY,
             currency=Currency.from_str("USD"),
             price_precision=2,
@@ -167,10 +188,9 @@ class TestOptionSpreadExecution:
             multiplier=Quantity.from_int(100),
             lot_size=Quantity.from_int(1),
             underlying="E1AQ5",
-            option_kind=OptionKind.CALL,  # Doesn't matter for spread
+            strategy_type="VERTICAL",
             activation_ns=0,
             expiration_ns=1640995200000000000,  # 2022-01-01
-            strike_price=Price.from_str("0.0"),  # Doesn't matter for spread
             ts_event=0,
             ts_init=0,
         )
@@ -382,9 +402,7 @@ class TestOptionSpreadExecution:
             venue_order_id=VenueOrderId("213"),
             account_id=self.account_id,
             trade_id=TradeId("0000e1a7.6882c67b.02.01"),
-            position_id=PositionId(
-                "(1)E1AQ5 C6400_(2)E1AQ5 P6440.XCME-RatioSpreadTestStrategy-000",
-            ),
+            position_id=None,
             order_side=OrderSide.BUY,
             order_type=OrderType.MARKET,
             last_qty=Quantity.from_int(3),

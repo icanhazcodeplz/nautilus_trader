@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -442,6 +442,7 @@ impl From<BybitHttpError> for BybitError {
                 Self::Config(format!("Validation error: {msg}"))
             }
             BybitHttpError::BuildError(e) => Self::Config(format!("Build error: {e}")),
+            BybitHttpError::Canceled(msg) => Self::Config(format!("Request canceled: {msg}")),
             BybitHttpError::NetworkError(msg) => Self::Config(format!("Network error: {msg}")),
             BybitHttpError::UnexpectedStatus { status, body } => Self::Json {
                 message: format!("HTTP {status}: {body}"),
@@ -456,10 +457,6 @@ impl From<BybitWsError> for BybitError {
         Self::WebSocket(error.to_string())
     }
 }
-
-////////////////////////////////////////////////////////////////////////////////
-// Tests
-////////////////////////////////////////////////////////////////////////////////
 
 #[cfg(test)]
 mod tests {

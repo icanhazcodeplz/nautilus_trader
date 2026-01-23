@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -51,7 +51,7 @@ pub use unsubscribe::{
 };
 
 #[cfg(feature = "defi")]
-use crate::messages::defi::{DefiSubscribeCommand, DefiUnsubscribeCommand};
+use crate::messages::defi::{DefiRequestCommand, DefiSubscribeCommand, DefiUnsubscribeCommand};
 
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
@@ -59,6 +59,8 @@ pub enum DataCommand {
     Request(RequestCommand),
     Subscribe(SubscribeCommand),
     Unsubscribe(UnsubscribeCommand),
+    #[cfg(feature = "defi")]
+    DefiRequest(DefiRequestCommand),
     #[cfg(feature = "defi")]
     DefiSubscribe(DefiSubscribeCommand),
     #[cfg(feature = "defi")]
@@ -177,6 +179,25 @@ impl SubscribeCommand {
             Self::InstrumentClose(cmd) => cmd.ts_init,
         }
     }
+
+    pub fn correlation_id(&self) -> Option<UUID4> {
+        match self {
+            Self::Data(cmd) => cmd.correlation_id,
+            Self::Instrument(cmd) => cmd.correlation_id,
+            Self::Instruments(cmd) => cmd.correlation_id,
+            Self::BookDeltas(cmd) => cmd.correlation_id,
+            Self::BookDepth10(cmd) => cmd.correlation_id,
+            Self::BookSnapshots(cmd) => cmd.correlation_id,
+            Self::Quotes(cmd) => cmd.correlation_id,
+            Self::Trades(cmd) => cmd.correlation_id,
+            Self::MarkPrices(cmd) => cmd.correlation_id,
+            Self::IndexPrices(cmd) => cmd.correlation_id,
+            Self::FundingRates(cmd) => cmd.correlation_id,
+            Self::Bars(cmd) => cmd.correlation_id,
+            Self::InstrumentStatus(cmd) => cmd.correlation_id,
+            Self::InstrumentClose(cmd) => cmd.correlation_id,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -282,6 +303,25 @@ impl UnsubscribeCommand {
             Self::Bars(cmd) => cmd.ts_init,
             Self::InstrumentStatus(cmd) => cmd.ts_init,
             Self::InstrumentClose(cmd) => cmd.ts_init,
+        }
+    }
+
+    pub fn correlation_id(&self) -> Option<UUID4> {
+        match self {
+            Self::Data(cmd) => cmd.correlation_id,
+            Self::Instrument(cmd) => cmd.correlation_id,
+            Self::Instruments(cmd) => cmd.correlation_id,
+            Self::BookDeltas(cmd) => cmd.correlation_id,
+            Self::BookDepth10(cmd) => cmd.correlation_id,
+            Self::BookSnapshots(cmd) => cmd.correlation_id,
+            Self::Quotes(cmd) => cmd.correlation_id,
+            Self::Trades(cmd) => cmd.correlation_id,
+            Self::MarkPrices(cmd) => cmd.correlation_id,
+            Self::IndexPrices(cmd) => cmd.correlation_id,
+            Self::FundingRates(cmd) => cmd.correlation_id,
+            Self::Bars(cmd) => cmd.correlation_id,
+            Self::InstrumentStatus(cmd) => cmd.correlation_id,
+            Self::InstrumentClose(cmd) => cmd.correlation_id,
         }
     }
 }

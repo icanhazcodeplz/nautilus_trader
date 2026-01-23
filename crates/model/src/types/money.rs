@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -14,19 +14,45 @@
 // -------------------------------------------------------------------------------------------------
 
 //! Represents an amount of money in a specified currency denomination.
+//!
+//! [`Money`] is an immutable value type for representing monetary amounts with an associated
+//! currency. It supports both positive and negative values (for debits, losses, etc.) and
+//! enforces currency consistency in arithmetic operations.
+//!
+//! # Arithmetic behavior
+//!
+//! `Money` implements `Add` and `Sub` for same-type operations:
+//!
+//! | Operation       | Result  | Notes                             |
+//! |-----------------|---------|-----------------------------------|
+//! | `Money + Money` | `Money` | Panics if currencies don't match. |
+//! | `Money - Money` | `Money` | Panics if currencies don't match. |
+//!
+//! For Python bindings with mixed-type operations, see the Python API documentation.
+//!
+//! # Currency constraints
+//!
+//! When performing arithmetic between two `Money` values, both must have the same currency.
+//! Attempting to add or subtract money with different currencies raises an error.
+//!
+//! # Immutability
+//!
+//! `Money` is immutable. All arithmetic operations return new instances.
 
 use std::{
     cmp::Ordering,
     fmt::{Debug, Display},
     hash::{Hash, Hasher},
-    ops::{Add, AddAssign, Div, Mul, Neg, Sub, SubAssign},
+    ops::{Add, Div, Mul, Neg, Sub},
     str::FromStr,
 };
 
-use nautilus_core::correctness::{FAILED, check_in_range_inclusive_f64, check_predicate_true};
+use nautilus_core::{
+    correctness::{FAILED, check_in_range_inclusive_f64, check_predicate_true},
+    formatting::Separable,
+};
 use rust_decimal::{Decimal, prelude::ToPrimitive};
 use serde::{Deserialize, Deserializer, Serialize};
-use thousands::Separable;
 
 #[cfg(not(any(feature = "defi", feature = "high-precision")))]
 use super::fixed::{f64_to_fixed_i64, fixed_i64_to_f64};
@@ -109,7 +135,7 @@ pub const MONEY_MIN: f64 = -9_223_372_036.0;
 #[derive(Clone, Copy, Eq)]
 #[cfg_attr(
     feature = "python",
-    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.model")
+    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.model", frozen)
 )]
 pub struct Money {
     /// Represents the raw fixed-point amount, with `currency.precision` defining the number of decimal places.
@@ -171,12 +197,21 @@ impl Money {
         check_predicate_true(
             raw >= MONEY_RAW_MIN && raw <= MONEY_RAW_MAX,
             &format!(
-                "`raw` value {raw} exceeded bounds [{}, {}] for Money",
-                MONEY_RAW_MIN, MONEY_RAW_MAX
+                "`raw` value {raw} exceeded bounds [{MONEY_RAW_MIN}, {MONEY_RAW_MAX}] for Money"
             ),
         )
         .expect(FAILED);
         check_fixed_precision(currency.precision).expect(FAILED);
+
+        // TODO: Enforce spurious bits validation in v2
+        // Validate raw value has no spurious bits beyond the precision scale
+        // if raw != 0 {
+        //     #[cfg(feature = "high-precision")]
+        //     super::fixed::check_fixed_raw_i128(raw, currency.precision).expect(FAILED);
+        //     #[cfg(not(feature = "high-precision"))]
+        //     super::fixed::check_fixed_raw_i64(raw, currency.precision).expect(FAILED);
+        // }
+
         Self { raw, currency }
     }
 
@@ -201,13 +236,14 @@ impl Money {
     ///
     /// # Panics
     ///
-    /// Panics if precision is beyond [`MAX_FLOAT_PRECISION`] (16).
+    /// Panics if precision is beyond `MAX_FLOAT_PRECISION` (16).
     #[must_use]
     pub fn as_f64(&self) -> f64 {
         #[cfg(feature = "defi")]
-        if self.currency.precision > MAX_FLOAT_PRECISION {
-            panic!("Invalid f64 conversion beyond `MAX_FLOAT_PRECISION` (16)");
-        }
+        assert!(
+            self.currency.precision <= MAX_FLOAT_PRECISION,
+            "Invalid f64 conversion beyond `MAX_FLOAT_PRECISION` (16)"
+        );
 
         fixed_i128_to_f64(self.raw)
     }
@@ -217,7 +253,7 @@ impl Money {
     ///
     /// # Panics
     ///
-    /// Panics if precision is beyond [`MAX_FLOAT_PRECISION`] (16).
+    /// Panics if precision is beyond `MAX_FLOAT_PRECISION` (16).
     #[must_use]
     pub fn as_f64(&self) -> f64 {
         #[cfg(feature = "defi")]
@@ -239,7 +275,7 @@ impl Money {
         // to the currency's actual precision for decimal conversion.
         let rescaled_raw = self.raw / MoneyRaw::pow(10, u32::from(precision_diff));
 
-        #[allow(clippy::useless_conversion, reason = "Required for precision modes")]
+        #[allow(clippy::useless_conversion)]
         Decimal::from_i128_with_scale(i128::from(rescaled_raw), u32::from(precision))
     }
 
@@ -424,34 +460,6 @@ impl Sub for Money {
     }
 }
 
-impl AddAssign for Money {
-    fn add_assign(&mut self, other: Self) {
-        assert_eq!(
-            self.currency, other.currency,
-            "Currency mismatch: cannot add {} to {}",
-            other.currency.code, self.currency.code
-        );
-        self.raw = self
-            .raw
-            .checked_add(other.raw)
-            .expect("Overflow occurred when adding `Money`");
-    }
-}
-
-impl SubAssign for Money {
-    fn sub_assign(&mut self, other: Self) {
-        assert_eq!(
-            self.currency, other.currency,
-            "Currency mismatch: cannot subtract {} from {}",
-            other.currency.code, self.currency.code
-        );
-        self.raw = self
-            .raw
-            .checked_sub(other.raw)
-            .expect("Underflow occurred when subtracting `Money`");
-    }
-}
-
 impl Add<f64> for Money {
     type Output = f64;
     fn add(self, rhs: f64) -> Self::Output {
@@ -522,7 +530,7 @@ impl<'de> Deserialize<'de> for Money {
         D: Deserializer<'de>,
     {
         let money_str: String = Deserialize::deserialize(deserializer)?;
-        Ok(Money::from(money_str.as_str()))
+        Ok(Self::from(money_str.as_str()))
     }
 }
 
@@ -539,9 +547,6 @@ pub fn check_positive_money(value: Money, param: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// Tests
-////////////////////////////////////////////////////////////////////////////////
 #[cfg(test)]
 mod tests {
     use nautilus_core::approx_eq;
@@ -692,15 +697,6 @@ mod tests {
     }
 
     #[rstest]
-    fn test_add_assign() {
-        let usd = Currency::USD();
-        let mut money = Money::new(100.0, usd);
-        money += Money::new(50.0, usd);
-        assert!(approx_eq!(f64, money.as_f64(), 150.0, epsilon = 1e-9));
-        assert_eq!(money.currency, usd);
-    }
-
-    #[rstest]
     fn test_sub() {
         let usd = Currency::USD();
         let money1 = Money::new(1000.0, usd);
@@ -708,15 +704,6 @@ mod tests {
         let result = money1 - money2;
         assert!(approx_eq!(f64, result.as_f64(), 750.0, epsilon = 1e-9));
         assert_eq!(result.currency, usd);
-    }
-
-    #[rstest]
-    fn test_sub_assign() {
-        let usd = Currency::USD();
-        let mut money = Money::new(100.0, usd);
-        money -= Money::new(25.0, usd);
-        assert!(approx_eq!(f64, money.as_f64(), 75.0, epsilon = 1e-9));
-        assert_eq!(money.currency, usd);
     }
 
     #[rstest]

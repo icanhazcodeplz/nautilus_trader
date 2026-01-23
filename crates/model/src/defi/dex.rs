@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -96,8 +96,8 @@ pub enum DexType {
 
 impl DexType {
     /// Returns a reference to the `DexType` corresponding to the given dex name, or `None` if it is not found.
-    pub fn from_dex_name(dex_name: &str) -> Option<DexType> {
-        DexType::from_str(dex_name).ok()
+    pub fn from_dex_name(dex_name: &str) -> Option<Self> {
+        Self::from_str(dex_name).ok()
     }
 }
 
@@ -126,10 +126,12 @@ pub struct Dex {
     pub burn_created_event: Cow<'static, str>,
     /// The event signature or identifier used to detect collect fee events.
     pub collect_created_event: Cow<'static, str>,
+    // Optional Flash event signature emitted when flash loan occurs.
+    pub flash_created_event: Option<Cow<'static, str>>,
     /// The type of automated market maker (AMM) algorithm used by this DEX.
     pub amm_type: AmmType,
     /// Collection of liquidity pools managed by this DEX.
-    #[allow(dead_code, reason = "TBD")]
+    #[allow(dead_code)]
     pairs: Vec<Pool>,
 }
 
@@ -181,7 +183,12 @@ impl Dex {
             "0x{encoded_hash}",
             encoded_hash = hex::encode(collect_event_hash)
         );
-        let factory_address = validate_address(factory).unwrap();
+        let factory_address = match validate_address(factory) {
+            Ok(address) => address,
+            Err(e) => panic!(
+                "Invalid factory address for DEX {name} on chain {chain} for factory address {factory}: {e}"
+            ),
+        };
         Self {
             chain,
             name,
@@ -193,6 +200,7 @@ impl Dex {
             mint_created_event: encoded_mint_event.into(),
             burn_created_event: encoded_burn_event.into(),
             collect_created_event: encoded_collect_event.into(),
+            flash_created_event: None,
             amm_type,
             pairs: vec![],
         }
@@ -203,6 +211,7 @@ impl Dex {
         format!("{}:{}", self.chain.name, self.name)
     }
 
+    /// Sets the pool initialization event signature by hashing and encoding the provided event string.
     pub fn set_initialize_event(&mut self, event: &str) {
         let initialize_event_hash = keccak256(event.as_bytes());
         let encoded_initialized_event = format!(
@@ -210,6 +219,16 @@ impl Dex {
             encoded_hash = hex::encode(initialize_event_hash)
         );
         self.initialize_event = Some(encoded_initialized_event.into());
+    }
+
+    /// Sets the flash loan event signature by hashing and encoding the provided event string.
+    pub fn set_flash_event(&mut self, event: &str) {
+        let flash_event_hash = keccak256(event.as_bytes());
+        let encoded_flash_event = format!(
+            "0x{encoded_hash}",
+            encoded_hash = hex::encode(flash_event_hash)
+        );
+        self.flash_created_event = Some(encoded_flash_event.into());
     }
 }
 
@@ -230,7 +249,7 @@ impl From<Pool> for CurrencyPair {
         let price_increment = Price::new(10f64.powi(-(price_precision as i32)), price_precision);
         let size_increment = Quantity::new(10f64.powi(-(size_precision as i32)), size_precision);
 
-        CurrencyPair::new(
+        Self::new(
             id,
             symbol,
             Currency::from(p.token0.symbol.as_str()),
@@ -262,10 +281,6 @@ impl From<Pool> for InstrumentAny {
         CurrencyPair::from(p).into_any()
     }
 }
-
-////////////////////////////////////////////////////////////////////////////////
-// Tests
-////////////////////////////////////////////////////////////////////////////////
 
 #[cfg(test)]
 mod tests {

@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -39,5 +39,14 @@ pub fn py_tardis_exchange_to_venue_str(exchange_str: &str) -> String {
     match exchange_str.parse::<TardisExchange>() {
         Ok(exchange) => exchange.as_venue_str().to_string(),
         Err(_) => String::new(),
+    }
+}
+
+#[must_use]
+#[pyfunction(name = "tardis_exchange_is_option_exchange")]
+pub fn py_tardis_exchange_is_option_exchange(exchange_str: &str) -> bool {
+    match exchange_str.parse::<TardisExchange>() {
+        Ok(exchange) => exchange.is_option_exchange(),
+        Err(_) => false,
     }
 }

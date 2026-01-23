@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -15,20 +15,29 @@
 
 //! Pool profiling utilities for analyzing DeFi pool event data.
 
-use std::collections::HashMap;
-
+use ahash::AHashMap;
 use alloy_primitives::{Address, I256, U160, U256};
 
 use crate::defi::{
     PoolLiquidityUpdate, PoolSwap, SharedPool,
-    data::{DexPoolData, PoolFeeCollect, PoolLiquidityUpdateType, block::BlockPosition},
-    pool_analysis::{position::PoolPosition, swap_math::compute_swap_step},
+    data::{
+        DexPoolData, PoolFeeCollect, PoolLiquidityUpdateType, block::BlockPosition,
+        flash::PoolFlash,
+    },
+    pool_analysis::{
+        position::PoolPosition,
+        quote::SwapQuote,
+        size_estimator,
+        snapshot::{PoolAnalytics, PoolSnapshot, PoolState},
+        swap_math::compute_swap_step,
+    },
+    reporting::{BlockchainSyncReportItems, BlockchainSyncReporter},
     tick_map::{
         TickMap,
         full_math::{FullMath, Q128},
         liquidity_math::liquidity_math_add,
         sqrt_price_math::{get_amount0_delta, get_amount1_delta, get_amounts_for_liquidity},
-        tick::Tick,
+        tick::{CrossedTick, PoolTick},
         tick_math::{
             MAX_SQRT_RATIO, MIN_SQRT_RATIO, get_sqrt_ratio_at_tick, get_tick_at_sqrt_ratio,
         },
@@ -61,27 +70,21 @@ pub struct PoolProfiler {
     /// Pool definition.
     pub pool: SharedPool,
     /// Position tracking by position key (owner:tick_lower:tick_upper).
-    positions: HashMap<String, PoolPosition>,
+    positions: AHashMap<String, PoolPosition>,
     /// Tick map managing liquidity distribution across price ranges.
     pub tick_map: TickMap,
-    /// Current tick position of the pool price.
-    pub current_tick: Option<i32>,
-    /// Current sqrt price ratio as Q64.96 fixed point number.
-    pub price_sqrt_ratio_x96: Option<U160>,
-    /// Total amount of token0 deposited through mints.
-    pub total_amount0_deposited: U256,
-    /// Total amount of token1 deposited through mints.
-    pub total_amount1_deposited: U256,
-    /// Total amount of token0 withdrawn through burns.
-    pub total_amount0_withdrawn: U256,
-    /// Total amount of token1 withdrawn through burns.
-    pub total_amount1_withdrawn: U256,
-    /// Accumulated protocol fees in token0 units.
-    pub protocol_fees_token0: U256,
-    /// Accumulated protocol fees in token1 units.
-    pub protocol_fees_token1: U256,
-    /// Protocol fee packed: lower 4 bits for token0, upper 4 bits for token1.
-    pub fee_protocol: u8,
+    /// Global pool state including current price, tick, and cumulative flows with fees.
+    pub state: PoolState,
+    /// Analytics counters tracking pool operations and performance metrics.
+    pub analytics: PoolAnalytics,
+    /// The block position of the last processed event.
+    pub last_processed_event: Option<BlockPosition>,
+    /// Flag indicating whether the pool has been initialized with a starting price.
+    pub is_initialized: bool,
+    /// Optional progress reporter for tracking event processing.
+    reporter: Option<BlockchainSyncReporter>,
+    /// The last block number that was reported (used for progress tracking).
+    last_reported_block: u64,
 }
 
 impl PoolProfiler {
@@ -95,31 +98,26 @@ impl PoolProfiler {
         let tick_spacing = pool.tick_spacing.expect("Pool tick spacing must be set");
         Self {
             pool,
-            positions: HashMap::new(),
+            positions: AHashMap::new(),
             tick_map: TickMap::new(tick_spacing),
-            current_tick: None,
-            price_sqrt_ratio_x96: None,
-            total_amount0_deposited: U256::ZERO,
-            total_amount1_deposited: U256::ZERO,
-            total_amount0_withdrawn: U256::ZERO,
-            total_amount1_withdrawn: U256::ZERO,
-            protocol_fees_token0: U256::ZERO,
-            protocol_fees_token1: U256::ZERO,
-            fee_protocol: 0,
+            state: PoolState::default(),
+            analytics: PoolAnalytics::default(),
+            last_processed_event: None,
+            is_initialized: false,
+            reporter: None,
+            last_reported_block: 0,
         }
     }
 
-    /// Initializes the pool with a starting price.
+    /// Initializes the pool with a starting price and activates the profiler.
     ///
     /// # Panics
     ///
     /// This function panics if:
-    /// - Pool is already initialized.
-    /// - Calculated tick does not match the pool's initial tick (if set).
+    /// - Pool is already initialized (checked via `is_initialized` flag)
+    /// - Calculated tick from price doesn't match pool's `initial_tick` (if set)
     pub fn initialize(&mut self, price_sqrt_ratio_x96: U160) {
-        if self.current_tick.is_some() || self.price_sqrt_ratio_x96.is_some() {
-            panic!("Pool already initialized");
-        }
+        assert!(!self.is_initialized, "Pool already initialized");
 
         let calculated_tick = get_tick_at_sqrt_ratio(price_sqrt_ratio_x96);
         if let Some(initial_tick) = self.pool.initial_tick {
@@ -129,26 +127,22 @@ impl PoolProfiler {
             );
         }
 
-        tracing::info!(
-            "Initializing pool profiler with tick {} and price sqrt ratio {}",
-            calculated_tick,
-            price_sqrt_ratio_x96
+        log::info!(
+            "Initializing pool profiler with tick {calculated_tick} and price sqrt ratio {price_sqrt_ratio_x96}"
         );
-        self.current_tick = Some(calculated_tick);
-        self.price_sqrt_ratio_x96 = Some(price_sqrt_ratio_x96);
+
+        self.state.current_tick = calculated_tick;
+        self.state.price_sqrt_ratio_x96 = price_sqrt_ratio_x96;
+        self.is_initialized = true;
     }
 
     /// Verifies that the pool has been initialized.
     ///
-    /// Internal helper method to ensure operations are only performed on initialized pools.
-    ///
     /// # Panics
     ///
-    /// Panics if the pool hasn't been initialized with a starting price.
+    /// Panics if the pool hasn't been initialized with a starting price via [`initialize()`](Self::initialize).
     pub fn check_if_initialized(&self) {
-        if self.current_tick.is_none() || self.price_sqrt_ratio_x96.is_none() {
-            panic!("Pool is not initialized");
-        }
+        assert!(self.is_initialized, "Pool is not initialized");
     }
 
     /// Processes a historical pool event and updates internal state.
@@ -164,23 +158,63 @@ impl PoolProfiler {
     /// - Event contains invalid data (tick ranges, amounts).
     /// - Mathematical operations overflow.
     pub fn process(&mut self, event: &DexPoolData) -> anyhow::Result<()> {
+        if self.check_if_already_processed(
+            event.block_number(),
+            event.transaction_index(),
+            event.log_index(),
+        ) {
+            return Ok(());
+        }
+
         match event {
-            DexPoolData::Swap(swap) => {
-                self.process_swap(swap)?;
-            }
+            DexPoolData::Swap(swap) => self.process_swap(swap)?,
             DexPoolData::LiquidityUpdate(update) => match update.kind {
-                PoolLiquidityUpdateType::Mint => {
-                    self.process_mint(update)?;
-                }
-                PoolLiquidityUpdateType::Burn => {
-                    self.process_burn(update)?;
-                }
+                PoolLiquidityUpdateType::Mint => self.process_mint(update)?,
+                PoolLiquidityUpdateType::Burn => self.process_burn(update)?,
             },
-            DexPoolData::FeeCollect(collect) => {
-                self.process_collect(collect)?;
+            DexPoolData::FeeCollect(collect) => self.process_collect(collect)?,
+            DexPoolData::Flash(flash) => self.process_flash(flash)?,
+        }
+        self.update_reporter_if_enabled(event.block_number());
+
+        Ok(())
+    }
+
+    // Checks if we need to skip events at or before the last processed event to prevent double-processing.
+    fn check_if_already_processed(&self, block: u64, tx_idx: u32, log_idx: u32) -> bool {
+        if let Some(last_event) = &self.last_processed_event {
+            let should_skip = block < last_event.number
+                || (block == last_event.number && tx_idx < last_event.transaction_index)
+                || (block == last_event.number
+                    && tx_idx == last_event.transaction_index
+                    && log_idx <= last_event.log_index);
+
+            if should_skip {
+                log::debug!(
+                    "Skipping already processed event at block {block} tx {tx_idx} log {log_idx}"
+                );
+            }
+            return should_skip;
+        }
+
+        false
+    }
+
+    /// Auto-updates reporter if it's enabled.
+    fn update_reporter_if_enabled(&mut self, current_block: u64) {
+        // Auto-update reporter if enabled
+        if let Some(reporter) = &mut self.reporter {
+            let blocks_processed = current_block.saturating_sub(self.last_reported_block);
+
+            if blocks_processed > 0 {
+                reporter.update(blocks_processed as usize);
+                self.last_reported_block = current_block;
+
+                if reporter.should_log_progress(current_block, current_block) {
+                    reporter.log_progress(current_block);
+                }
             }
         }
-        Ok(())
     }
 
     /// Processes a historical swap event from blockchain data.
@@ -205,9 +239,13 @@ impl PoolProfiler {
     ///
     /// # Panics
     ///
-    /// Panics if the pool has not been initialized (current_tick is None).
+    /// Panics if the pool has not been initialized.
     pub fn process_swap(&mut self, swap: &PoolSwap) -> anyhow::Result<()> {
         self.check_if_initialized();
+        if self.check_if_already_processed(swap.block, swap.transaction_index, swap.log_index) {
+            return Ok(());
+        }
+
         let zero_for_one = swap.amount0.is_positive();
         let amount_specified = if zero_for_one {
             swap.amount0
@@ -217,26 +255,38 @@ impl PoolProfiler {
         // For price limit use the final sqrt price from swap, which is a
         // good proxy to price limit
         let sqrt_price_limit_x96 = swap.sqrt_price_x96;
-        let (_, _) =
+        let swap_quote =
             self.simulate_swap_through_ticks(amount_specified, zero_for_one, sqrt_price_limit_x96)?;
+        self.apply_swap_quote(&swap_quote);
 
         // Verify simulation against event data - correct with event values if mismatch detected
-        if swap.tick != self.current_tick.unwrap() {
-            tracing::error!(
-                "Inconsistency in swap processing: Current tick mismatch: simulated {}, event {}",
-                self.current_tick.unwrap(),
-                swap.tick
+        if swap.tick != self.state.current_tick {
+            log::error!(
+                "Inconsistency in swap processing: Current tick mismatch: simulated {}, event {} on block {}",
+                self.state.current_tick,
+                swap.tick,
+                swap.block
             );
-            self.current_tick = Some(swap.tick);
+            self.state.current_tick = swap.tick;
         }
         if swap.liquidity != self.tick_map.liquidity {
-            tracing::error!(
-                "Inconsistency in swap processing: Active liquidity mismatch: simulated {}, event {}",
+            log::error!(
+                "Inconsistency in swap processing: Active liquidity mismatch: simulated {}, event {} on block {}",
                 self.tick_map.liquidity,
-                swap.liquidity
+                swap.liquidity,
+                swap.block
             );
             self.tick_map.liquidity = swap.liquidity;
         }
+
+        self.last_processed_event = Some(BlockPosition::new(
+            swap.block,
+            swap.transaction_hash.clone(),
+            swap.transaction_index,
+            swap.log_index,
+        ));
+        self.update_reporter_if_enabled(swap.block);
+        self.update_liquidity_analytics();
 
         Ok(())
     }
@@ -258,7 +308,7 @@ impl PoolProfiler {
     ///
     /// This function panics if:
     /// - Pool fee is not initialized
-    /// - Pool is not initialized (current_tick/price is None)
+    /// - Pool is not initialized
     pub fn execute_swap(
         &mut self,
         sender: Address,
@@ -269,86 +319,90 @@ impl PoolProfiler {
         sqrt_price_limit_x96: U160,
     ) -> anyhow::Result<PoolSwap> {
         self.check_if_initialized();
-        let (amount0, amount1) =
+        let swap_quote =
             self.simulate_swap_through_ticks(amount_specified, zero_for_one, sqrt_price_limit_x96)?;
+        self.apply_swap_quote(&swap_quote);
 
         let swap_event = PoolSwap::new(
             self.pool.chain.clone(),
             self.pool.dex.clone(),
-            self.pool.address,
+            self.pool.instrument_id,
+            self.pool.pool_identifier,
             block.number,
-            block.hash,
+            block.transaction_hash,
             block.transaction_index,
             block.log_index,
             None,
             sender,
             recipient,
-            amount0,
-            amount1,
-            self.price_sqrt_ratio_x96.unwrap(),
+            swap_quote.amount0,
+            swap_quote.amount1,
+            self.state.price_sqrt_ratio_x96,
             self.tick_map.liquidity,
-            self.current_tick.unwrap(),
-            None,
-            None,
-            None,
+            self.state.current_tick,
         );
         Ok(swap_event)
     }
 
-    /// Core swap simulation engine implementing UniswapV3 mathematics.
+    /// Core **read-only** swap simulation engine implementing UniswapV3 mathematics.
     ///
-    /// This private method contains the complete AMM swap algorithm and is the
-    /// computational heart of both [`Self::execute_swap`] (forward simulation)
-    /// and [`Self::process_swap`] (historical replay).
+    /// This method performs a complete swap simulation without modifying pool state,
+    /// working entirely on stack-allocated local copies of state variables. It returns
+    /// a comprehensive [`SwapQuote`] containing all swap results and profiling data,
+    /// including a complete audit trail of crossed ticks.
+    ///
     ///
     /// # Algorithm Overview
     ///
     /// 1. **Iterative price curve traversal**: Walks through liquidity ranges until
     ///    the input/output amount is exhausted or the price limit is reached
-    /// 2. **Tick crossing**: When reaching an initialized tick boundary, updates
-    ///    active liquidity by applying the tick's `liquidity_net`
-    /// 3. **Fee calculation**: Splits fees between LPs (via fee growth globals)
-    ///    and protocol (via protocol fee percentage)
-    /// 4. **State mutation**: Updates current tick, sqrt price, liquidity, and
-    ///    fee growth accumulators
+    /// 2. **Tick crossing tracking**: When crossing initialized tick boundaries, records
+    ///    the crossing in `crossed_ticks` vector with complete state snapshot (tick, direction, fee growth)
+    /// 3. **Local liquidity updates**: Tracks liquidity changes in local variables by reading
+    ///    `liquidity_net` from tick map (read-only, no mutations)
+    /// 4. **Fee calculation**: Splits fees between LPs and protocol, accumulates in local variables
+    /// 5. **Quote assembly**: Returns [`SwapQuote`] with amounts, prices, fees, and crossed tick data
     ///
     /// # Errors
     ///
     /// Returns error if:
     /// - Pool fee is not configured
     /// - Fee growth arithmetic overflows when scaling by liquidity
-    /// - Invalid state encountered during tick crossing
+    /// - Swap step calculations fail
     ///
     /// # Panics
     ///
-    /// Panics if pool is not initialized (current_tick or price_sqrt_ratio_x96 is None).
+    /// Panics if pool is not initialized
     pub fn simulate_swap_through_ticks(
-        &mut self,
+        &self,
         amount_specified: I256,
         zero_for_one: bool,
         sqrt_price_limit_x96: U160,
-    ) -> anyhow::Result<(I256, I256)> {
-        let mut current_sqrt_price = self.price_sqrt_ratio_x96.unwrap();
-        let mut current_tick = self.current_tick.unwrap();
+    ) -> anyhow::Result<SwapQuote> {
+        let mut current_sqrt_price = self.state.price_sqrt_ratio_x96;
+        let mut current_tick = self.state.current_tick;
+        let mut current_active_liquidity = self.tick_map.liquidity;
         let exact_input = amount_specified.is_positive();
         let mut amount_specified_remaining = amount_specified;
         let mut amount_calculated = I256::ZERO;
         let mut protocol_fee = U256::ZERO;
+        let mut lp_fee = U256::ZERO;
+        let mut crossed_ticks = Vec::new();
         let fee_tier = self.pool.fee.expect("Pool fee should be initialized");
         // Swapping cache variables
         let fee_protocol = if zero_for_one {
             // Extract lower 4 bits for token0 protocol fee
-            self.fee_protocol % 16
+            self.state.fee_protocol % 16
         } else {
             // Extract upper 4 bits for token1 protocol fee
-            self.fee_protocol >> 4
+            self.state.fee_protocol >> 4
         };
 
         // Track current fee growth during swap
         let mut current_fee_growth_global = if zero_for_one {
-            self.tick_map.fee_growth_global_0
+            self.state.fee_growth_global_0
         } else {
-            self.tick_map.fee_growth_global_1
+            self.state.fee_growth_global_1
         };
 
         // Continue swapping as long as we haven't used the entire input/output or haven't reached the price limit
@@ -361,7 +415,7 @@ impl PoolProfiler {
                 .next_initialized_tick(current_tick, zero_for_one);
 
             // Make sure we do not overshoot MIN/MAX tick
-            tick_next = tick_next.clamp(Tick::MIN_TICK, Tick::MAX_TICK);
+            tick_next = tick_next.clamp(PoolTick::MIN_TICK, PoolTick::MAX_TICK);
 
             // Get the price for the next tick
             let sqrt_price_next = get_sqrt_ratio_at_tick(tick_next);
@@ -377,7 +431,7 @@ impl PoolProfiler {
             let swap_step_result = compute_swap_step(
                 current_sqrt_price,
                 sqrt_price_target,
-                self.get_active_liquidity(),
+                current_active_liquidity,
                 amount_specified_remaining,
                 fee_tier,
             )?;
@@ -409,10 +463,13 @@ impl PoolProfiler {
                 protocol_fee += protocol_fee_delta;
             }
 
+            // Accumulate LP fee (protocol fee is already deducted if it exists).
+            lp_fee += step_fee_amount;
+
             // Update global fee tracker
-            if self.tick_map.liquidity > 0 {
+            if current_active_liquidity > 0 {
                 let fee_growth_delta =
-                    FullMath::mul_div(step_fee_amount, Q128, U256::from(self.tick_map.liquidity))?;
+                    FullMath::mul_div(step_fee_amount, Q128, U256::from(current_active_liquidity))?;
                 current_fee_growth_global += fee_growth_delta;
             }
 
@@ -422,28 +479,30 @@ impl PoolProfiler {
                 // Time to handle crossing into the next tick, which may change liquidity.
                 // If the tick is initialized, run the tick transition logic (liquidity changes, fee accumulators, etc.).
                 if initialized {
-                    let liquidity_net = self.tick_map.cross_tick(
+                    crossed_ticks.push(CrossedTick::new(
                         tick_next,
+                        zero_for_one,
                         if zero_for_one {
                             current_fee_growth_global
                         } else {
-                            self.tick_map.fee_growth_global_0
+                            self.state.fee_growth_global_0
                         },
                         if zero_for_one {
-                            self.tick_map.fee_growth_global_1
+                            self.state.fee_growth_global_1
                         } else {
                             current_fee_growth_global
                         },
-                    );
+                    ));
 
-                    // Apply liquidity change based on crossing direction
-                    // When crossing down (zeroForOne = true), negate liquidity_net before adding
-                    // When crossing up (zeroForOne = false), use liquidity_net as-is without negation
-                    self.tick_map.liquidity = if zero_for_one {
-                        liquidity_math_add(self.tick_map.liquidity, -liquidity_net)
-                    } else {
-                        liquidity_math_add(self.tick_map.liquidity, liquidity_net)
-                    };
+                    // Update local liquidity tracking when crossing ticks
+                    if let Some(tick_data) = self.tick_map.get_tick(tick_next) {
+                        let liquidity_net = tick_data.liquidity_net;
+                        current_active_liquidity = if zero_for_one {
+                            liquidity_math_add(current_active_liquidity, -liquidity_net)
+                        } else {
+                            liquidity_math_add(current_active_liquidity, liquidity_net)
+                        };
+                    }
                 }
 
                 current_tick = if zero_for_one {
@@ -456,24 +515,6 @@ impl PoolProfiler {
                 // So, update the tick to match the new price.
                 current_tick = get_tick_at_sqrt_ratio(current_sqrt_price);
             }
-        }
-
-        // Update pool state - match Solidity exactly
-        if self.current_tick.unwrap() != current_tick {
-            self.current_tick = Some(current_tick);
-            self.price_sqrt_ratio_x96 = Some(current_sqrt_price);
-        } else {
-            // Otherwise just update the price
-            self.price_sqrt_ratio_x96 = Some(current_sqrt_price);
-        }
-
-        // Update fee growth global and if necessary, protocol fees
-        if zero_for_one {
-            self.tick_map.fee_growth_global_0 = current_fee_growth_global;
-            self.protocol_fees_token0 += protocol_fee;
-        } else {
-            self.tick_map.fee_growth_global_1 = current_fee_growth_global;
-            self.protocol_fees_token1 += protocol_fee;
         }
 
         // Calculate final amounts
@@ -489,167 +530,236 @@ impl PoolProfiler {
             )
         };
 
-        Ok((amount0, amount1))
+        let quote = SwapQuote::new(
+            self.pool.instrument_id,
+            amount0,
+            amount1,
+            self.state.price_sqrt_ratio_x96,
+            current_sqrt_price,
+            self.state.current_tick,
+            current_tick,
+            current_active_liquidity,
+            current_fee_growth_global,
+            lp_fee,
+            protocol_fee,
+            crossed_ticks,
+        );
+        Ok(quote)
     }
 
-    /// Swaps an exact amount of token0 for token1.
+    /// Applies a swap quote to the pool state (mutations only, no simulation).
     ///
-    /// Convenience method for executing exact input swaps from token0 to token1.
-    /// Sets up parameters and delegates to `execute_swap`.
+    /// This private method takes a [`SwapQuote`] generated by [`Self::simulate_swap_through_ticks`]
+    /// and applies its state changes to the pool, including:
+    /// - Price and tick updates
+    /// - Fee growth and protocol fee accumulation
+    /// - Tick crossing mutations (updating tick fee accumulators and active liquidity)
+    pub fn apply_swap_quote(&mut self, swap_quote: &SwapQuote) {
+        // Update price and tick.
+        self.state.current_tick = swap_quote.tick_after;
+        self.state.price_sqrt_ratio_x96 = swap_quote.sqrt_price_after_x96;
+
+        // Update fee growth and protocol fees based on swap direction.
+        if swap_quote.zero_for_one() {
+            self.state.fee_growth_global_0 = swap_quote.fee_growth_global_after;
+            self.state.protocol_fees_token0 += swap_quote.protocol_fee;
+        } else {
+            self.state.fee_growth_global_1 = swap_quote.fee_growth_global_after;
+            self.state.protocol_fees_token1 += swap_quote.protocol_fee;
+        }
+
+        // Apply tick crossings efficiently - only update crossed ticks
+        for crossed in &swap_quote.crossed_ticks {
+            let liquidity_net =
+                self.tick_map
+                    .cross_tick(crossed.tick, crossed.fee_growth_0, crossed.fee_growth_1);
+
+            // Update active liquidity based on crossing direction
+            self.tick_map.liquidity = if crossed.zero_for_one {
+                liquidity_math_add(self.tick_map.liquidity, -liquidity_net)
+            } else {
+                liquidity_math_add(self.tick_map.liquidity, liquidity_net)
+            };
+        }
+        self.analytics.total_swaps += 1;
+
+        debug_assert_eq!(
+            self.tick_map.liquidity, swap_quote.liquidity_after,
+            "Liquidity mismatch in apply_swap_quote: computed={}, quote={}",
+            self.tick_map.liquidity, swap_quote.liquidity_after
+        );
+    }
+
+    /// Returns a comprehensive swap quote without modifying pool state.
+    ///
+    /// This method simulates a swap and provides detailed profiling metrics including:
+    /// - Amounts of tokens that would be exchanged
+    /// - Price before and after the swap
+    /// - Fee breakdown (LP fees and protocol fees)
+    /// - List of crossed ticks with state snapshots
     ///
     /// # Errors
     ///
-    /// Returns error from [`Self::execute_swap`] when swap execution fails.
-    pub fn swap_exact0_for_1(
-        &mut self,
-        sender: Address,
-        recipient: Address,
-        block: BlockPosition,
-        amount0_in: U256,
+    /// Returns error if:
+    /// - Pool fee is not configured
+    /// - Fee growth arithmetic overflows when scaling by liquidity
+    /// - Swap step calculations fail
+    ///
+    /// # Panics
+    ///
+    /// Panics if pool is not initialized
+    pub fn quote_swap(
+        &self,
+        amount_specified: I256,
+        zero_for_one: bool,
         sqrt_price_limit_x96: Option<U160>,
-    ) -> anyhow::Result<PoolSwap> {
-        let amount_specified = I256::from(amount0_in);
-        let sqrt_price_limit_x96 = sqrt_price_limit_x96.unwrap_or(MIN_SQRT_RATIO + U160::from(1));
-        self.execute_swap(
-            sender,
-            recipient,
-            block,
-            true,
-            amount_specified,
-            sqrt_price_limit_x96,
-        )
+    ) -> anyhow::Result<SwapQuote> {
+        self.check_if_initialized();
+        if amount_specified.is_zero() {
+            anyhow::bail!("Cannot quote swap with zero amount");
+        }
+
+        if let Some(price_limit) = sqrt_price_limit_x96 {
+            self.validate_price_limit(price_limit, zero_for_one)?;
+        }
+
+        let limit = sqrt_price_limit_x96.unwrap_or_else(|| {
+            if zero_for_one {
+                MIN_SQRT_RATIO + U160::from(1)
+            } else {
+                MAX_SQRT_RATIO - U160::from(1)
+            }
+        });
+
+        self.simulate_swap_through_ticks(amount_specified, zero_for_one, limit)
     }
 
-    /// Swaps token0 for an exact amount of token1.
-    ///
-    /// Convenience method for executing exact output swaps from token0 to token1.
-    /// Uses negative amount to indicate exact output specification.
+    /// Simulates an exact input swap (know input amount, calculate output amount).
     ///
     /// # Errors
-    ///
-    /// Returns error from [`Self::execute_swap`] when swap execution fails.
-    pub fn swap_0_for_exact1(
-        &mut self,
-        sender: Address,
-        recipient: Address,
-        block: BlockPosition,
-        amount1_out: U256,
+    /// Returns error if pool is not initialized, input is zero, or price limit is invalid
+    pub fn swap_exact_in(
+        &self,
+        amount_in: U256,
+        zero_for_one: bool,
         sqrt_price_limit_x96: Option<U160>,
-    ) -> anyhow::Result<PoolSwap> {
-        let amount_specified = -I256::from(amount1_out);
-        let sqrt_price_limit_x96 = sqrt_price_limit_x96.unwrap_or(MIN_SQRT_RATIO + U160::from(1));
-        self.execute_swap(
-            sender,
-            recipient,
-            block,
-            true,
-            amount_specified,
-            sqrt_price_limit_x96,
-        )
+    ) -> anyhow::Result<SwapQuote> {
+        // Positive = exact input.
+        let amount_specified = I256::from(amount_in);
+        let quote = self.quote_swap(amount_specified, zero_for_one, sqrt_price_limit_x96)?;
+
+        Ok(quote)
     }
 
-    /// Swaps an exact amount of token1 for token0.
-    ///
-    /// Convenience method for executing exact input swaps from token1 to token0.
-    /// Sets up parameters and delegates to `execute_swap`.
+    /// Simulates an exact output swap (know output amount, calculate required input amount).
     ///
     /// # Errors
-    ///
-    /// Returns error from [`Self::execute_swap`] when swap execution fails.
-    pub fn swap_exact1_for_0(
-        &mut self,
-        sender: Address,
-        recipient: Address,
-        block: BlockPosition,
-        amount1_in: U256,
+    /// Returns error if pool is not initialized, output is zero, price limit is invalid,
+    /// or insufficient liquidity exists to fulfill the exact output amount
+    pub fn swap_exact_out(
+        &self,
+        amount_out: U256,
+        zero_for_one: bool,
         sqrt_price_limit_x96: Option<U160>,
-    ) -> anyhow::Result<PoolSwap> {
-        let amount_specified = I256::from(amount1_in);
-        let sqrt_price_limit_x96 = sqrt_price_limit_x96.unwrap_or(MAX_SQRT_RATIO - U160::from(1));
-        self.execute_swap(
-            sender,
-            recipient,
-            block,
-            false,
-            amount_specified,
-            sqrt_price_limit_x96,
-        )
+    ) -> anyhow::Result<SwapQuote> {
+        // Negative = exact output.
+        let amount_specified = -I256::from(amount_out);
+        let quote = self.quote_swap(amount_specified, zero_for_one, sqrt_price_limit_x96)?;
+        quote.validate_exact_output(amount_out)?;
+
+        Ok(quote)
     }
 
-    /// Swaps token1 for an exact amount of token0.
-    ///
-    /// Convenience method for executing exact output swaps from token1 to token0.
-    /// Uses negative amount to indicate the exact output specification.
+    /// Simulates a swap to move the pool price down to a target price.
     ///
     /// # Errors
-    ///
-    /// Returns error from [`Self::execute_swap`] when swap execution fails.
-    pub fn swap_1_for_exact0(
-        &mut self,
-        sender: Address,
-        recipient: Address,
-        block: BlockPosition,
-        amount0_out: U256,
-        sqrt_price_limit_x96: Option<U160>,
-    ) -> anyhow::Result<PoolSwap> {
-        let amount_specified = -I256::from(amount0_out);
-        let sqrt_price_limit_x96 = sqrt_price_limit_x96.unwrap_or(MAX_SQRT_RATIO - U160::from(1));
-        self.execute_swap(
-            sender,
-            recipient,
-            block,
-            false,
-            amount_specified,
-            sqrt_price_limit_x96,
-        )
-    }
-
-    /// Swaps to move the pool price down to a target price.
-    ///
-    /// Performs a token0-for-token1 swap with maximum input to reach the target price.
-    ///
-    /// # Errors
-    ///
-    /// Returns error from [`Self::execute_swap`] when swap execution fails.
+    /// Returns error if pool is not initialized or price limit is invalid.
     pub fn swap_to_lower_sqrt_price(
-        &mut self,
-        sender: Address,
-        recipient: Address,
-        block: BlockPosition,
+        &self,
         sqrt_price_limit_x96: U160,
-    ) -> anyhow::Result<PoolSwap> {
-        self.execute_swap(
-            sender,
-            recipient,
-            block,
-            true,
-            I256::MAX,
-            sqrt_price_limit_x96,
-        )
+    ) -> anyhow::Result<SwapQuote> {
+        self.quote_swap(I256::MAX, true, Some(sqrt_price_limit_x96))
     }
 
-    /// Swaps to move the pool price up to a target price.
-    ///
-    /// Performs a token1-for-token0 swap with maximum input to reach the target price.
+    /// Simulates a swap to move the pool price up to a target price.
     ///
     /// # Errors
-    ///
-    /// Returns error from [`Self::execute_swap`] when swap execution fails.
+    /// Returns error if pool is not initialized or price limit is invalid.
     pub fn swap_to_higher_sqrt_price(
-        &mut self,
-        sender: Address,
-        recipient: Address,
-        block: BlockPosition,
+        &self,
         sqrt_price_limit_x96: U160,
-    ) -> anyhow::Result<PoolSwap> {
-        self.execute_swap(
-            sender,
-            recipient,
-            block,
-            false,
-            I256::MAX,
-            sqrt_price_limit_x96,
-        )
+    ) -> anyhow::Result<SwapQuote> {
+        self.quote_swap(I256::MAX, false, Some(sqrt_price_limit_x96))
+    }
+
+    /// Finds the maximum trade size that produces a target slippage (including fees).
+    ///
+    /// Uses binary search to find the largest trade size that results in slippage
+    /// at or below the target. The method iteratively simulates swaps at different
+    /// sizes until it converges to the optimal size within the specified tolerance.
+    ///
+    /// # Returns
+    /// The maximum trade size (U256) that produces the target slippage
+    ///
+    /// # Errors
+    /// Returns error if:
+    /// - Impact is zero or exceeds 100% (10000 bps)
+    /// - Pool is not initialized
+    /// - Swap simulations fail
+    ///
+    /// # Panics
+    /// Panics if pool is not initialized
+    pub fn size_for_impact_bps(&self, impact_bps: u32, zero_for_one: bool) -> anyhow::Result<U256> {
+        let config = size_estimator::EstimationConfig::default();
+        size_estimator::size_for_impact_bps(self, impact_bps, zero_for_one, &config)
+    }
+
+    /// Finds the maximum trade size with comprehensive search diagnostics.
+    /// This is the detailed version of [`Self::size_for_impact_bps`] that returns
+    /// extensive information about the search process.It is useful for debugging,
+    /// monitoring, and analyzing search behavior in production.
+    ///
+    /// # Returns
+    /// Detailed result with size and comprehensive search diagnostics
+    ///
+    /// # Errors
+    /// Returns error if:
+    /// - Impact is zero or exceeds 100% (10000 bps)
+    /// - Pool is not initialized
+    /// - Swap simulations fail
+    pub fn size_for_impact_bps_detailed(
+        &self,
+        impact_bps: u32,
+        zero_for_one: bool,
+    ) -> anyhow::Result<size_estimator::SizeForImpactResult> {
+        let config = size_estimator::EstimationConfig::default();
+        size_estimator::size_for_impact_bps_detailed(self, impact_bps, zero_for_one, &config)
+    }
+
+    /// Validates that the price limit is in the correct direction for the swap.
+    ///
+    /// # Errors
+    /// Returns error if price limit violates swap direction constraints.
+    fn validate_price_limit(
+        &self,
+        limit_price_sqrt: U160,
+        zero_for_one: bool,
+    ) -> anyhow::Result<()> {
+        if zero_for_one {
+            // Swapping token0 for token1: price must decrease
+            if limit_price_sqrt >= self.state.price_sqrt_ratio_x96 {
+                anyhow::bail!("Price limit must be less than current price for zero_for_one swaps");
+            }
+        } else {
+            // Swapping token1 for token0: price must increase
+            if limit_price_sqrt <= self.state.price_sqrt_ratio_x96 {
+                anyhow::bail!(
+                    "Price limit must be greater than current price for one_for_zero swaps"
+                );
+            }
+        }
+
+        Ok(())
     }
 
     /// Processes a mint (liquidity add) event from historical data.
@@ -665,6 +775,11 @@ impl PoolProfiler {
     /// - Position updates fail.
     pub fn process_mint(&mut self, update: &PoolLiquidityUpdate) -> anyhow::Result<()> {
         self.check_if_initialized();
+        if self.check_if_already_processed(update.block, update.transaction_index, update.log_index)
+        {
+            return Ok(());
+        }
+
         self.validate_ticks(update.tick_lower, update.tick_upper)?;
         self.add_liquidity(
             &update.owner,
@@ -674,6 +789,17 @@ impl PoolProfiler {
             update.amount0,
             update.amount1,
         )?;
+
+        self.analytics.total_mints += 1;
+        self.last_processed_event = Some(BlockPosition::new(
+            update.block,
+            update.transaction_hash.clone(),
+            update.transaction_index,
+            update.log_index,
+        ));
+        self.update_reporter_if_enabled(update.block);
+        self.update_liquidity_analytics();
+
         Ok(())
     }
 
@@ -700,8 +826,8 @@ impl PoolProfiler {
         )?;
 
         // Track deposited amounts
-        self.total_amount0_deposited += amount0;
-        self.total_amount1_deposited += amount1;
+        self.analytics.total_amount0_deposited += amount0;
+        self.analytics.total_amount1_deposited += amount1;
 
         Ok(())
     }
@@ -732,7 +858,7 @@ impl PoolProfiler {
         self.check_if_initialized();
         self.validate_ticks(tick_lower, tick_upper)?;
         let (amount0, amount1) = get_amounts_for_liquidity(
-            self.price_sqrt_ratio_x96.unwrap(),
+            self.state.price_sqrt_ratio_x96,
             tick_lower,
             tick_upper,
             liquidity,
@@ -742,13 +868,15 @@ impl PoolProfiler {
             &recipient, tick_lower, tick_upper, liquidity, amount0, amount1,
         )?;
 
+        self.analytics.total_mints += 1;
         let event = PoolLiquidityUpdate::new(
             self.pool.chain.clone(),
             self.pool.dex.clone(),
-            self.pool.address,
+            self.pool.instrument_id,
+            self.pool.pool_identifier,
             PoolLiquidityUpdateType::Mint,
             block.number,
-            block.hash,
+            block.transaction_hash,
             block.transaction_index,
             block.log_index,
             None,
@@ -777,6 +905,10 @@ impl PoolProfiler {
     /// - Position updates fail.
     pub fn process_burn(&mut self, update: &PoolLiquidityUpdate) -> anyhow::Result<()> {
         self.check_if_initialized();
+        if self.check_if_already_processed(update.block, update.transaction_index, update.log_index)
+        {
+            return Ok(());
+        }
         self.validate_ticks(update.tick_lower, update.tick_upper)?;
 
         // Update the position with a negative liquidity delta for the burn.
@@ -789,9 +921,15 @@ impl PoolProfiler {
             update.amount1,
         )?;
 
-        // Track withdrawn amounts
-        self.total_amount0_withdrawn += update.amount0;
-        self.total_amount1_withdrawn += update.amount1;
+        self.analytics.total_burns += 1;
+        self.last_processed_event = Some(BlockPosition::new(
+            update.block,
+            update.transaction_hash.clone(),
+            update.transaction_index,
+            update.log_index,
+        ));
+        self.update_reporter_if_enabled(update.block);
+        self.update_liquidity_analytics();
 
         Ok(())
     }
@@ -823,7 +961,7 @@ impl PoolProfiler {
         self.check_if_initialized();
         self.validate_ticks(tick_lower, tick_upper)?;
         let (amount0, amount1) = get_amounts_for_liquidity(
-            self.price_sqrt_ratio_x96.unwrap(),
+            self.state.price_sqrt_ratio_x96,
             tick_lower,
             tick_upper,
             liquidity,
@@ -840,17 +978,15 @@ impl PoolProfiler {
             amount1,
         )?;
 
-        // Track withdrawn amounts
-        self.total_amount0_withdrawn += amount0;
-        self.total_amount1_withdrawn += amount1;
-
+        self.analytics.total_burns += 1;
         let event = PoolLiquidityUpdate::new(
             self.pool.chain.clone(),
             self.pool.dex.clone(),
-            self.pool.address,
+            self.pool.instrument_id,
+            self.pool.pool_identifier,
             PoolLiquidityUpdateType::Burn,
             block.number,
-            block.hash,
+            block.transaction_hash,
             block.transaction_index,
             block.log_index,
             None,
@@ -880,11 +1016,180 @@ impl PoolProfiler {
     /// - Pool is not initialized.
     pub fn process_collect(&mut self, collect: &PoolFeeCollect) -> anyhow::Result<()> {
         self.check_if_initialized();
-
+        if self.check_if_already_processed(
+            collect.block,
+            collect.transaction_index,
+            collect.log_index,
+        ) {
+            return Ok(());
+        }
         let position_key =
             PoolPosition::get_position_key(&collect.owner, collect.tick_lower, collect.tick_upper);
         if let Some(position) = self.positions.get_mut(&position_key) {
             position.collect_fees(collect.amount0, collect.amount1);
+        }
+
+        // Cleanup position if it became empty after collecting all fees
+        self.cleanup_position_if_empty(&position_key);
+
+        self.analytics.total_amount0_collected += U256::from(collect.amount0);
+        self.analytics.total_amount1_collected += U256::from(collect.amount1);
+
+        self.analytics.total_fee_collects += 1;
+        self.last_processed_event = Some(BlockPosition::new(
+            collect.block,
+            collect.transaction_hash.clone(),
+            collect.transaction_index,
+            collect.log_index,
+        ));
+        self.update_reporter_if_enabled(collect.block);
+        self.update_liquidity_analytics();
+
+        Ok(())
+    }
+
+    /// Processes a flash loan event from historical data.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Pool has no active liquidity.
+    /// - Fee growth arithmetic overflows.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the pool has not been initialized.
+    pub fn process_flash(&mut self, flash: &PoolFlash) -> anyhow::Result<()> {
+        self.check_if_initialized();
+        if self.check_if_already_processed(flash.block, flash.transaction_index, flash.log_index) {
+            return Ok(());
+        }
+
+        self.update_flash_state(flash.paid0, flash.paid1)?;
+
+        self.analytics.total_flashes += 1;
+        self.last_processed_event = Some(BlockPosition::new(
+            flash.block,
+            flash.transaction_hash.clone(),
+            flash.transaction_index,
+            flash.log_index,
+        ));
+        self.update_reporter_if_enabled(flash.block);
+        self.update_liquidity_analytics();
+
+        Ok(())
+    }
+
+    /// Executes a simulated flash loan operation and returns the resulting event.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Mathematical operations overflow when calculating fees.
+    /// - Pool has no active liquidity.
+    /// - Fee growth arithmetic overflows.
+    ///
+    /// # Panics
+    ///
+    /// Panics if:
+    /// - Pool is not initialized
+    /// - Pool fee is not set
+    pub fn execute_flash(
+        &mut self,
+        sender: Address,
+        recipient: Address,
+        block: BlockPosition,
+        amount0: U256,
+        amount1: U256,
+    ) -> anyhow::Result<PoolFlash> {
+        self.check_if_initialized();
+        let fee_tier = self.pool.fee.expect("Pool fee should be initialized");
+
+        // Calculate fees or paid0/paid1
+        let paid0 = if amount0 > U256::ZERO {
+            FullMath::mul_div_rounding_up(amount0, U256::from(fee_tier), U256::from(1_000_000))?
+        } else {
+            U256::ZERO
+        };
+
+        let paid1 = if amount1 > U256::ZERO {
+            FullMath::mul_div_rounding_up(amount1, U256::from(fee_tier), U256::from(1_000_000))?
+        } else {
+            U256::ZERO
+        };
+
+        self.update_flash_state(paid0, paid1)?;
+        self.analytics.total_flashes += 1;
+
+        let flash_event = PoolFlash::new(
+            self.pool.chain.clone(),
+            self.pool.dex.clone(),
+            self.pool.instrument_id,
+            self.pool.pool_identifier,
+            block.number,
+            block.transaction_hash,
+            block.transaction_index,
+            block.log_index,
+            None,
+            sender,
+            recipient,
+            amount0,
+            amount1,
+            paid0,
+            paid1,
+        );
+
+        Ok(flash_event)
+    }
+
+    /// Core flash loan state update logic.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if:
+    /// - No active liquidity in pool
+    /// - Fee growth arithmetic overflows
+    fn update_flash_state(&mut self, paid0: U256, paid1: U256) -> anyhow::Result<()> {
+        let liquidity = self.tick_map.liquidity;
+        if liquidity == 0 {
+            anyhow::bail!("No liquidity")
+        }
+
+        let fee_protocol_0 = self.state.fee_protocol % 16;
+        let fee_protocol_1 = self.state.fee_protocol >> 4;
+
+        // Process token0 fees
+        if paid0 > U256::ZERO {
+            let protocol_fee_0 = if fee_protocol_0 > 0 {
+                paid0 / U256::from(fee_protocol_0)
+            } else {
+                U256::ZERO
+            };
+
+            if protocol_fee_0 > U256::ZERO {
+                self.state.protocol_fees_token0 += protocol_fee_0;
+            }
+
+            let lp_fee_0 = paid0 - protocol_fee_0;
+            let delta = FullMath::mul_div(lp_fee_0, Q128, U256::from(liquidity))?;
+            self.state.fee_growth_global_0 += delta;
+        }
+
+        // Process token1 fees
+        if paid1 > U256::ZERO {
+            let protocol_fee_1 = if fee_protocol_1 > 0 {
+                paid1 / U256::from(fee_protocol_1)
+            } else {
+                U256::ZERO
+            };
+
+            if protocol_fee_1 > U256::ZERO {
+                self.state.protocol_fees_token1 += protocol_fee_1;
+            }
+
+            let lp_fee_1 = paid1 - protocol_fee_1;
+            let delta = FullMath::mul_div(lp_fee_1, Q128, U256::from(liquidity))?;
+            self.state.fee_growth_global_1 += delta;
         }
 
         Ok(())
@@ -903,7 +1208,7 @@ impl PoolProfiler {
         amount0: U256,
         amount1: U256,
     ) -> anyhow::Result<()> {
-        let current_tick = self.current_tick.expect("Pool should be initialized");
+        let current_tick = self.state.current_tick;
         let position_key = PoolPosition::get_position_key(owner, tick_lower, tick_upper);
         let position = self
             .positions
@@ -923,16 +1228,30 @@ impl PoolProfiler {
         }
 
         // Update tickmaps.
-        let flipped_lower = self
-            .tick_map
-            .update(tick_lower, current_tick, liquidity_delta, false);
-        let flipped_upper = self
-            .tick_map
-            .update(tick_upper, current_tick, liquidity_delta, true);
+        let flipped_lower = self.tick_map.update(
+            tick_lower,
+            current_tick,
+            liquidity_delta,
+            false,
+            self.state.fee_growth_global_0,
+            self.state.fee_growth_global_1,
+        );
+        let flipped_upper = self.tick_map.update(
+            tick_upper,
+            current_tick,
+            liquidity_delta,
+            true,
+            self.state.fee_growth_global_0,
+            self.state.fee_growth_global_1,
+        );
 
-        let (fee_growth_inside_0, fee_growth_inside_1) =
-            self.tick_map
-                .get_fee_growth_inside(tick_lower, tick_upper, current_tick);
+        let (fee_growth_inside_0, fee_growth_inside_1) = self.tick_map.get_fee_growth_inside(
+            tick_lower,
+            tick_upper,
+            current_tick,
+            self.state.fee_growth_global_0,
+            self.state.fee_growth_global_1,
+        );
         position.update_liquidity(liquidity_delta);
         position.update_fees(fee_growth_inside_0, fee_growth_inside_1);
         position.update_amounts(liquidity_delta, amount0, amount1);
@@ -944,13 +1263,55 @@ impl PoolProfiler {
 
         // Clear the ticks if they are flipped and burned
         if liquidity_delta < 0 && flipped_lower {
-            self.tick_map.clear(tick_lower)
+            self.tick_map.clear(tick_lower);
         }
         if liquidity_delta < 0 && flipped_upper {
-            self.tick_map.clear(tick_upper)
+            self.tick_map.clear(tick_upper);
         }
 
         Ok(())
+    }
+
+    /// Removes position from tracking if it's completely empty.
+    ///
+    /// This prevents accumulation of positions in the memory that are not used anymore.
+    fn cleanup_position_if_empty(&mut self, position_key: &str) {
+        if let Some(position) = self.positions.get(position_key)
+            && position.is_empty()
+        {
+            log::debug!(
+                "CLEANING UP EMPTY POSITION: owner={}, ticks=[{}, {}]",
+                position.owner,
+                position.tick_lower,
+                position.tick_upper,
+            );
+            self.positions.remove(position_key);
+        }
+    }
+
+    /// Calculates the liquidity utilization rate for the pool.
+    ///
+    /// The utilization rate measures what percentage of total deployed liquidity
+    /// is currently active (in-range and earning fees) at the current price tick.
+    pub fn liquidity_utilization_rate(&self) -> f64 {
+        const PRECISION: u32 = 1_000_000; // 6 decimal places
+
+        let total_liquidity = self.get_total_liquidity();
+        let active_liquidity = self.get_active_liquidity();
+
+        if total_liquidity == U256::ZERO {
+            return 0.0;
+        }
+        let ratio = FullMath::mul_div(
+            U256::from(active_liquidity),
+            U256::from(PRECISION),
+            total_liquidity,
+        )
+        .unwrap_or(U256::ZERO);
+
+        // Safe to cast to u64: Since active_liquidity <= total_liquidity,
+        // the ratio is guaranteed to be <= PRECISION (1_000_000), which fits in u64
+        ratio.to::<u64>() as f64 / PRECISION as f64
     }
 
     /// Validates tick range for position operations.
@@ -966,23 +1327,26 @@ impl PoolProfiler {
     /// - Ticks are outside MIN_TICK/MAX_TICK bounds.
     fn validate_ticks(&self, tick_lower: i32, tick_upper: i32) -> anyhow::Result<()> {
         if tick_lower >= tick_upper {
-            anyhow::bail!("Invalid tick range: {} >= {}", tick_lower, tick_upper)
+            anyhow::bail!("Invalid tick range: {tick_lower} >= {tick_upper}")
         }
 
         if tick_lower % self.pool.tick_spacing.unwrap() as i32 != 0
             || tick_upper % self.pool.tick_spacing.unwrap() as i32 != 0
         {
             anyhow::bail!(
-                "Ticks {} and {} must be multiples of the tick spacing",
-                tick_lower,
-                tick_upper
+                "Ticks {tick_lower} and {tick_upper} must be multiples of the tick spacing"
             )
         }
 
-        if tick_lower < Tick::MIN_TICK || tick_upper > Tick::MAX_TICK {
-            anyhow::bail!("Invalid tick bounds for {} and {}", tick_lower, tick_upper);
+        if tick_lower < PoolTick::MIN_TICK || tick_upper > PoolTick::MAX_TICK {
+            anyhow::bail!("Invalid tick bounds for {tick_lower} and {tick_upper}");
         }
         Ok(())
+    }
+
+    /// Updates all liquidity analytics.
+    fn update_liquidity_analytics(&mut self) {
+        self.analytics.liquidity_utilization_rate = self.liquidity_utilization_rate();
     }
 
     /// Returns the pool's active liquidity tracked by the tick map.
@@ -1003,23 +1367,92 @@ impl PoolProfiler {
     /// This computes liquidity by iterating through all positions and summing those that
     /// span the current tick. Unlike [`Self::get_active_liquidity`], which returns the maintained
     /// tick map value, this method performs a fresh calculation from position data.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `current_tick` is `None` (pool not initialized).
     #[must_use]
     pub fn get_total_liquidity_from_active_positions(&self) -> u128 {
-        let current_tick = self.current_tick.unwrap();
-
         self.positions
             .values()
             .filter(|position| {
                 position.liquidity > 0
-                    && position.tick_lower <= current_tick
-                    && current_tick < position.tick_upper
+                    && position.tick_lower <= self.state.current_tick
+                    && self.state.current_tick < position.tick_upper
             })
             .map(|position| position.liquidity)
             .sum()
+    }
+
+    /// Calculates total liquidity across all positions, regardless of range status.
+    #[must_use]
+    pub fn get_total_liquidity(&self) -> U256 {
+        self.positions
+            .values()
+            .map(|position| U256::from(position.liquidity))
+            .fold(U256::ZERO, |acc, liq| acc + liq)
+    }
+
+    /// Restores the profiler state from a saved snapshot.
+    ///
+    /// This method allows resuming profiling from a previously saved state,
+    /// enabling incremental processing without reprocessing all historical events.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Tick insertion into the tick map fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the pool's tick spacing is not set.
+    pub fn restore_from_snapshot(&mut self, snapshot: PoolSnapshot) -> anyhow::Result<()> {
+        let liquidity = snapshot.state.liquidity;
+
+        // Restore state
+        self.state = snapshot.state;
+
+        // Restore analytics (skip duration fields as they're debug-only)
+        self.analytics.total_amount0_deposited = snapshot.analytics.total_amount0_deposited;
+        self.analytics.total_amount1_deposited = snapshot.analytics.total_amount1_deposited;
+        self.analytics.total_amount0_collected = snapshot.analytics.total_amount0_collected;
+        self.analytics.total_amount1_collected = snapshot.analytics.total_amount1_collected;
+        self.analytics.total_swaps = snapshot.analytics.total_swaps;
+        self.analytics.total_mints = snapshot.analytics.total_mints;
+        self.analytics.total_burns = snapshot.analytics.total_burns;
+        self.analytics.total_fee_collects = snapshot.analytics.total_fee_collects;
+        self.analytics.total_flashes = snapshot.analytics.total_flashes;
+
+        // Rebuild positions AHashMap
+        self.positions.clear();
+        for position in snapshot.positions {
+            let key = PoolPosition::get_position_key(
+                &position.owner,
+                position.tick_lower,
+                position.tick_upper,
+            );
+            self.positions.insert(key, position);
+        }
+
+        // Rebuild tick_map
+        self.tick_map = TickMap::new(
+            self.pool
+                .tick_spacing
+                .expect("Pool tick spacing must be set"),
+        );
+        for tick in snapshot.ticks {
+            self.tick_map.restore_tick(tick);
+        }
+
+        // Restore active liquidity
+        self.tick_map.liquidity = liquidity;
+
+        // Set last processed event
+        self.last_processed_event = Some(snapshot.block_position);
+
+        // Mark as initialized
+        self.is_initialized = true;
+
+        // Recalculate analytics
+        self.update_liquidity_analytics();
+
+        Ok(())
     }
 
     /// Gets a list of all initialized tick values.
@@ -1045,7 +1478,7 @@ impl PoolProfiler {
     ///
     /// Returns the tick data structure containing liquidity and fee information
     /// for the specified tick, if it exists.
-    pub fn get_tick(&self, tick: i32) -> Option<&Tick> {
+    pub fn get_tick(&self, tick: i32) -> Option<&PoolTick> {
         self.tick_map.get_tick(tick)
     }
 
@@ -1053,12 +1486,8 @@ impl PoolProfiler {
     ///
     /// Returns the tick that corresponds to the current pool price.
     /// The pool must be initialized before calling this method.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the pool has not been initialized
     pub fn get_current_tick(&self) -> i32 {
-        self.current_tick.expect("Pool should be initialized")
+        self.state.current_tick
     }
 
     /// Gets the total number of ticks tracked by the tick map.
@@ -1107,6 +1536,55 @@ impl PoolProfiler {
             .collect()
     }
 
+    /// Returns a list of all positions tracked by the profiler.
+    ///
+    /// This includes both active and inactive positions, regardless of their
+    /// liquidity or tick range relative to the current pool tick.
+    ///
+    /// # Returns
+    ///
+    /// A vector of references to all [`PoolPosition`] objects.
+    pub fn get_all_positions(&self) -> Vec<&PoolPosition> {
+        self.positions.values().collect()
+    }
+
+    /// Returns position keys for all tracked positions.
+    pub fn get_all_position_keys(&self) -> Vec<(Address, i32, i32)> {
+        self.get_all_positions()
+            .iter()
+            .map(|position| (position.owner, position.tick_lower, position.tick_upper))
+            .collect()
+    }
+
+    /// Extracts a complete snapshot of the current pool state.
+    ///
+    /// Extracts and bundles the complete pool state including global variables,
+    /// all liquidity positions, and the full tick distribution into a portable
+    /// [`PoolSnapshot`] structure. This snapshot can be serialized, persisted
+    /// to database, or used to restore pool state later.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no events have been processed yet.
+    pub fn extract_snapshot(&self) -> PoolSnapshot {
+        let positions: Vec<_> = self.positions.values().cloned().collect();
+        let ticks: Vec<_> = self.tick_map.get_all_ticks().values().copied().collect();
+
+        let mut state = self.state.clone();
+        state.liquidity = self.tick_map.liquidity;
+
+        PoolSnapshot::new(
+            self.pool.instrument_id,
+            state,
+            positions,
+            ticks,
+            self.analytics.clone(),
+            self.last_processed_event
+                .clone()
+                .expect("No events processed yet"),
+        )
+    }
+
     /// Gets the count of positions that are currently active.
     ///
     /// Active positions are those with liquidity > 0 and whose tick range
@@ -1139,8 +1617,8 @@ impl PoolProfiler {
     /// - Protocol fees collected
     pub fn estimate_balance_of_token0(&self) -> U256 {
         let mut total_amount0 = U256::ZERO;
-        let current_sqrt_price = self.price_sqrt_ratio_x96.unwrap_or_default();
-        let current_tick = self.current_tick.unwrap_or_default();
+        let current_sqrt_price = self.state.price_sqrt_ratio_x96;
+        let current_tick = self.state.current_tick;
         let mut total_fees_0_collected: u128 = 0;
 
         // 1. Calculate token0 from active liquidity positions
@@ -1175,7 +1653,7 @@ impl PoolProfiler {
         // 2. Add accumulated swap fees (fee_growth_global represents total fees accumulated)
         // Note: In a real pool, fees are distributed as liquidity, but for balance estimation
         // we can use a simplified approach by converting fee growth to token amounts
-        let fee_growth_0 = self.tick_map.fee_growth_global_0;
+        let fee_growth_0 = self.state.fee_growth_global_0;
         if fee_growth_0 > U256::ZERO {
             // Convert fee growth to actual token amount using FullMath for precision
             // Fee growth is in Q128.128 format, so we need to scale it properly
@@ -1194,7 +1672,7 @@ impl PoolProfiler {
         let total_fees_0_left = fee_growth_0 - U256::from(total_fees_0_collected);
 
         // 4. Add protocol fees
-        total_amount0 += self.protocol_fees_token0;
+        total_amount0 += self.state.protocol_fees_token0;
 
         total_amount0 + total_fees_0_left
     }
@@ -1207,8 +1685,8 @@ impl PoolProfiler {
     /// - Protocol fees collected
     pub fn estimate_balance_of_token1(&self) -> U256 {
         let mut total_amount1 = U256::ZERO;
-        let current_sqrt_price = self.price_sqrt_ratio_x96.unwrap_or_default();
-        let current_tick = self.current_tick.unwrap_or_default();
+        let current_sqrt_price = self.state.price_sqrt_ratio_x96;
+        let current_tick = self.state.current_tick;
         let mut total_fees_1_collected: u128 = 0;
 
         // 1. Calculate token1 from active liquidity positions
@@ -1242,7 +1720,7 @@ impl PoolProfiler {
         }
 
         // 2. Add accumulated swap fees for token1
-        let fee_growth_1 = self.tick_map.fee_growth_global_1;
+        let fee_growth_1 = self.state.fee_growth_global_1;
         if fee_growth_1 > U256::ZERO {
             let active_liquidity = self.get_active_liquidity();
             if active_liquidity > 0 {
@@ -1258,7 +1736,7 @@ impl PoolProfiler {
         let total_fees_1_left = fee_growth_1 - U256::from(total_fees_1_collected);
 
         // 4. Add protocol fees
-        total_amount1 += self.protocol_fees_token1;
+        total_amount1 += self.state.protocol_fees_token1;
 
         total_amount1 + total_fees_1_left
     }
@@ -1272,7 +1750,41 @@ impl PoolProfiler {
     /// * `fee_growth_global_0` - New global fee growth for token0
     /// * `fee_growth_global_1` - New global fee growth for token1
     pub fn set_fee_growth_global(&mut self, fee_growth_global_0: U256, fee_growth_global_1: U256) {
-        self.tick_map
-            .set_global_fee_growth(fee_growth_global_0, fee_growth_global_1);
+        self.state.fee_growth_global_0 = fee_growth_global_0;
+        self.state.fee_growth_global_1 = fee_growth_global_1;
+    }
+
+    /// Returns the total number of events processed.
+    pub fn get_total_events(&self) -> u64 {
+        self.analytics.total_swaps
+            + self.analytics.total_mints
+            + self.analytics.total_burns
+            + self.analytics.total_fee_collects
+            + self.analytics.total_flashes
+    }
+
+    /// Enables progress reporting for pool profiler event processing.
+    ///
+    /// When enabled, the profiler will automatically track and log progress
+    /// as events are processed through the `process()` method.
+    pub fn enable_reporting(&mut self, from_block: u64, total_blocks: u64, update_interval: u64) {
+        self.reporter = Some(BlockchainSyncReporter::new(
+            BlockchainSyncReportItems::PoolProfiling,
+            from_block,
+            total_blocks,
+            update_interval,
+        ));
+        self.last_reported_block = from_block;
+    }
+
+    /// Finalizes reporting and logs final statistics.
+    ///
+    /// Should be called after all events have been processed to output
+    /// the final summary of the profiler bootstrap operation.
+    pub fn finalize_reporting(&mut self) {
+        if let Some(reporter) = &self.reporter {
+            reporter.log_final_stats();
+        }
+        self.reporter = None;
     }
 }

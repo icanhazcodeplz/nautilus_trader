@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -44,6 +44,7 @@ pub enum BlockchainSyncReportItems {
     Blocks,
     PoolCreatedEvents,
     PoolEvents,
+    PoolProfilerBootstrap,
 }
 
 impl Display for BlockchainSyncReportItems {
@@ -58,6 +59,7 @@ pub struct BlockchainSyncReporter {
     item: BlockchainSyncReportItems,
     start_time: Instant,
     last_progress_time: Instant,
+    from_block: u64,
     blocks_processed: u64,
     blocks_since_last_report: u64,
     total_blocks: u64,
@@ -79,6 +81,7 @@ impl BlockchainSyncReporter {
             item,
             start_time: now,
             last_progress_time: now,
+            from_block,
             blocks_processed: 0,
             blocks_since_last_report: 0,
             total_blocks,
@@ -123,10 +126,11 @@ impl BlockchainSyncReporter {
             0.0
         };
 
-        let progress_pct =
-            (self.blocks_processed as f64 / self.total_blocks as f64 * 100.0).min(100.0);
+        // Calculate progress based on actual block position relative to the sync range
+        let blocks_completed = block_number.saturating_sub(self.from_block);
+        let progress_pct = (blocks_completed as f64 / self.total_blocks as f64 * 100.0).min(100.0);
 
-        tracing::info!(
+        log::info!(
             "Syncing {} progress: {:.1}% | Block: {} | Rate: {} blocks/s | Avg: {} blocks/s",
             self.item,
             progress_pct,
@@ -144,7 +148,7 @@ impl BlockchainSyncReporter {
     pub fn log_final_stats(&self) {
         let total_elapsed = self.start_time.elapsed();
         let avg_rate = self.blocks_processed as f64 / total_elapsed.as_secs_f64();
-        tracing::info!(
+        log::info!(
             "Finished syncing {} | Total: {} blocks in {:.1}s | Avg rate: {} blocks/s",
             self.item,
             format_number(self.blocks_processed as f64),

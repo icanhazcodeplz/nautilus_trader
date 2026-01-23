@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -16,11 +16,21 @@
 use std::{collections::HashMap, sync::Arc};
 
 use alloy::{
-    primitives::{Address, U160, U256, keccak256},
+    primitives::{Address, U256, keccak256},
     sol,
     sol_types::{SolCall, private::primitives::aliases::I24},
 };
-use nautilus_model::defi::{pool_analysis::position::PoolPosition, tick_map::tick::Tick};
+use nautilus_model::{
+    defi::{
+        data::block::BlockPosition,
+        pool_analysis::{
+            position::PoolPosition,
+            snapshot::{PoolAnalytics, PoolSnapshot, PoolState},
+        },
+        tick_map::tick::PoolTick,
+    },
+    identifiers::InstrumentId,
+};
 use thiserror::Error;
 
 use super::base::{BaseContract, ContractCall};
@@ -73,23 +83,6 @@ sol! {
     }
 }
 
-/// Combined global state of a Uniswap V3 pool.
-#[derive(Debug, Clone, PartialEq)]
-pub struct PoolGlobalState {
-    /// Current sqrt price
-    pub sqrt_price_x96: U160,
-    /// Current tick
-    pub tick: i32,
-    /// Current liquidity
-    pub liquidity: u128,
-    /// Global fee growth for token0
-    pub fee_growth_global_0_x128: U256,
-    /// Global fee growth for token1
-    pub fee_growth_global_1_x128: U256,
-    /// Protocol fee setting
-    pub fee_protocol: u8,
-}
-
 /// Represents errors that can occur when interacting with UniswapV3Pool contract.
 #[derive(Debug, Error)]
 pub enum UniswapV3PoolError {
@@ -140,7 +133,8 @@ impl UniswapV3PoolContract {
     pub async fn get_global_state(
         &self,
         pool_address: &Address,
-    ) -> Result<PoolGlobalState, UniswapV3PoolError> {
+        block: Option<u64>,
+    ) -> Result<PoolState, UniswapV3PoolError> {
         let calls = vec![
             ContractCall {
                 target: *pool_address,
@@ -164,13 +158,13 @@ impl UniswapV3PoolContract {
             },
         ];
 
-        let results = self.base.execute_multicall(calls).await?;
+        let results = self.base.execute_multicall(calls, block).await?;
 
         if results.len() != 4 {
             return Err(UniswapV3PoolError::CallFailed {
                 field: "global_state_multicall".to_string(),
                 pool: *pool_address,
-                reason: format!("Expected 4 results, got {}", results.len()),
+                reason: format!("Expected 4 results, received {}", results.len()),
             });
         }
 
@@ -214,13 +208,15 @@ impl UniswapV3PoolContract {
                     raw_data: hex::encode(&results[3].returnData),
                 })?;
 
-        Ok(PoolGlobalState {
-            sqrt_price_x96: slot0.sqrtPriceX96,
-            tick: slot0.tick.as_i32(),
+        Ok(PoolState {
+            current_tick: slot0.tick.as_i32(),
+            price_sqrt_ratio_x96: slot0.sqrtPriceX96,
             liquidity,
-            fee_growth_global_0_x128: fee_growth_0,
-            fee_growth_global_1_x128: fee_growth_1,
+            protocol_fees_token0: U256::ZERO,
+            protocol_fees_token1: U256::ZERO,
             fee_protocol: slot0.feeProtocol,
+            fee_growth_global_0: fee_growth_0,
+            fee_growth_global_1: fee_growth_1,
         })
     }
 
@@ -233,27 +229,31 @@ impl UniswapV3PoolContract {
         &self,
         pool_address: &Address,
         tick: i32,
-    ) -> Result<Tick, UniswapV3PoolError> {
+        block: Option<u64>,
+    ) -> Result<PoolTick, UniswapV3PoolError> {
         let tick_i24 = I24::try_from(tick).map_err(|_| UniswapV3PoolError::CallFailed {
             field: "tick".to_string(),
             pool: *pool_address,
-            reason: format!("Tick {} out of range for int24", tick),
+            reason: format!("Tick {tick} out of range for int24"),
         })?;
 
         let call_data = UniswapV3Pool::ticksCall { tick: tick_i24 }.abi_encode();
-        let raw_response = self.base.execute_call(pool_address, &call_data).await?;
+        let raw_response = self
+            .base
+            .execute_call(pool_address, &call_data, block)
+            .await?;
 
         let tick_info =
             UniswapV3Pool::ticksCall::abi_decode_returns(&raw_response).map_err(|e| {
                 UniswapV3PoolError::DecodingError {
-                    field: format!("ticks({})", tick),
+                    field: format!("ticks({tick})"),
                     pool: *pool_address,
                     reason: e.to_string(),
                     raw_data: hex::encode(&raw_response),
                 }
             })?;
 
-        Ok(Tick::new(
+        Ok(PoolTick::new(
             tick,
             tick_info.liquidityGross,
             tick_info.liquidityNet,
@@ -274,7 +274,8 @@ impl UniswapV3PoolContract {
         &self,
         pool_address: &Address,
         ticks: &[i32],
-    ) -> Result<HashMap<i32, Tick>, UniswapV3PoolError> {
+        block: Option<u64>,
+    ) -> Result<HashMap<i32, PoolTick>, UniswapV3PoolError> {
         let calls: Vec<ContractCall> = ticks
             .iter()
             .filter_map(|&tick| {
@@ -286,7 +287,7 @@ impl UniswapV3PoolContract {
             })
             .collect();
 
-        let results = self.base.execute_multicall(calls).await?;
+        let results = self.base.execute_multicall(calls, block).await?;
 
         let mut tick_infos = HashMap::with_capacity(ticks.len());
         for (i, &tick_value) in ticks.iter().enumerate() {
@@ -302,7 +303,7 @@ impl UniswapV3PoolContract {
 
             let tick_info = UniswapV3Pool::ticksCall::abi_decode_returns(&result.returnData)
                 .map_err(|e| UniswapV3PoolError::DecodingError {
-                    field: format!("ticks({})", tick_value),
+                    field: format!("ticks({tick_value})"),
                     pool: *pool_address,
                     reason: e.to_string(),
                     raw_data: hex::encode(&result.returnData),
@@ -310,7 +311,7 @@ impl UniswapV3PoolContract {
 
             tick_infos.insert(
                 tick_value,
-                Tick::new(
+                PoolTick::new(
                     tick_value,
                     tick_info.liquidityGross,
                     tick_info.liquidityNet,
@@ -357,6 +358,7 @@ impl UniswapV3PoolContract {
         &self,
         pool_address: &Address,
         positions: &[(Address, i32, i32)],
+        block: Option<u64>,
     ) -> Result<Vec<PoolPosition>, UniswapV3PoolError> {
         let calls: Vec<ContractCall> = positions
             .iter()
@@ -373,7 +375,7 @@ impl UniswapV3PoolContract {
             })
             .collect();
 
-        let results = self.base.execute_multicall(calls).await?;
+        let results = self.base.execute_multicall(calls, block).await?;
 
         let position_infos: Vec<PoolPosition> = positions
             .iter()
@@ -408,5 +410,42 @@ impl UniswapV3PoolContract {
             .collect();
 
         Ok(position_infos)
+    }
+
+    /// Fetches a complete pool snapshot directly from on-chain state.
+    ///
+    /// Retrieves global state, tick data, and position data from the blockchain
+    /// and constructs a `PoolSnapshot` representing the current on-chain state.
+    /// This snapshot can be compared against profiler state for validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if any RPC calls fail or data cannot be decoded.
+    pub async fn fetch_snapshot(
+        &self,
+        pool_address: &Address,
+        instrument_id: InstrumentId,
+        tick_values: &[i32],
+        position_keys: &[(Address, i32, i32)],
+        block_position: BlockPosition,
+    ) -> Result<PoolSnapshot, UniswapV3PoolError> {
+        // Fetch all data at the specified block
+        let block = Some(block_position.number);
+        let global_state = self.get_global_state(pool_address, block).await?;
+        let ticks_map = self
+            .batch_get_ticks(pool_address, tick_values, block)
+            .await?;
+        let positions = self
+            .batch_get_positions(pool_address, position_keys, block)
+            .await?;
+
+        Ok(PoolSnapshot::new(
+            instrument_id,
+            global_state,
+            positions,
+            ticks_map.into_values().collect(),
+            PoolAnalytics::default(),
+            block_position,
+        ))
     }
 }

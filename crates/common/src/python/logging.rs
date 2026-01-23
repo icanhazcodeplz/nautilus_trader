@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -13,8 +13,7 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
-use std::collections::HashMap;
-
+use ahash::AHashMap;
 use log::LevelFilter;
 use nautilus_core::{UUID4, python::to_pyvalue_err};
 use nautilus_model::identifiers::TraderId;
@@ -62,26 +61,6 @@ impl FileWriterConfig {
     }
 }
 
-/// Initialize tracing.
-///
-/// Tracing is meant to be used to trace/debug async Rust code. It can be
-/// configured to filter modules and write up to a specific level only using
-/// by passing a configuration using the `RUST_LOG` environment variable.
-///
-/// # Safety
-///
-/// Should only be called once during an applications run, ideally at the
-/// beginning of the run.
-///
-/// # Errors
-///
-/// Returns an error if tracing subscriber fails to initialize.
-#[pyfunction()]
-#[pyo3(name = "init_tracing")]
-pub fn py_init_tracing() -> PyResult<()> {
-    logging::init_tracing().map_err(to_pyvalue_err)
-}
-
 /// Initialize logging.
 ///
 /// Logging should be used for Python and sync Rust logic which is most of
@@ -107,7 +86,7 @@ pub fn py_init_logging(
     instance_id: UUID4,
     level_stdout: LogLevel,
     level_file: Option<LogLevel>,
-    component_levels: Option<HashMap<String, String>>,
+    component_levels: Option<std::collections::HashMap<String, String>>,
     directory: Option<String>,
     file_name: Option<String>,
     file_format: Option<String>,
@@ -119,10 +98,13 @@ pub fn py_init_logging(
 ) -> PyResult<LogGuard> {
     let level_file = level_file.map_or(LevelFilter::Off, map_log_level_to_filter);
 
+    let component_levels = parse_component_levels(component_levels).map_err(to_pyvalue_err)?;
+
     let config = LoggerConfig::new(
         map_log_level_to_filter(level_stdout),
         level_file,
-        parse_component_levels(component_levels),
+        component_levels,
+        AHashMap::new(), // module_level - not exposed to Python
         log_components_only.unwrap_or(false),
         is_colored.unwrap_or(true),
         print_config.unwrap_or(false),
@@ -140,23 +122,23 @@ pub fn py_init_logging(
 #[pyfunction()]
 #[pyo3(name = "logger_flush")]
 pub fn py_logger_flush() {
-    log::logger().flush()
+    log::logger().flush();
 }
 
 fn parse_component_levels(
-    original_map: Option<HashMap<String, String>>,
-) -> HashMap<Ustr, LevelFilter> {
+    original_map: Option<std::collections::HashMap<String, String>>,
+) -> anyhow::Result<AHashMap<Ustr, LevelFilter>> {
     match original_map {
         Some(map) => {
-            let mut new_map = HashMap::new();
+            let mut new_map = AHashMap::new();
             for (key, value) in map {
                 let ustr_key = Ustr::from(&key);
-                let value = parse_level_filter_str(&value);
-                new_map.insert(ustr_key, value);
+                let level = parse_level_filter_str(&value)?;
+                new_map.insert(ustr_key, level);
             }
-            new_map
+            Ok(new_map)
         }
-        None => HashMap::new(),
+        None => Ok(AHashMap::new()),
     }
 }
 

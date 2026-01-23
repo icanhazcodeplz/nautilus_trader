@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -12,6 +12,8 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
+
+#![allow(unused_assignments)] // Fields are used in sign_ws and accessed externally, false positive from nightly
 
 use std::fmt::Debug;
 
@@ -81,6 +83,15 @@ impl Credential {
         BASE64_STANDARD.encode(tag.as_ref())
     }
 
+    /// Returns a masked version of the API key for logging purposes.
+    ///
+    /// Shows first 4 and last 4 characters with ellipsis in between.
+    /// For keys shorter than 8 characters, shows asterisks only.
+    #[must_use]
+    pub fn api_key_masked(&self) -> String {
+        nautilus_core::string::mask_api_key(self.api_key.as_str())
+    }
+
     /// Signs a WebSocket authentication message.
     ///
     /// # Panics
@@ -88,17 +99,13 @@ impl Credential {
     /// Panics if signature generation fails due to key or cryptographic errors.
     pub fn sign_ws(&self, timestamp: &str) -> String {
         let message = format!("{timestamp}{}CBINTLMD{}", self.api_key, self.api_passphrase);
-        tracing::trace!("Signing message: {message}");
+        log::trace!("Signing message: {message}");
 
         let key = hmac::Key::new(hmac::HMAC_SHA256, &self.api_secret[..]);
         let tag = hmac::sign(&key, message.as_bytes());
         BASE64_STANDARD.encode(tag.as_ref())
     }
 }
-
-////////////////////////////////////////////////////////////////////////////////
-// Tests
-////////////////////////////////////////////////////////////////////////////////
 
 #[cfg(test)]
 mod tests {

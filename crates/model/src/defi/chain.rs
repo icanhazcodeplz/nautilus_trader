@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -15,14 +15,12 @@
 
 //! Basic structures for representing on-chain blocks and transactions in DeFi integrations.
 
-use std::{
-    fmt::{Display, Formatter},
-    str::FromStr,
-    sync::Arc,
-};
+use std::{fmt::Display, str::FromStr, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 use strum::{Display, EnumIter, EnumString};
+
+use crate::types::Currency;
 
 /// Represents different blockchain networks.
 #[derive(
@@ -164,8 +162,49 @@ impl Chain {
         self.rpc_url = Some(rpc);
     }
 
+    /// Returns the native currency for this blockchain.
+    ///
+    /// Native currencies are the base tokens used to pay gas fees on each chain.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the native currency has not been defined for this blockchain.
+    pub fn native_currency(&self) -> Currency {
+        use crate::enums::CurrencyType;
+
+        let (code, name) = match self.name {
+            // Ethereum and Ethereum testnets
+            Blockchain::Ethereum | Blockchain::Sepolia | Blockchain::Holesky => ("ETH", "Ethereum"),
+
+            // Ethereum L2s that use ETH
+            Blockchain::Arbitrum
+            | Blockchain::ArbitrumNova
+            | Blockchain::ArbitrumSepolia
+            | Blockchain::Base
+            | Blockchain::BaseSepolia
+            | Blockchain::Optimism
+            | Blockchain::OptimismSepolia
+            | Blockchain::Blast
+            | Blockchain::BlastSepolia
+            | Blockchain::Scroll
+            | Blockchain::Linea => ("ETH", "Ethereum"),
+            Blockchain::Polygon | Blockchain::PolygonAmoy => ("POL", "Polygon"),
+            Blockchain::Avalanche | Blockchain::Fuji => ("AVAX", "Avalanche"),
+            Blockchain::Bsc | Blockchain::BscTestnet => ("BNB", "Binance Coin"),
+            _ => panic!("Native currency not specified for chain {}", self.name),
+        };
+
+        Currency::new(
+            code,
+            self.native_currency_decimals,
+            0,
+            name,
+            CurrencyType::Crypto,
+        )
+    }
+
     /// Returns a reference to the `Chain` corresponding to the given `chain_id`, or `None` if it is not found.
-    pub fn from_chain_id(chain_id: u32) -> Option<&'static Chain> {
+    pub fn from_chain_id(chain_id: u32) -> Option<&'static Self> {
         match chain_id {
             2741 => Some(&chains::ABSTRACT),
             42161 => Some(&chains::ARBITRUM),
@@ -238,7 +277,7 @@ impl Chain {
             109 => Some(&chains::SONEIUM),
             138 => Some(&chains::SOPHON),
             139 => Some(&chains::SOPHON_TESTNET),
-            10001 => Some(&chains::SUPERSEED),
+            10001 => Some(&chains::SUPERSEDE),
             9999 => Some(&chains::UNICHAIN),
             9997 => Some(&chains::UNICHAIN_SEPOLIA),
             50 => Some(&chains::XDC),
@@ -254,7 +293,7 @@ impl Chain {
     /// Returns a reference to the `Chain` corresponding to the given chain name, or `None` if it is not found.
     ///
     /// String matching is case-insensitive.
-    pub fn from_chain_name(chain_name: &str) -> Option<&'static Chain> {
+    pub fn from_chain_name(chain_name: &str) -> Option<&'static Self> {
         let blockchain = Blockchain::from_str(chain_name).ok()?;
 
         match blockchain {
@@ -329,7 +368,7 @@ impl Chain {
             Blockchain::Soneium => Some(&chains::SONEIUM),
             Blockchain::Sophon => Some(&chains::SOPHON),
             Blockchain::SophonTestnet => Some(&chains::SOPHON_TESTNET),
-            Blockchain::Superseed => Some(&chains::SUPERSEED),
+            Blockchain::Superseed => Some(&chains::SUPERSEDE),
             Blockchain::Unichain => Some(&chains::UNICHAIN),
             Blockchain::UnichainSepolia => Some(&chains::UNICHAIN_SEPOLIA),
             Blockchain::Xdc => Some(&chains::XDC),
@@ -343,7 +382,7 @@ impl Chain {
 }
 
 impl Display for Chain {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Chain(name={}, id={})", self.name, self.chain_id)
     }
 }
@@ -470,7 +509,7 @@ pub mod chains {
     pub static SOPHON: LazyLock<Chain> = LazyLock::new(|| Chain::new(Blockchain::Sophon, 138));
     pub static SOPHON_TESTNET: LazyLock<Chain> =
         LazyLock::new(|| Chain::new(Blockchain::SophonTestnet, 139));
-    pub static SUPERSEED: LazyLock<Chain> =
+    pub static SUPERSEDE: LazyLock<Chain> =
         LazyLock::new(|| Chain::new(Blockchain::Superseed, 10001));
     pub static UNICHAIN: LazyLock<Chain> = LazyLock::new(|| Chain::new(Blockchain::Unichain, 9999));
     pub static UNICHAIN_SEPOLIA: LazyLock<Chain> =
@@ -484,10 +523,6 @@ pub mod chains {
     pub static ZORA: LazyLock<Chain> = LazyLock::new(|| Chain::new(Blockchain::Zora, 7777777));
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// Tests
-////////////////////////////////////////////////////////////////////////////////
-
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
@@ -500,7 +535,13 @@ mod tests {
         assert_eq!(eth_chain.to_string(), "Chain(name=Ethereum, id=1)");
         assert_eq!(eth_chain.name, Blockchain::Ethereum);
         assert_eq!(eth_chain.chain_id, 1);
-        assert_eq!(eth_chain.hypersync_url.as_str(), "https://1.hypersync.xyz")
+        assert_eq!(eth_chain.hypersync_url.as_str(), "https://1.hypersync.xyz");
+
+        // Test native currency
+        let currency = eth_chain.native_currency();
+        assert_eq!(currency.code.as_str(), "ETH");
+        assert_eq!(currency.precision, 18);
+        assert_eq!(currency.name.as_str(), "Ethereum");
     }
 
     #[rstest]
@@ -513,6 +554,12 @@ mod tests {
             arbitrum_chain.hypersync_url.as_str(),
             "https://42161.hypersync.xyz"
         );
+
+        // Test native currency (Arbitrum uses ETH)
+        let currency = arbitrum_chain.native_currency();
+        assert_eq!(currency.code.as_str(), "ETH");
+        assert_eq!(currency.precision, 18);
+        assert_eq!(currency.name.as_str(), "Ethereum");
     }
 
     #[rstest]

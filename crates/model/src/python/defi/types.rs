@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -96,7 +96,7 @@ impl Chain {
 
     #[staticmethod]
     #[pyo3(name = "from_chain_name")]
-    fn py_from_chain_name(chain_name: &str) -> PyResult<Chain> {
+    fn py_from_chain_name(chain_name: &str) -> PyResult<Self> {
         Self::from_chain_name(chain_name).cloned().ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err(format!(
                 "`chain_name` '{chain_name}' is not recognized",
@@ -106,13 +106,13 @@ impl Chain {
 
     #[staticmethod]
     #[pyo3(name = "from_chain_id")]
-    fn py_from_chain_id(chain_id: u32) -> Option<Chain> {
+    fn py_from_chain_id(chain_id: u32) -> Option<Self> {
         Self::from_chain_id(chain_id).cloned()
     }
 
     #[staticmethod]
     #[pyo3(name = "ARBITRUM")]
-    fn py_arbitrum_chain() -> Chain {
+    fn py_arbitrum_chain() -> Self {
         chains::ARBITRUM.clone()
     }
 }
@@ -305,6 +305,7 @@ impl Pool {
         chain: Chain,
         dex: Dex,
         address: String,
+        pool_identifier: String,
         creation_block: u64,
         token0: Token,
         token1: Token,
@@ -313,10 +314,12 @@ impl Pool {
         ts_init: u64,
     ) -> PyResult<Self> {
         let address = address.parse().map_err(to_pyvalue_err)?;
+        let pool_identifier = pool_identifier.parse().map_err(to_pyvalue_err)?;
         Ok(Self::new(
             Arc::new(chain),
             Arc::new(dex),
             address,
+            pool_identifier,
             creation_block,
             token0,
             token1,

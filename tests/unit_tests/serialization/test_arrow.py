@@ -1,5 +1,5 @@
 # -------------------------------------------------------------------------------------------------
-#  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+#  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 #  https://nautechsystems.io
 #
 #  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -1124,6 +1124,11 @@ class TestArrowSerializer:
             TestInstrumentProvider.aapl_option(),
             TestInstrumentProvider.betting_instrument(),
             TestInstrumentProvider.binary_option(),
+            TestInstrumentProvider.crypto_option(),
+            TestInstrumentProvider.futures_spread(),
+            TestInstrumentProvider.option_spread(),
+            TestInstrumentProvider.commodity(),
+            TestInstrumentProvider.index_instrument(),
         ],
     )
     def test_serialize_and_deserialize_instruments(self, instrument):

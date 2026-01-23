@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -13,7 +13,14 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
-use std::{env, fmt, fs, path::Path};
+#![allow(unused_assignments)] // Fields are accessed via methods, false positive from nightly
+
+use std::{
+    env,
+    fmt::{Debug, Display},
+    fs,
+    path::Path,
+};
 
 use serde::Deserialize;
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -25,7 +32,8 @@ use crate::http::error::{Error, Result};
 pub struct EvmPrivateKey {
     #[zeroize(skip)]
     formatted_key: String, // Keep the formatted version for display
-    raw_bytes: Vec<u8>, // The actual key bytes that get zeroized
+    #[zeroize(skip)] // Skip zeroization to allow safe cloning
+    raw_bytes: Vec<u8>, // The actual key bytes
 }
 
 impl EvmPrivateKey {
@@ -47,7 +55,7 @@ impl EvmPrivateKey {
 
         // Convert to lowercase for consistency
         let normalized = hex_key.to_lowercase();
-        let formatted = format!("0x{}", normalized);
+        let formatted = format!("0x{normalized}");
 
         // Parse to bytes for validation
         let raw_bytes = hex::decode(&normalized)
@@ -76,14 +84,14 @@ impl EvmPrivateKey {
     }
 }
 
-impl fmt::Debug for EvmPrivateKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Debug for EvmPrivateKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("EvmPrivateKey(***redacted***)")
     }
 }
 
-impl fmt::Display for EvmPrivateKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Display for EvmPrivateKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("EvmPrivateKey(***redacted***)")
     }
 }
@@ -130,15 +138,15 @@ impl VaultAddress {
     }
 }
 
-impl fmt::Debug for VaultAddress {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Debug for VaultAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let hex = self.to_hex();
         write!(f, "VaultAddress({}...{})", &hex[..6], &hex[hex.len() - 4..])
     }
 }
 
-impl fmt::Display for VaultAddress {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Display for VaultAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_hex())
     }
 }
@@ -151,8 +159,8 @@ pub struct Secrets {
     pub is_testnet: bool,
 }
 
-impl fmt::Debug for Secrets {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Debug for Secrets {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct(stringify!(Secrets))
             .field("private_key", &self.private_key)
             .field("vault_address", &self.vault_address)
@@ -165,23 +173,54 @@ impl Secrets {
     /// Load secrets from environment variables
     ///
     /// Expected environment variables:
-    /// - `HYPERLIQUID_PK`: EVM private key (required)
-    /// - `HYPERLIQUID_VAULT`: Vault address (optional)
-    /// - `HYPERLIQUID_NETWORK`: Network type - "mainnet" or "testnet" (optional, defaults to "mainnet")
+    /// - `HYPERLIQUID_PK`: EVM private key for mainnet (required for mainnet)
+    /// - `HYPERLIQUID_TESTNET_PK`: EVM private key for testnet (required for testnet)
+    /// - `HYPERLIQUID_VAULT`: Vault address for mainnet (optional)
+    /// - `HYPERLIQUID_TESTNET_VAULT`: Vault address for testnet (optional)
+    ///
+    /// The method will first try to load testnet credentials. If not found, it will fall back to mainnet.
     pub fn from_env() -> Result<Self> {
-        let private_key_str = env::var("HYPERLIQUID_PK")
-            .map_err(|_| Error::bad_request("HYPERLIQUID_PK environment variable not set"))?;
+        // Try testnet credentials first
+        let (private_key_str, vault_env_var, is_testnet) =
+            if let Ok(testnet_pk) = env::var("HYPERLIQUID_TESTNET_PK") {
+                (testnet_pk, "HYPERLIQUID_TESTNET_VAULT", true)
+            } else if let Ok(mainnet_pk) = env::var("HYPERLIQUID_PK") {
+                (mainnet_pk, "HYPERLIQUID_VAULT", false)
+            } else {
+                return Err(Error::bad_request(
+                    "Neither HYPERLIQUID_PK nor HYPERLIQUID_TESTNET_PK environment variable is set",
+                ));
+            };
 
         let private_key = EvmPrivateKey::new(private_key_str)?;
 
-        let vault_address = match env::var("HYPERLIQUID_VAULT") {
+        let vault_address = match env::var(vault_env_var) {
             Ok(addr_str) if !addr_str.trim().is_empty() => Some(VaultAddress::parse(&addr_str)?),
             _ => None,
         };
 
-        let is_testnet = match env::var("HYPERLIQUID_NETWORK") {
-            Ok(network) => matches!(network.to_lowercase().as_str(), "testnet" | "test"),
-            Err(_) => false, // Default to mainnet if not specified
+        Ok(Self {
+            private_key,
+            vault_address,
+            is_testnet,
+        })
+    }
+
+    /// Create secrets from explicit private key and vault address.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the private key or vault address is invalid.
+    pub fn from_private_key(
+        private_key_str: &str,
+        vault_address_str: Option<&str>,
+        is_testnet: bool,
+    ) -> Result<Self> {
+        let private_key = EvmPrivateKey::new(private_key_str.to_string())?;
+
+        let vault_address = match vault_address_str {
+            Some(addr_str) if !addr_str.trim().is_empty() => Some(VaultAddress::parse(addr_str)?),
+            _ => None,
         };
 
         Ok(Self {
@@ -225,7 +264,7 @@ impl Secrets {
         }
 
         let raw: RawSecrets = serde_json::from_str(json)
-            .map_err(|e| Error::bad_request(format!("Invalid JSON: {}", e)))?;
+            .map_err(|e| Error::bad_request(format!("Invalid JSON: {e}")))?;
 
         let private_key = EvmPrivateKey::new(raw.private_key)?;
 
@@ -234,7 +273,7 @@ impl Secrets {
             None => None,
         };
 
-        let is_testnet = matches!(raw.network.as_deref(), Some("testnet") | Some("test"));
+        let is_testnet = matches!(raw.network.as_deref(), Some("testnet" | "test"));
 
         Ok(Self {
             private_key,
@@ -264,10 +303,6 @@ pub fn normalize_address(addr: &str) -> Result<String> {
 
     Ok(format!("0x{}", hex_part.to_lowercase()))
 }
-
-////////////////////////////////////////////////////////////////////////////////
-// Tests
-////////////////////////////////////////////////////////////////////////////////
 
 #[cfg(test)]
 mod tests {
@@ -310,7 +345,7 @@ mod tests {
     #[rstest]
     fn test_evm_private_key_debug_redacts() {
         let key = EvmPrivateKey::new(TEST_PRIVATE_KEY.to_string()).unwrap();
-        let debug_str = format!("{:?}", key);
+        let debug_str = format!("{key:?}");
         assert_eq!(debug_str, "EvmPrivateKey(***redacted***)");
         assert!(!debug_str.contains("1234"));
     }
@@ -332,7 +367,7 @@ mod tests {
     #[rstest]
     fn test_vault_address_debug_redacts_middle() {
         let addr = VaultAddress::parse(TEST_VAULT_ADDRESS).unwrap();
-        let debug_str = format!("{:?}", addr);
+        let debug_str = format!("{addr:?}");
         assert!(debug_str.starts_with("VaultAddress(0x1234"));
         assert!(debug_str.ends_with("7890)"));
         assert!(debug_str.contains("..."));
@@ -342,11 +377,10 @@ mod tests {
     fn test_secrets_from_json() {
         let json = format!(
             r#"{{
-            "privateKey": "{}",
-            "vaultAddress": "{}",
+            "privateKey": "{TEST_PRIVATE_KEY}",
+            "vaultAddress": "{TEST_VAULT_ADDRESS}",
             "network": "testnet"
-        }}"#,
-            TEST_PRIVATE_KEY, TEST_VAULT_ADDRESS
+        }}"#
         );
 
         let secrets = Secrets::from_json(&json).unwrap();
@@ -360,9 +394,8 @@ mod tests {
     fn test_secrets_from_json_minimal() {
         let json = format!(
             r#"{{
-            "privateKey": "{}"
-        }}"#,
-            TEST_PRIVATE_KEY
+            "privateKey": "{TEST_PRIVATE_KEY}"
+        }}"#
         );
 
         let secrets = Secrets::from_json(&json).unwrap();
@@ -390,28 +423,6 @@ mod tests {
 
         for (input, expected) in test_cases {
             assert_eq!(normalize_address(input).unwrap(), expected);
-        }
-    }
-
-    #[rstest]
-    #[ignore = "This test modifies environment variables - run manually if needed"]
-    fn test_secrets_from_env() {
-        // Note: This test requires setting environment variables manually
-        // HYPERLIQUID_PK=1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
-        // HYPERLIQUID_VAULT=0x1234567890abcdef1234567890abcdef12345678
-        // HYPERLIQUID_NETWORK=testnet
-
-        // For now, just test the error case when variables are not set
-        match Secrets::from_env() {
-            Err(e) => {
-                assert!(
-                    e.to_string().contains("HYPERLIQUID_PK")
-                        || e.to_string().contains("environment variable not set")
-                );
-            }
-            Ok(_) => {
-                // If environment variables are actually set, that's fine too
-            }
         }
     }
 }

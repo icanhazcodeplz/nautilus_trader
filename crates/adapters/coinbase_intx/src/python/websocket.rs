@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -42,7 +42,10 @@
 //! - `RwLock` is preferred over Mutex (many reads, few writes).
 
 use futures_util::StreamExt;
-use nautilus_core::python::{IntoPyObjectNautilusExt, to_pyruntime_err, to_pyvalue_err};
+use nautilus_common::live::get_runtime;
+use nautilus_core::python::{
+    IntoPyObjectNautilusExt, call_python, to_pyruntime_err, to_pyvalue_err,
+};
 use nautilus_model::{
     data::BarType,
     identifiers::InstrumentId,
@@ -84,6 +87,13 @@ impl CoinbaseIntxWebSocketClient {
         self.api_key()
     }
 
+    #[getter]
+    #[pyo3(name = "api_key_masked")]
+    #[must_use]
+    pub fn py_api_key_masked(&self) -> String {
+        self.api_key_masked()
+    }
+
     #[pyo3(name = "is_active")]
     fn py_is_active(&mut self) -> bool {
         self.is_active()
@@ -123,7 +133,7 @@ impl CoinbaseIntxWebSocketClient {
             instruments_any.push(inst_any);
         }
 
-        self.initialize_instruments_cache(instruments_any);
+        self.cache_instruments(instruments_any);
 
         let mut client = self.clone();
 
@@ -132,7 +142,7 @@ impl CoinbaseIntxWebSocketClient {
 
             let stream = client.stream();
 
-            tokio::spawn(async move {
+            get_runtime().spawn(async move {
                 tokio::pin!(stream);
 
                 while let Some(msg) = stream.next().await {
@@ -433,11 +443,5 @@ impl CoinbaseIntxWebSocketClient {
             }
             Ok(())
         })
-    }
-}
-
-pub fn call_python(py: Python, callback: &Py<PyAny>, py_obj: Py<PyAny>) {
-    if let Err(e) = callback.call1(py, (py_obj,)) {
-        tracing::error!("Error calling Python: {e}");
     }
 }

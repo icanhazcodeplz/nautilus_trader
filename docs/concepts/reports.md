@@ -1,9 +1,5 @@
 # Reports
 
-:::info
-We are currently working on this concept guide.
-:::
-
 This guide explains the portfolio analysis and reporting capabilities provided by the `ReportProvider`
 class, and how these reports are used for PnL accounting and backtest post-run analysis.
 
@@ -36,27 +32,35 @@ Generates a comprehensive view of all orders:
 orders_report = trader.generate_orders_report()
 
 # Or using ReportProvider directly
-from nautilus_trader.analysis.reporter import ReportProvider
+from nautilus_trader.analysis import ReportProvider
+
 orders = cache.orders()
 orders_report = ReportProvider.generate_orders_report(orders)
 ```
 
-**Returns `pd.DataFrame` with:**
+**Returns `pd.DataFrame`. Key columns include:**
 
-| Column             | Description                                   |
-|--------------------|-----------------------------------------------|
-| `client_order_id`  | Index - unique order identifier.              |
-| `instrument_id`    | Trading instrument.                           |
-| `strategy_id`      | Strategy that created the order.              |
-| `side`             | BUY or SELL.                                  |
-| `type`             | MARKET, LIMIT, etc.                           |
-| `status`           | Current order status.                         |
-| `quantity`         | Original order quantity (string).             |
-| `filled_qty`       | Amount filled (string).                       |
-| `price`            | Limit price (string if set).                  |
-| `avg_px`           | Average fill price (float if set).            |
-| `ts_init`          | Order initialization timestamp (nanoseconds). |
-| `ts_last`          | Last update timestamp (nanoseconds).          |
+| Column             | Description                                             |
+|--------------------|---------------------------------------------------------|
+| `client_order_id`  | Index - unique order identifier.                        |
+| `instrument_id`    | Trading instrument.                                     |
+| `strategy_id`      | Strategy that created the order.                        |
+| `trader_id`        | Trader identifier.                                      |
+| `account_id`       | Account identifier (if assigned).                       |
+| `venue_order_id`   | Venue-assigned order ID (if accepted).                  |
+| `side`             | BUY or SELL.                                            |
+| `type`             | MARKET, LIMIT, etc.                                     |
+| `status`           | Current order status.                                   |
+| `quantity`         | Original order quantity (string).                       |
+| `filled_qty`       | Amount filled (string).                                 |
+| `price`            | Limit price (order-type dependent).                     |
+| `avg_px`           | Average fill price (if filled).                         |
+| `time_in_force`    | Time-in-force instruction.                              |
+| `ts_init`          | Order initialization timestamp (Unix nanoseconds).      |
+| `ts_last`          | Last update timestamp (Unix nanoseconds).               |
+
+Additional columns vary by order type (e.g., `trigger_price` for stop orders, `expire_time` for
+GTD orders). See `Order.to_dict()` for the complete field list.
 
 ### Order fills report
 
@@ -88,19 +92,28 @@ orders = cache.orders()
 fills_report = ReportProvider.generate_fills_report(orders)
 ```
 
-**Returns `pd.DataFrame` with:**
+**Returns `pd.DataFrame`. Key columns include:**
 
-| Column             | Description                          |
-|--------------------|--------------------------------------|
-| `client_order_id`  | Index - order identifier.            |
-| `trade_id`         | Unique trade/fill identifier.        |
-| `venue_order_id`   | Venue-assigned order ID.             |
-| `last_px`          | Fill execution price (string).       |
-| `last_qty`         | Fill execution quantity (string).    |
-| `liquidity_side`   | MAKER or TAKER.                      |
-| `commission`       | Commission amount and currency.      |
-| `ts_event`         | Fill timestamp (datetime).           |
-| `ts_init`          | Initialization timestamp (datetime). |
+| Column             | Description                              |
+|--------------------|------------------------------------------|
+| `client_order_id`  | Index - order identifier.                |
+| `trade_id`         | Unique trade/fill identifier.            |
+| `venue_order_id`   | Venue-assigned order ID.                 |
+| `instrument_id`    | Trading instrument.                      |
+| `strategy_id`      | Strategy that created the order.         |
+| `account_id`       | Account identifier.                      |
+| `position_id`      | Associated position ID (if applicable).  |
+| `order_side`       | BUY or SELL.                             |
+| `order_type`       | Order type (MARKET, LIMIT, etc.).        |
+| `last_px`          | Fill execution price (string).           |
+| `last_qty`         | Fill execution quantity (string).        |
+| `currency`         | Currency of the fill.                    |
+| `liquidity_side`   | MAKER or TAKER.                          |
+| `commission`       | Commission amount and currency.          |
+| `ts_event`         | Fill timestamp (datetime).               |
+| `ts_init`          | Initialization timestamp (datetime).     |
+
+See `OrderFilled.to_dict()` for the complete field list.
 
 ### Positions report
 
@@ -120,25 +133,32 @@ positions_report = ReportProvider.generate_positions_report(
 )
 ```
 
-**Returns `pd.DataFrame` with:**
+**Returns `pd.DataFrame`. Key columns include:**
 
-| Column             | Description                            |
-|--------------------|----------------------------------------|
-| `position_id`      | Index - unique position identifier.    |
-| `instrument_id`    | Trading instrument.                    |
-| `strategy_id`      | Strategy that managed the position.    |
-| `entry`            | Entry side (BUY or SELL).              |
-| `side`             | Position side (LONG, SHORT, or FLAT).  |
-| `quantity`         | Position size.                         |
-| `peak_qty`         | Maximum size reached.                  |
-| `avg_px_open`      | Average entry price.                   |
-| `avg_px_close`     | Average exit price (if closed).        |
-| `realized_pnl`     | Realized profit/loss.                  |
-| `realized_return`  | Return percentage.                     |
-| `ts_opened`        | Opening timestamp (datetime).          |
-| `ts_closed`        | Closing timestamp (datetime or NA).    |
-| `duration_ns`      | Position duration in nanoseconds.      |
-| `is_snapshot`      | Whether this is a historical snapshot. |
+| Column             | Description                              |
+|--------------------|------------------------------------------|
+| `position_id`      | Index - unique position identifier.      |
+| `instrument_id`    | Trading instrument.                      |
+| `strategy_id`      | Strategy that managed the position.      |
+| `trader_id`        | Trader identifier.                       |
+| `account_id`       | Account identifier.                      |
+| `opening_order_id` | Order ID that opened the position.       |
+| `closing_order_id` | Order ID that closed the position.       |
+| `entry`            | Entry side (BUY or SELL).                |
+| `side`             | Position side (LONG, SHORT, or FLAT).    |
+| `quantity`         | Current position size.                   |
+| `peak_qty`         | Maximum size reached.                    |
+| `avg_px_open`      | Average entry price.                     |
+| `avg_px_close`     | Average exit price (if closed).          |
+| `commissions`      | List of commissions paid.                |
+| `realized_pnl`     | Realized profit/loss.                    |
+| `realized_return`  | Return percentage.                       |
+| `ts_init`          | Position initialization timestamp.       |
+| `ts_opened`        | Opening timestamp (datetime).            |
+| `ts_last`          | Last update timestamp.                   |
+| `ts_closed`        | Closing timestamp (datetime or NA).      |
+| `duration_ns`      | Position duration in nanoseconds.        |
+| `is_snapshot`      | Whether this is a historical snapshot.   |
 
 ### Account report
 
@@ -156,21 +176,24 @@ account = cache.account(account_id)
 account_report = ReportProvider.generate_account_report(account)
 ```
 
-**Returns `pd.DataFrame` with:**
+**Returns `pd.DataFrame`. Columns include:**
 
-| Column             | Description                                |
-|--------------------|--------------------------------------------|
-| `ts_event`         | Index - timestamp of account state change. |
-| `account_id`       | Account identifier.                        |
-| `account_type`     | Type of account (e.g., SPOT, MARGIN).      |
-| `base_currency`    | Base currency for the account.             |
-| `total`            | Total balance amount.                      |
-| `free`             | Available balance.                         |
-| `locked`           | Balance locked in orders.                  |
-| `currency`         | Currency of the balance.                   |
-| `reported`         | Whether balance was reported by venue.     |
-| `margins`          | Margin information (if applicable).        |
-| `info`             | Additional venue-specific information.     |
+| Column          | Description                                |
+|-----------------|--------------------------------------------|
+| `ts_event`      | Index - timestamp of account state change. |
+| `account_id`    | Account identifier.                        |
+| `account_type`  | Type of account (e.g., SPOT, MARGIN).      |
+| `base_currency` | Base currency for the account.             |
+| `total`         | Total balance amount (string).             |
+| `free`          | Available balance (string).                |
+| `locked`        | Balance locked in orders (string).         |
+| `currency`      | Currency of the balance.                   |
+| `reported`      | Whether balance was reported by venue.     |
+| `margins`       | Margin information (list, if applicable).  |
+| `info`          | Additional venue-specific information.     |
+
+Each row represents a balance entry; accounts with multiple currencies produce multiple rows
+per account state event.
 
 ## PnL accounting considerations
 
@@ -183,9 +206,10 @@ Accurate PnL accounting requires careful consideration of several factors:
 - **Commission impact**: Only included when in settlement currency.
 
 :::warning
-PnL calculations depend on the OMS type. In `NETTING` mode, position snapshots
+PnL calculations depend on the OMS type. In `NETTING` OMS, position snapshots
 preserve historical PnL when positions reopen. Always include snapshots in
-reports for accurate total PnL calculation.
+reports for accurate total PnL calculation. In `HEDGING` OMS, snapshots are
+not used since each position has a unique ID and is never reopened.
 :::
 
 ### Multi-currency accounting
@@ -213,7 +237,7 @@ for position in positions:
 
 ### Snapshot considerations
 
-For `NETTING` OMS configurations:
+For `NETTING` OMS:
 
 ```python
 from nautilus_trader.model.objects import Money
@@ -289,26 +313,41 @@ see the [Portfolio guide](portfolio.md#portfolio-statistics). The Portfolio guid
 
 ### Visualization
 
-Reports integrate well with visualization tools:
+NautilusTrader provides interactive tearsheets and plots via Plotly:
 
 ```python
-import matplotlib.pyplot as plt
+from nautilus_trader.analysis import create_tearsheet
 
-# Plot cumulative returns
-returns = positions_report["realized_return"].cumsum()
-returns.plot(title="Cumulative Returns")
-plt.show()
+# After backtest run
+engine.run()
 
-# Analyze fill quality (commission is a Money string e.g. "0.50 USD")
-# Extract numeric values and currency
-fills_report["commission_value"] = fills_report["commission"].str.split().str[0].astype(float)
-fills_report["commission_currency"] = fills_report["commission"].str.split().str[1]
+# Generate interactive HTML tearsheet
+create_tearsheet(engine, output_path="tearsheet.html")
+```
 
-# Group by liquidity side and currency
-commission_by_side = fills_report.groupby(["liquidity_side", "commission_currency"])["commission_value"].sum()
-commission_by_side.plot.bar()
-plt.title("Commission by Liquidity Side and Currency")
-plt.show()
+This creates an interactive HTML report with:
+
+- Equity curve
+- Drawdown analysis
+- Monthly returns heatmap
+- Performance statistics table
+- Returns distribution
+
+For more control, generate individual plots:
+
+```python
+from nautilus_trader.analysis import create_equity_curve
+
+returns = engine.portfolio.analyzer.returns()
+fig = create_equity_curve(returns, title="My Strategy Equity")
+fig.show()  # Display in browser
+fig.write_image("equity.png")  # Export to PNG (requires kaleido)
+```
+
+Install visualization dependencies:
+
+```bash
+uv pip install "nautilus_trader[visualization]"
 ```
 
 ## Report generation patterns
@@ -380,7 +419,7 @@ The `ReportProvider` works with several system components:
 - **Cache**: Source of all trading data (orders, positions, accounts) for reports.
 - **Portfolio**: Uses reports for performance analysis and metrics calculation.
 - **BacktestEngine**: Leverages reports for post-run analysis and visualization.
-- **Position snapshots**: Critical for accurate PnL reporting in `NETTING` OMS mode.
+- **Position snapshots**: Critical for accurate PnL reporting in `NETTING` OMS.
 
 ## Summary
 
@@ -389,4 +428,11 @@ trading performance. These reports transform raw trading data into structured Da
 enabling detailed analysis of orders, fills, positions, and account states. Understanding
 how to generate and interpret these reports is essential for strategy development,
 performance evaluation, and accurate PnL accounting, particularly when dealing with
-position snapshots in `NETTING` OMS configurations.
+position snapshots in `NETTING` OMS.
+
+## Related guides
+
+- [Visualization](visualization.md) - Learn how to create interactive tearsheets and charts from backtest results.
+- [Portfolio](portfolio.md) - Explore portfolio statistics and performance metrics.
+- [Backtesting](backtesting.md) - Learn how to run backtests that generate reports.
+- [Cache](cache.md) - Understand the cache system that stores data for reports.

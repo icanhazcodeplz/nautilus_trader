@@ -1,8 +1,25 @@
+// -------------------------------------------------------------------------------------------------
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
+//  https://nautechsystems.io
+//
+//  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
+//  You may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at https://www.gnu.org/licenses/lgpl-3.0.en.html
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+// -------------------------------------------------------------------------------------------------
+
 use std::{cell::RefCell, rc::Rc};
 
+use async_trait::async_trait;
 use nautilus_common::{
     cache::Cache,
-    clock::Clock,
+    clients::ExecutionClient,
+    clock::{Clock, TestClock},
     messages::execution::{
         BatchCancelOrders, CancelAllOrders, CancelOrder, ModifyOrder, QueryAccount, QueryOrder,
         SubmitOrder, SubmitOrderList,
@@ -15,8 +32,6 @@ use nautilus_model::{
     identifiers::{AccountId, ClientId, Venue},
     types::{AccountBalance, MarginBalance},
 };
-
-use crate::client::ExecutionClient;
 
 /// A stub execution client for testing purposes.
 ///
@@ -50,13 +65,13 @@ impl StubExecutionClient {
             venue,
             oms_type,
             is_connected: false,
-            clock: clock
-                .unwrap_or_else(|| Rc::new(RefCell::new(nautilus_common::clock::TestClock::new()))),
+            clock: clock.unwrap_or_else(|| Rc::new(RefCell::new(TestClock::new()))),
             cache: Rc::new(RefCell::new(Cache::new(None, None))),
         }
     }
 }
 
+#[async_trait(?Send)]
 impl ExecutionClient for StubExecutionClient {
     fn is_connected(&self) -> bool {
         self.is_connected

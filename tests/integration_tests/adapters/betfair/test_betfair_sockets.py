@@ -1,5 +1,5 @@
 # -------------------------------------------------------------------------------------------------
-#  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+#  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 #  https://nautechsystems.io
 #
 #  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -13,7 +13,6 @@
 #  limitations under the License.
 # -------------------------------------------------------------------------------------------------
 
-import asyncio
 import platform
 import sys
 from collections.abc import Callable
@@ -38,10 +37,13 @@ from tests.integration_tests.adapters.betfair.test_kit import BetfairTestStubs
     reason="Failing on Windows with Python 3.12",
 )
 class TestBetfairSockets:
-    def setup(self):
+    @pytest.fixture(autouse=True)
+    def setup(self, request):
         # Fixture Setup
-        self.loop = asyncio.get_event_loop()
+        self.loop = request.getfixturevalue("event_loop")
         self.client = BetfairTestStubs.betfair_client(loop=self.loop)
+
+        return
 
     def _build_stream_client(
         self,
@@ -250,7 +252,7 @@ def test_betfair_messages_not_mistaken_for_fix():
 
 
 @pytest.mark.parametrize(
-    "raw_message,expected_type",
+    ("raw_message", "expected_type"),
     [
         (b'{"op":"connection","connectionId":"123"}\r\n', Connection),
         (

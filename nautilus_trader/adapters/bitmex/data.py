@@ -1,5 +1,5 @@
 # -------------------------------------------------------------------------------------------------
-#  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+#  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 #  https://nautechsystems.io
 #
 #  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -19,7 +19,10 @@ from typing import Any
 from nautilus_trader.adapters.bitmex.config import BitmexDataClientConfig
 from nautilus_trader.adapters.bitmex.constants import BITMEX_VENUE
 from nautilus_trader.adapters.bitmex.providers import BitmexInstrumentProvider
+from nautilus_trader.adapters.bitmex.types import BITMEX_INSTRUMENT_TYPES
+from nautilus_trader.adapters.bitmex.types import BitmexInstrument
 from nautilus_trader.cache.cache import Cache
+from nautilus_trader.cache.transformers import transform_instrument_from_pyo3
 from nautilus_trader.common.component import LiveClock
 from nautilus_trader.common.component import MessageBus
 from nautilus_trader.common.enums import LogColor
@@ -105,20 +108,23 @@ class BitmexDataClient(LiveMarketDataClient):
         # Configuration
         self._config = config
         self._active_only = True  # Always use active instruments for live clients
-        self._log.info(f"config.testnet={config.testnet}", LogColor.BLUE)
-        self._log.info(f"config.http_timeout_secs={config.http_timeout_secs}", LogColor.BLUE)
-        self._log.info(
-            f"config.update_instruments_interval_mins={config.update_instruments_interval_mins}",
-            LogColor.BLUE,
-        )
 
-        # Periodic updates
-        self._update_instruments_interval_mins: int | None = config.update_instruments_interval_mins
-        self._update_instruments_task: asyncio.Task | None = None
+        self._log.info(f"{config.testnet=}", LogColor.BLUE)
+        self._log.info(f"{config.http_timeout_secs=}", LogColor.BLUE)
+        self._log.info(f"{config.max_retries=}", LogColor.BLUE)
+        self._log.info(f"{config.retry_delay_initial_ms=}", LogColor.BLUE)
+        self._log.info(f"{config.retry_delay_max_ms=}", LogColor.BLUE)
+        self._log.info(f"{config.recv_window_ms=}", LogColor.BLUE)
+        self._log.info(f"{config.update_instruments_interval_mins=}", LogColor.BLUE)
+        self._log.info(f"{config.max_requests_per_second=}", LogColor.BLUE)
+        self._log.info(f"{config.max_requests_per_minute=}", LogColor.BLUE)
+        self._log.info(f"{config.http_proxy_url=}", LogColor.BLUE)
+        self._log.info(f"{config.ws_proxy_url=}", LogColor.BLUE)
 
         # HTTP API
         self._http_client = client
-        self._log.info(f"REST API key {self._http_client.api_key}", LogColor.BLUE)
+        masked_key = self._http_client.api_key_masked
+        self._log.info(f"REST API key {masked_key}", LogColor.BLUE)
 
         # WebSocket API
         ws_url = self._determine_ws_url(config)  # TODO: Move this to Rust
@@ -154,22 +160,8 @@ class BitmexDataClient(LiveMarketDataClient):
         await self._ws_client.wait_until_active(timeout_secs=10.0)
         self._log.info(f"Connected to websocket {self._ws_client.url}", LogColor.BLUE)
 
-        # Start periodic instrument updates if configured
-        if self._update_instruments_interval_mins:
-            self._update_instruments_task = self.create_task(
-                self._update_instruments(self._update_instruments_interval_mins),
-            )
-
     async def _disconnect(self) -> None:
-        # Cancel periodic update task if running
-        if self._update_instruments_task:
-            self._log.debug("Canceling update instruments task")
-            self._update_instruments_task.cancel()
-            try:
-                await asyncio.wait_for(self._update_instruments_task, timeout=2.0)
-            except (TimeoutError, asyncio.CancelledError):
-                pass
-            self._update_instruments_task = None
+        self._http_client.cancel_all_requests()
 
         # Delay to allow websocket to send any unsubscribe messages
         await asyncio.sleep(1.0)
@@ -207,7 +199,7 @@ class BitmexDataClient(LiveMarketDataClient):
         instruments_pyo3 = self._instrument_provider.instruments_pyo3()  # type: ignore
 
         for inst in instruments_pyo3:
-            self._http_client.add_instrument(inst)
+            self._http_client.cache_instrument(inst)
 
         self._log.debug("Cached instruments", LogColor.MAGENTA)
 
@@ -239,25 +231,6 @@ class BitmexDataClient(LiveMarketDataClient):
             await self._ws_client.subscribe_book_25(pyo3_instrument_id)
         else:
             await self._ws_client.subscribe_book(pyo3_instrument_id)
-
-    async def _subscribe_order_book_snapshots(self, command: SubscribeOrderBook) -> None:
-        if command.book_type != BookType.L2_MBP:
-            self._log.warning(
-                f"Book type {book_type_to_str(command.book_type)} not supported by BitMEX, skipping subscription",
-            )
-            return
-
-        if command.depth not in (0, 10):
-            self._log.error(
-                "Cannot subscribe to order book snapshots: "
-                f"invalid `depth`, was {command.depth}; "
-                "valid depths are 0 (default 10), or 10",
-            )
-            return
-
-        pyo3_instrument_id = nautilus_pyo3.InstrumentId.from_str(command.instrument_id.value)
-
-        await self._ws_client.subscribe_book_depth10(pyo3_instrument_id)
 
     async def _subscribe_quote_ticks(self, command: SubscribeQuoteTicks) -> None:
         pyo3_instrument_id = nautilus_pyo3.InstrumentId.from_str(command.instrument_id.value)
@@ -296,10 +269,6 @@ class BitmexDataClient(LiveMarketDataClient):
         pyo3_instrument_id = nautilus_pyo3.InstrumentId.from_str(command.instrument_id.value)
         await self._ws_client.unsubscribe_book(pyo3_instrument_id)
         await self._ws_client.unsubscribe_book_25(pyo3_instrument_id)
-
-    async def _unsubscribe_order_book_snapshots(self, command: UnsubscribeOrderBook) -> None:
-        pyo3_instrument_id = nautilus_pyo3.InstrumentId.from_str(command.instrument_id.value)
-        await self._ws_client.unsubscribe_book_depth10(pyo3_instrument_id)
 
     async def _unsubscribe_quote_ticks(self, command: UnsubscribeQuoteTicks) -> None:
         pyo3_instrument_id = nautilus_pyo3.InstrumentId.from_str(command.instrument_id.value)
@@ -376,10 +345,10 @@ class BitmexDataClient(LiveMarketDataClient):
                 end=end,
                 limit=limit,
             )
-        except Exception as exc:  # pragma: no cover - network failures
+        except Exception as e:  # pragma: no cover - network failures
             self._log.exception(
                 f"Failed to request trades for {request.instrument_id}",
-                exc,
+                e,
             )
             return
 
@@ -442,8 +411,8 @@ class BitmexDataClient(LiveMarketDataClient):
                 limit=limit,
                 partial=partial,
             )
-        except Exception as exc:  # pragma: no cover - network failures
-            self._log.exception(f"Failed to request bars for {bar_type}", exc)
+        except Exception as e:  # pragma: no cover - network failures
+            self._log.exception(f"Failed to request bars for {bar_type}", e)
             return
 
         bars = Bar.from_pyo3_list(pyo3_bars)
@@ -451,7 +420,6 @@ class BitmexDataClient(LiveMarketDataClient):
         self._handle_bars(
             bar_type,
             bars,
-            None,
             request.id,
             request.start,
             request.end,
@@ -481,9 +449,21 @@ class BitmexDataClient(LiveMarketDataClient):
                 # to `Data` is still owned and managed by Rust.
                 data = capsule_to_data(msg)
                 self._handle_data(data)
+            elif isinstance(msg, BITMEX_INSTRUMENT_TYPES):
+                self._handle_instrument_update(msg)
             elif isinstance(msg, nautilus_pyo3.FundingRateUpdate):
                 self._handle_data(FundingRateUpdate.from_pyo3(msg))
             else:
                 self._log.warning(f"Cannot handle message {msg}, not implemented")
         except Exception as e:
             self._log.exception("Error handling websocket message", e)
+
+    def _handle_instrument_update(self, pyo3_instrument: BitmexInstrument) -> None:
+        self._http_client.cache_instrument(pyo3_instrument)
+
+        if self._ws_client is not None:
+            self._ws_client.cache_instrument(pyo3_instrument)
+
+        instrument = transform_instrument_from_pyo3(pyo3_instrument)
+
+        self._handle_data(instrument)

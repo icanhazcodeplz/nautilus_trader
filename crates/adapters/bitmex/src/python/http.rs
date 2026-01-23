@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -16,7 +16,7 @@
 //! Python bindings for the BitMEX HTTP client.
 
 use chrono::{DateTime, Utc};
-use nautilus_core::python::to_pyvalue_err;
+use nautilus_core::python::{to_pyruntime_err, to_pyvalue_err};
 use nautilus_model::{
     data::BarType,
     enums::{ContingencyType, OrderSide, OrderType, TimeInForce, TriggerType},
@@ -26,12 +26,12 @@ use nautilus_model::{
 };
 use pyo3::{conversion::IntoPyObjectExt, prelude::*, types::PyList};
 
-use crate::http::client::BitmexHttpClient;
+use crate::http::{client::BitmexHttpClient, error::BitmexHttpError};
 
 #[pymethods]
 impl BitmexHttpClient {
     #[new]
-    #[pyo3(signature = (api_key=None, api_secret=None, base_url=None, testnet=false, timeout_secs=None, max_retries=None, retry_delay_ms=None, retry_delay_max_ms=None, recv_window_ms=None))]
+    #[pyo3(signature = (api_key=None, api_secret=None, base_url=None, testnet=false, timeout_secs=None, max_retries=None, retry_delay_ms=None, retry_delay_max_ms=None, recv_window_ms=None, max_requests_per_second=None, max_requests_per_minute=None, proxy_url=None))]
     #[allow(clippy::too_many_arguments)]
     fn py_new(
         api_key: Option<&str>,
@@ -43,6 +43,9 @@ impl BitmexHttpClient {
         retry_delay_ms: Option<u64>,
         retry_delay_max_ms: Option<u64>,
         recv_window_ms: Option<u64>,
+        max_requests_per_second: Option<u32>,
+        max_requests_per_minute: Option<u32>,
+        proxy_url: Option<&str>,
     ) -> PyResult<Self> {
         let timeout = timeout_secs.or(Some(60));
 
@@ -72,6 +75,9 @@ impl BitmexHttpClient {
             retry_delay_ms,
             retry_delay_max_ms,
             recv_window_ms,
+            max_requests_per_second,
+            max_requests_per_minute,
+            proxy_url.map(String::from),
         )
         .map_err(to_pyvalue_err)
     }
@@ -94,6 +100,13 @@ impl BitmexHttpClient {
     #[must_use]
     pub fn py_api_key(&self) -> Option<&str> {
         self.api_key()
+    }
+
+    #[getter]
+    #[pyo3(name = "api_key_masked")]
+    #[must_use]
+    pub fn py_api_key_masked(&self) -> Option<String> {
+        self.api_key_masked()
     }
 
     #[pyo3(name = "update_position_leverage")]
@@ -504,10 +517,10 @@ impl BitmexHttpClient {
         })
     }
 
-    #[pyo3(name = "add_instrument")]
-    fn py_add_instrument(&mut self, py: Python, instrument: Py<PyAny>) -> PyResult<()> {
+    #[pyo3(name = "cache_instrument")]
+    fn py_cache_instrument(&mut self, py: Python, instrument: Py<PyAny>) -> PyResult<()> {
         let inst_any = pyobject_to_instrument_any(py, instrument)?;
-        self.add_instrument(inst_any);
+        self.cache_instrument(inst_any);
         Ok(())
     }
 
@@ -516,19 +529,12 @@ impl BitmexHttpClient {
         self.cancel_all_requests();
     }
 
-    #[pyo3(name = "http_get_margin")]
-    fn py_http_get_margin<'py>(
-        &self,
-        py: Python<'py>,
-        currency: String,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    #[pyo3(name = "get_margin")]
+    fn py_get_margin<'py>(&self, py: Python<'py>, currency: String) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let margin = client
-                .http_get_margin(&currency)
-                .await
-                .map_err(to_pyvalue_err)?;
+            let margin = client.get_margin(&currency).await.map_err(to_pyvalue_err)?;
 
             Python::attach(|py| {
                 // Create a simple Python object with just the account field we need
@@ -625,17 +631,40 @@ impl BitmexHttpClient {
         })
     }
 
-    #[pyo3(name = "http_get_server_time")]
-    fn py_http_get_server_time<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    #[pyo3(name = "get_server_time")]
+    fn py_get_server_time<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let timestamp = client
-                .http_get_server_time()
-                .await
-                .map_err(to_pyvalue_err)?;
+            let timestamp = client.get_server_time().await.map_err(to_pyvalue_err)?;
 
             Python::attach(|py| timestamp.into_py_any(py))
         })
+    }
+}
+
+impl From<BitmexHttpError> for PyErr {
+    fn from(error: BitmexHttpError) -> Self {
+        match error {
+            // Runtime/operational errors
+            BitmexHttpError::Canceled(msg) => to_pyruntime_err(format!("Request canceled: {msg}")),
+            BitmexHttpError::NetworkError(msg) => to_pyruntime_err(format!("Network error: {msg}")),
+            BitmexHttpError::UnexpectedStatus { status, body } => {
+                to_pyruntime_err(format!("Unexpected HTTP status code {status}: {body}"))
+            }
+            // Validation/configuration errors
+            BitmexHttpError::MissingCredentials => {
+                to_pyvalue_err("Missing credentials for authenticated request")
+            }
+            BitmexHttpError::ValidationError(msg) => {
+                to_pyvalue_err(format!("Parameter validation error: {msg}"))
+            }
+            BitmexHttpError::JsonError(msg) => to_pyvalue_err(format!("JSON error: {msg}")),
+            BitmexHttpError::BuildError(e) => to_pyvalue_err(format!("Build error: {e}")),
+            BitmexHttpError::BitmexError {
+                error_name,
+                message,
+            } => to_pyvalue_err(format!("BitMEX error {error_name}: {message}")),
+        }
     }
 }

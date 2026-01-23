@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -336,8 +336,8 @@ pub enum OKXOptionType {
 impl From<OKXOptionType> for OptionKind {
     fn from(option_type: OKXOptionType) -> Self {
         match option_type {
-            OKXOptionType::Call => OptionKind::Call,
-            OKXOptionType::Put => OptionKind::Put,
+            OKXOptionType::Call => Self::Call,
+            OKXOptionType::Put => Self::Put,
             _ => panic!("Invalid `option_type`, was None"),
         }
     }
@@ -573,6 +573,30 @@ impl From<TriggerType> for OKXTriggerType {
     }
 }
 
+/// Represents the target currency for order quantity.
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Display,
+    PartialEq,
+    Eq,
+    Hash,
+    AsRefStr,
+    EnumIter,
+    EnumString,
+    Serialize,
+    Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum OKXTargetCurrency {
+    /// Base currency.
+    BaseCcy,
+    /// Quote currency.
+    QuoteCcy,
+}
+
 /// Represents an OKX order book channel.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum OKXBookChannel {
@@ -615,7 +639,7 @@ pub enum OKXBookChannel {
 )]
 #[cfg_attr(
     feature = "python",
-    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.adapters")
+    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.okx")
 )]
 pub enum OKXVipLevel {
     /// VIP level 0 (default tier).
@@ -658,6 +682,27 @@ pub enum OKXVipLevel {
     #[serde(rename = "9")]
     #[strum(serialize = "9")]
     Vip9 = 9,
+}
+
+impl From<u8> for OKXVipLevel {
+    fn from(value: u8) -> Self {
+        match value {
+            0 => Self::Vip0,
+            1 => Self::Vip1,
+            2 => Self::Vip2,
+            3 => Self::Vip3,
+            4 => Self::Vip4,
+            5 => Self::Vip5,
+            6 => Self::Vip6,
+            7 => Self::Vip7,
+            8 => Self::Vip8,
+            9 => Self::Vip9,
+            _ => {
+                log::warn!("Invalid VIP level {value}, defaulting to Vip0");
+                Self::Vip0
+            }
+        }
+    }
 }
 
 impl From<OKXSide> for OrderSide {
@@ -710,8 +755,9 @@ impl From<OKXOrderType> for OrderType {
             | OKXOrderType::PostOnly
             | OKXOrderType::OptimalLimitIoc
             | OKXOrderType::Mmp
-            | OKXOrderType::MmpAndPostOnly => Self::Limit,
-            OKXOrderType::Fok | OKXOrderType::Ioc => Self::MarketToLimit,
+            | OKXOrderType::MmpAndPostOnly
+            | OKXOrderType::Fok
+            | OKXOrderType::Ioc => Self::Limit,
             OKXOrderType::Trigger => Self::StopMarket,
         }
     }
@@ -901,6 +947,56 @@ pub enum OKXTransactionType {
     SpreadTradingCloseLong,
     #[serde(rename = "275")]
     SpreadTradingCloseShort,
+}
+
+/// Represents the category of an order on OKX.
+///
+/// The category field indicates whether an order is a normal trade, liquidation,
+/// auto-deleveraging (ADL) event, or algorithmic order type. This is critical for
+/// risk management and proper handling of exchange-generated orders.
+///
+/// # References
+///
+/// <https://www.okx.com/docs-v5/en/#order-book-trading-ws-order-channel>
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Display,
+    PartialEq,
+    Eq,
+    Hash,
+    AsRefStr,
+    EnumIter,
+    EnumString,
+    Serialize,
+    Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum OKXOrderCategory {
+    /// Normal trading order.
+    Normal,
+    /// Full liquidation order (position completely closed by exchange).
+    FullLiquidation,
+    /// Partial liquidation order (position partially closed by exchange).
+    PartialLiquidation,
+    /// Auto-deleveraging order (position closed to offset counterparty liquidation).
+    Adl,
+    /// Time-Weighted Average Price algorithmic order.
+    Twap,
+    /// Iceberg algorithmic order (hidden quantity).
+    Iceberg,
+    /// One-Cancels-the-Other algorithmic order.
+    Oco,
+    /// Conditional/trigger order.
+    Conditional,
+    /// Move order stop algorithmic order.
+    MoveOrderStop,
+    /// Delivery and exercise (for futures/options settlement).
+    Ddh,
+    /// Unknown or future category (graceful fallback).
+    #[serde(other)]
+    Other,
 }
 
 #[derive(

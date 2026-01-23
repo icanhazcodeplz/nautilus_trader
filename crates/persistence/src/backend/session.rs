@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -13,9 +13,9 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
-use std::{collections::HashMap, sync::Arc, vec::IntoIter};
+use std::{sync::Arc, vec::IntoIter};
 
-use compare::Compare;
+use ahash::{AHashMap, AHashSet};
 use datafusion::{
     error::Result, logical_expr::expr::Sort, physical_plan::SendableRecordBatchStream, prelude::*,
 };
@@ -28,7 +28,10 @@ use nautilus_serialization::arrow::{
 use object_store::ObjectStore;
 use url::Url;
 
-use super::kmerge_batch::{EagerStream, ElementBatchIter, KMerge};
+use super::{
+    compare::Compare,
+    kmerge_batch::{EagerStream, ElementBatchIter, KMerge},
+};
 
 #[derive(Debug, Default)]
 pub struct TsInitComparator;
@@ -56,14 +59,14 @@ pub type QueryResult = KMerge<EagerStream<std::vec::IntoIter<Data>>, Data, TsIni
 /// a Vec of data by types that implement [`DecodeDataFromRecordBatch`].
 #[cfg_attr(
     feature = "python",
-    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.persistence")
+    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.persistence", unsendable)
 )]
 pub struct DataBackendSession {
     pub chunk_size: usize,
     pub runtime: Arc<tokio::runtime::Runtime>,
     session_ctx: SessionContext,
     batch_streams: Vec<EagerStream<IntoIter<Data>>>,
-    registered_tables: std::collections::HashSet<String>,
+    registered_tables: AHashSet<String>,
 }
 
 impl DataBackendSession {
@@ -83,7 +86,7 @@ impl DataBackendSession {
             batch_streams: Vec::default(),
             chunk_size,
             runtime: Arc::new(runtime),
-            registered_tables: std::collections::HashSet::new(),
+            registered_tables: AHashSet::new(),
         }
     }
 
@@ -96,7 +99,7 @@ impl DataBackendSession {
     pub fn register_object_store_from_uri(
         &mut self,
         uri: &str,
-        storage_options: Option<std::collections::HashMap<String, String>>,
+        storage_options: Option<AHashMap<String, String>>,
     ) -> anyhow::Result<()> {
         // Create object store from URI using the Rust implementation
         let (object_store, _, _) =
@@ -108,7 +111,7 @@ impl DataBackendSession {
         // Register the object store with the session
         if matches!(
             parsed_uri.scheme(),
-            "s3" | "gs" | "gcs" | "azure" | "abfs" | "http" | "https"
+            "s3" | "gs" | "gcs" | "az" | "abfs" | "http" | "https"
         ) {
             // For cloud storage, register with the base URL (scheme + netloc)
             let base_url = format!(
@@ -125,10 +128,15 @@ impl DataBackendSession {
 
     pub fn write_data<T: EncodeToRecordBatch>(
         data: &[T],
-        metadata: &HashMap<String, String>,
+        metadata: &AHashMap<String, String>,
         stream: &mut dyn WriteStream,
     ) -> Result<(), DataStreamingError> {
-        let record_batch = T::encode_batch(metadata, data)?;
+        // Convert AHashMap to HashMap for Arrow compatibility
+        let metadata: std::collections::HashMap<String, String> = metadata
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let record_batch = T::encode_batch(&metadata, data)?;
         stream.write(&record_batch)?;
         Ok(())
     }
@@ -236,9 +244,6 @@ impl DataBackendSession {
     }
 }
 
-// Note: Intended to be used on a single Python thread
-unsafe impl Send for DataBackendSession {}
-
 #[must_use]
 pub fn build_query(
     table: &str,
@@ -317,8 +322,16 @@ impl DataQueryResult {
     /// drop if exists and reset the field.
     pub fn drop_chunk(&mut self) {
         if let Some(CVec { ptr, len, cap }) = self.chunk.take() {
-            let data: Vec<Data> =
-                unsafe { Vec::from_raw_parts(ptr.cast::<nautilus_model::data::Data>(), len, cap) };
+            assert!(
+                len <= cap,
+                "drop_chunk: len ({len}) > cap ({cap}) - memory corruption or wrong chunk type"
+            );
+            assert!(
+                len == 0 || !ptr.is_null(),
+                "drop_chunk: null ptr with non-zero len ({len}) - memory corruption"
+            );
+
+            let data: Vec<Data> = unsafe { Vec::from_raw_parts(ptr.cast::<Data>(), len, cap) };
             drop(data);
         }
     }
@@ -349,6 +362,3 @@ impl Drop for DataQueryResult {
         self.result.clear();
     }
 }
-
-// Note: Intended to be used on a single Python thread
-unsafe impl Send for DataQueryResult {}

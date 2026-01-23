@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -233,6 +233,18 @@ impl FuturesSpread {
     #[pyo3(name = "margin_maint")]
     fn py_margin_maint(&self) -> Decimal {
         self.margin_maint
+    }
+
+    #[getter]
+    #[pyo3(name = "maker_fee")]
+    fn py_maker_fee(&self) -> Decimal {
+        self.maker_fee
+    }
+
+    #[getter]
+    #[pyo3(name = "taker_fee")]
+    fn py_taker_fee(&self) -> Decimal {
+        self.taker_fee
     }
 
     #[getter]

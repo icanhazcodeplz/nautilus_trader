@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -15,22 +15,15 @@
 
 use std::sync::Arc;
 
-use alloy_primitives::Address;
-use futures_util::StreamExt;
 use nautilus_blockchain::{
     config::BlockchainDataClientConfig,
-    contracts::uniswap_v3_pool::UniswapV3PoolContract,
     data::core::BlockchainDataClientCore,
     exchanges::{find_dex_type_case_insensitive, get_supported_dexes_for_chain},
-    rpc::http::BlockchainHttpRpcClient,
+    rpc::providers::check_infura_rpc_provider,
 };
 use nautilus_infrastructure::sql::pg::get_postgres_connect_options;
-use nautilus_model::defi::{
-    DexType,
-    chain::Chain,
-    pool_analysis::{compare::compare_pool_profiler, profiler::PoolProfiler},
-    validation::validate_address,
-};
+use nautilus_model::defi::{PoolIdentifier, chain::Chain, validation::validate_address};
+use ustr::Ustr;
 
 use crate::opt::DatabaseConfig;
 
@@ -39,6 +32,7 @@ use crate::opt::DatabaseConfig;
 /// # Errors
 ///
 /// Returns an error if the chain or DEX parameters are invalid.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_analyze_pool(
     chain: String,
     dex: String,
@@ -51,7 +45,7 @@ pub async fn run_analyze_pool(
     multicall_calls_per_rpc_request: Option<u32>,
 ) -> anyhow::Result<()> {
     let chain = Chain::from_chain_name(&chain)
-        .ok_or_else(|| anyhow::anyhow!("Invalid chain name: {}", chain))?;
+        .ok_or_else(|| anyhow::anyhow!("Invalid chain name: {chain}"))?;
     let pool_address = validate_address(&pool_address)?;
 
     let dex_type = find_dex_type_case_insensitive(&dex, chain).ok_or_else(|| {
@@ -78,17 +72,16 @@ pub async fn run_analyze_pool(
         database.password,
         database.database,
     );
-    // Get RPC HTTP URL from CLI argument or environment variable
+    // Get RPC HTTP URL: CLI arg, Infura provider, OR RPC_HTTP_URL env var
     let rpc_http_url = rpc_url
+        .or_else(|| check_infura_rpc_provider(&chain.name))
         .or_else(|| std::env::var("RPC_HTTP_URL").ok())
-        .unwrap_or_default();
-
-    log::info!("Using RPC HTTP URL: '{}'", rpc_http_url);
-    if rpc_http_url.is_empty() {
-        log::warn!(
-            "No RPC HTTP URL provided via --rpc-url or RPC_HTTP_URL environment variable - some operations may fail"
-        );
-    }
+        .unwrap_or_else(|| {
+            panic!(
+                "No RPC URL provided for {}. Set --rpc-url, INFURA_API_KEY, or RPC_HTTP_URL",
+                chain.name
+            )
+        });
 
     let config = BlockchainDataClientConfig::new(
         Arc::new(chain.to_owned()),
@@ -102,80 +95,48 @@ pub async fn run_analyze_pool(
         None,
         Some(postgres_connect_options),
     );
-    let mut data_client = BlockchainDataClientCore::new(config, None, None);
-    let http_rpc_client = Arc::new(BlockchainHttpRpcClient::new(
-        data_client.config.http_rpc_url.clone(),
-        data_client.config.rpc_requests_per_second,
-    ));
+    let cancellation_token = tokio_util::sync::CancellationToken::new();
+    let mut data_client = BlockchainDataClientCore::new(config, None, None, cancellation_token);
     data_client.initialize_cache_database().await;
     data_client.cache.initialize_chain().await;
     data_client
         .register_dex_exchange(dex_type)
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to register DEX exchange: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to register DEX exchange: {e}"))?;
+
+    let pool_identifier = PoolIdentifier::Address(Ustr::from(&pool_address.to_string()));
     data_client
-        .sync_pool_events(&dex_type, pool_address, from_block, to_block, reset)
+        .sync_pool_events(&dex_type, pool_identifier, from_block, to_block, reset)
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to sync pool events: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to sync pool events: {e}"))?;
 
     // Profile pool events from database
     log::info!("Profiling pool events from database...");
-    // Get pool details from data client
-    let pool = data_client.get_pool(&pool_address)?;
+    let pool = data_client
+        .cache
+        .get_pool(&pool_identifier)
+        .expect("Pool not found in cache")
+        .clone();
+    let (profiler, already_valid) = data_client.bootstrap_latest_pool_profiler(&pool).await?;
+    let snapshot = profiler.extract_snapshot();
 
-    // Create profiler and reporter
-    let mut profiler = PoolProfiler::new(pool.clone());
-    let initial_sqrt_price_x96 = pool
-        .initial_sqrt_price_x96
-        .expect("Pool has no initial sqrt price");
-    profiler.initialize(initial_sqrt_price_x96);
-
-    // Stream and process events
-    if let Some(cache_database) = &data_client.cache.database {
-        let mut stream =
-            cache_database.stream_pool_events(pool.chain.clone(), pool.dex.clone(), &pool_address);
-
-        while let Some(result) = stream.next().await {
-            match result {
-                Ok(event) => {
-                    profiler.process(&event)?;
-                }
-                Err(e) => log::error!("Error processing event: {}", e),
-            }
-        }
-    }
-
-    if dex_type == DexType::UniswapV3 {
-        let pool_contract = UniswapV3PoolContract::new(http_rpc_client.clone());
-
-        let on_chain_state = pool_contract.get_global_state(&pool_address).await?;
-        let on_chain_ticks = pool_contract
-            .batch_get_ticks(&pool_address, &profiler.get_active_tick_values())
-            .await?;
-        let position_keys: Vec<(Address, i32, i32)> = profiler
-            .get_active_positions()
-            .iter()
-            .map(|position| (position.owner, position.tick_lower, position.tick_upper))
-            .collect();
-        let on_chain_positions = pool_contract
-            .batch_get_positions(&pool_address, &position_keys)
-            .await?;
-        let result = compare_pool_profiler(
-            &profiler,
-            on_chain_state.tick,
-            on_chain_state.sqrt_price_x96,
-            on_chain_state.fee_protocol,
-            on_chain_state.liquidity,
-            on_chain_ticks,
-            on_chain_positions,
-        );
-
-        if result {
-            log::info!("✅  Pool profiler state matches on-chain smart contract state.");
-        } else {
-            log::error!("❌  Pool profiler state does NOT match on-chain smart contract state");
-        }
-    }
-
+    // Save complete pool snapshot to database (includes state, positions, and ticks)
+    log::info!(
+        "Saving pool snapshot with {} positions and {} ticks to database...",
+        snapshot.positions.len(),
+        snapshot.ticks.len()
+    );
+    data_client
+        .cache
+        .add_pool_snapshot(&pool.dex.name, &pool.pool_identifier, &snapshot)
+        .await?;
+    log::info!("Saved complete pool snapshot to database");
+    data_client
+        .check_snapshot_validity(&profiler, already_valid)
+        .await?;
+    log::info!(
+        "Pool liquidity utilization rate is {:.4}%",
+        profiler.liquidity_utilization_rate() * 100.0
+    );
     Ok(())
 }

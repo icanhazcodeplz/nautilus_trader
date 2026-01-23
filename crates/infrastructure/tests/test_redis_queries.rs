@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -57,21 +57,23 @@ mod serial_tests {
         let trader_id = TraderId::from("test-trader");
         let instance_id = UUID4::new();
 
-        let mut config = CacheConfig::default();
-        config.database = Some(DatabaseConfig {
-            database_type: "redis".to_string(),
-            host: Some("localhost".to_string()),
-            port: Some(6379),
-            username: None,
-            password: None,
-            ssl: false,
-            connection_timeout: 20,
-            response_timeout: 20,
-            number_of_retries: 100,
-            exponent_base: 2,
-            max_delay: 1000,
-            factor: 2,
-        });
+        let config = CacheConfig {
+            database: Some(DatabaseConfig {
+                database_type: "redis".to_string(),
+                host: Some("localhost".to_string()),
+                port: Some(6379),
+                username: None,
+                password: None,
+                ssl: false,
+                connection_timeout: 20,
+                response_timeout: 20,
+                number_of_retries: 100,
+                exponent_base: 2,
+                max_delay: 1000,
+                factor: 2,
+            }),
+            ..Default::default()
+        };
 
         let mut database = RedisCacheDatabase::new(trader_id, instance_id, config)
             .await

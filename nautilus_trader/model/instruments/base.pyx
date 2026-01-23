@@ -1,5 +1,5 @@
 # -------------------------------------------------------------------------------------------------
-#  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+#  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 #  https://nautechsystems.io
 #
 #  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -48,12 +48,18 @@ from nautilus_trader.model.tick_scheme.base cimport TICK_SCHEMES
 from nautilus_trader.model.tick_scheme.base cimport get_tick_scheme
 
 
-EXPIRING_INSTRUMENT_TYPES = {
+EXPIRING_INSTRUMENT_CLASSES = {
     InstrumentClass.FUTURE,
     InstrumentClass.FUTURES_SPREAD,
     InstrumentClass.OPTION,
     InstrumentClass.OPTION_SPREAD,
 }
+
+NEGATIVE_PRICE_INSTRUMENT_CLASSES = (
+    InstrumentClass.OPTION,
+    InstrumentClass.FUTURES_SPREAD,
+    InstrumentClass.OPTION_SPREAD,
+)
 
 
 cdef class Instrument(Data):
@@ -268,6 +274,8 @@ cdef class Instrument(Data):
             self._tick_scheme = get_tick_scheme(self.tick_scheme_name)
 
     def __eq__(self, Instrument other) -> bool:
+        if other is None:
+            return False
         return self.id == other.id
 
     def __hash__(self) -> int:
@@ -418,6 +426,32 @@ cdef class Instrument(Data):
 
         """
         return self.id.venue
+
+    cpdef bint is_spread(self):
+        """
+        Return whether the instrument is a spread instrument.
+
+        Returns
+        -------
+        bool
+
+        """
+        return len(self.legs()) > 1
+
+    cpdef list legs(self):
+        """
+        Return the list of leg tuples (instrument_id, ratio) for this spread.
+
+        Base implementation returns an empty list. Override in spread instrument
+        classes to return the actual legs.
+
+        Returns
+        -------
+        list[tuple[InstrumentId, int]]
+            List of tuples containing (instrument_id, ratio) for each leg.
+
+        """
+        return [(self.id, 1)]
 
     cpdef Currency get_base_currency(self):
         """
@@ -729,12 +763,17 @@ cdef class Instrument(Data):
         Quantity quantity,
         Price price,
         bint use_quote_for_inverse=False,
+        Currency target_currency=None,
+        Price conversion_price=None,
     ):
         """
         Calculate the notional value.
 
         Result will be in quote currency for standard instruments, or base
         currency for inverse instruments.
+
+        If `target_currency` and `conversion_price` are provided, the notional
+        value will be converted to the target currency.
 
         Parameters
         ----------
@@ -744,6 +783,10 @@ cdef class Instrument(Data):
             The price for the calculation.
         use_quote_for_inverse : bool
             If inverse instrument calculations use quote currency (instead of base).
+        target_currency : Currency, optional
+            The target currency for conversion.
+        conversion_price : Price, optional
+            The price to use for currency conversion.
 
         Returns
         -------
@@ -753,14 +796,20 @@ cdef class Instrument(Data):
         Condition.not_none(quantity, "quantity")
         Condition.not_none(price, "price")
 
+        cdef Money notional
         if self.is_inverse:
             if use_quote_for_inverse:
                 # Quantity is notional in quote currency
-                return Money(quantity, self.quote_currency)
-
-            return Money(quantity.as_f64_c() * float(self.multiplier) * (1.0 / price.as_f64_c()), self.base_currency)
+                notional = Money(quantity, self.quote_currency)
+            else:
+                notional = Money(quantity.as_f64_c() * float(self.multiplier) * (1.0 / price.as_f64_c()), self.base_currency)
         else:
-            return Money(quantity.as_f64_c() * float(self.multiplier) * price.as_f64_c(), self.quote_currency)
+            notional = Money(quantity.as_f64_c() * float(self.multiplier) * price.as_f64_c(), self.quote_currency)
+
+        if target_currency is not None and conversion_price is not None:
+            return Money(notional.as_f64_c() * conversion_price.as_f64_c(), target_currency)
+
+        return notional
 
     cpdef Quantity calculate_base_quantity(
         self,

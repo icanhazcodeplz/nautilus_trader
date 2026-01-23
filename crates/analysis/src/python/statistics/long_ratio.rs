@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -61,7 +61,7 @@ impl LongRatio {
             }
         }
 
-        let value = longs as f64 / positions.len() as f64;
+        let value = f64::from(longs) / positions.len() as f64;
         let scale = 10f64.powi(self.precision as i32);
         Ok(Some((value * scale).round() / scale))
     }

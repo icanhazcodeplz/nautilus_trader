@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -40,16 +40,20 @@ pub const OKX_WS_DEMO_PUBLIC_URL: &str = "wss://wspap.okx.com:8443/ws/v5/public"
 pub const OKX_WS_DEMO_PRIVATE_URL: &str = "wss://wspap.okx.com:8443/ws/v5/private";
 pub const OKX_WS_DEMO_BUSINESS_URL: &str = "wss://wspap.okx.com:8443/ws/v5/business";
 
-/// OKX supported order time in force for market orders.
+pub const OKX_WS_TOPIC_DELIMITER: char = ':';
+
+/// OKX supported order time in force.
 ///
 /// # Notes
 ///
 /// - OKX implements IOC and FOK as order types rather than separate time-in-force parameters.
+/// - FOK is only supported with Limit orders (Market + FOK is not supported).
+/// - IOC with Market orders uses OptimalLimitIoc, with Limit orders uses Ioc.
 /// - GTD is supported via expire_time parameter.
 pub const OKX_SUPPORTED_TIME_IN_FORCE: &[TimeInForce] = &[
     TimeInForce::Gtc, // Good Till Cancel (default)
-    TimeInForce::Ioc, // Immediate or Cancel (mapped to OKXOrderType::Ioc)
-    TimeInForce::Fok, // Fill or Kill (mapped to OKXOrderType::Fok)
+    TimeInForce::Ioc, // Immediate or Cancel (mapped to OKXOrderType::Ioc or OptimalLimitIoc)
+    TimeInForce::Fok, // Fill or Kill (only with Limit orders, mapped to OKXOrderType::Fok)
 ];
 
 /// OKX supported order types.
@@ -117,3 +121,9 @@ pub const OKX_POST_ONLY_CANCEL_SOURCE: &str = "31";
 
 /// Human-readable reason used when a post-only order is auto-cancelled for taking liquidity.
 pub const OKX_POST_ONLY_CANCEL_REASON: &str = "POST_ONLY would take liquidity";
+
+/// Target currency literal for base currency.
+pub const OKX_TARGET_CCY_BASE: &str = "base_ccy";
+
+/// Target currency literal for quote currency.
+pub const OKX_TARGET_CCY_QUOTE: &str = "quote_ccy";

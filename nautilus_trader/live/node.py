@@ -1,5 +1,5 @@
 # -------------------------------------------------------------------------------------------------
-#  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+#  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 #  https://nautechsystems.io
 #
 #  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -22,6 +22,7 @@ from datetime import timedelta
 from nautilus_trader.cache.base import CacheFacade
 from nautilus_trader.common.component import Logger
 from nautilus_trader.common.enums import LogColor
+from nautilus_trader.common.functions import get_event_loop
 from nautilus_trader.config import TradingNodeConfig
 from nautilus_trader.core import nautilus_pyo3
 from nautilus_trader.core.correctness import PyCondition
@@ -61,7 +62,11 @@ class TradingNode:
 
         self._config: TradingNodeConfig = config
 
-        loop = loop or asyncio.get_event_loop()
+        if loop is None:
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = get_event_loop()
 
         self.kernel = NautilusKernel(
             name=type(self).__name__,
@@ -367,6 +372,7 @@ class TradingNode:
                 self._task_streaming = asyncio.ensure_future(
                     self.kernel.msgbus_database.stream(self.publish_bus_message),
                 )
+                self._task_streaming.add_done_callback(self._handle_streaming_exception)
 
             await asyncio.gather(*tasks)
         except asyncio.CancelledError as e:
@@ -473,6 +479,14 @@ class TradingNode:
             return  # Normal control flow
         except BaseException as e:
             self.kernel.logger.exception("Error in run_async task", e)
+
+    def _handle_streaming_exception(self, task: asyncio.Future) -> None:
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            return  # Normal control flow
+        except BaseException as e:
+            self.kernel.logger.exception("Error in external message streaming task", e)
 
     def _loop_sig_handler(self, sig: signal.Signals) -> None:
         self.kernel.logger.warning(f"Received {sig.name}, shutting down")

@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -27,8 +27,11 @@ use std::{
 use alloy::primitives::Address;
 use nautilus_core::UnixNanos;
 use nautilus_model::defi::{
-    Block, DexType, Pool, PoolLiquidityUpdate, PoolSwap, SharedChain, SharedDex, SharedPool, Token,
-    data::PoolFeeCollect, pool_analysis::position::PoolPosition,
+    Block, DexType, Pool, PoolIdentifier, PoolLiquidityUpdate, PoolSwap, SharedChain, SharedDex,
+    SharedPool, Token,
+    data::{PoolFeeCollect, PoolFlash},
+    pool_analysis::{position::PoolPosition, snapshot::PoolSnapshot},
+    tick_map::tick::PoolTick,
 };
 use sqlx::postgres::PgConnectOptions;
 
@@ -56,8 +59,8 @@ pub struct BlockchainCache {
     tokens: HashMap<Address, Token>,
     /// Cached set of invalid token addresses that failed validation or processing.
     invalid_tokens: HashSet<Address>,
-    /// Map of pool addresses to their corresponding `Pool` objects.
-    pools: HashMap<Address, SharedPool>,
+    /// Map of pool identifiers to their corresponding `Pool` objects.
+    pools: HashMap<PoolIdentifier, SharedPool>,
     /// Optional database connection for persistent storage.
     pub database: Option<BlockchainCacheDatabase>,
 }
@@ -85,7 +88,7 @@ impl BlockchainCache {
         database
             .get_block_consistency_status(&self.chain)
             .await
-            .map_err(|e| tracing::error!("Error getting block consistency status: {e}"))
+            .map_err(|e| log::error!("Error getting block consistency status: {e}"))
             .ok()
     }
 
@@ -119,7 +122,7 @@ impl BlockchainCache {
         if let Some(database) = &self.database {
             database.toggle_perf_sync_settings(enable).await
         } else {
-            tracing::warn!("Database not initialized, skipping performance settings toggle");
+            log::warn!("Database not initialized, skipping performance settings toggle");
             Ok(())
         }
     }
@@ -132,24 +135,24 @@ impl BlockchainCache {
         // Seed target adapter chain in database
         if let Some(database) = &self.database {
             if let Err(e) = database.seed_chain(&self.chain).await {
-                tracing::error!(
+                log::error!(
                     "Error seeding chain in database: {e}. Continuing without database cache functionality"
                 );
                 return;
             }
-            tracing::info!("Chain seeded in the database");
+            log::info!("Chain seeded in the database");
 
             match database.create_block_partition(&self.chain).await {
-                Ok(message) => tracing::info!("Executing block partition creation: {}", message),
-                Err(e) => tracing::error!(
+                Ok(message) => log::info!("Executing block partition creation: {message}"),
+                Err(e) => log::error!(
                     "Error creating block partition for chain {}: {e}. Continuing without partition creation...",
                     self.chain.chain_id
                 ),
             }
 
             match database.create_token_partition(&self.chain).await {
-                Ok(message) => tracing::info!("Executing token partition creation: {}", message),
-                Err(e) => tracing::error!(
+                Ok(message) => log::info!("Executing token partition creation: {message}"),
+                Err(e) => log::error!(
                     "Error creating token partition for chain {}: {e}. Continuing without partition creation...",
                     self.chain.chain_id
                 ),
@@ -157,7 +160,7 @@ impl BlockchainCache {
         }
 
         if let Err(e) = self.load_tokens().await {
-            tracing::error!("Error loading tokens from the database: {e}");
+            log::error!("Error loading tokens from the database: {e}");
         }
     }
 
@@ -167,10 +170,10 @@ impl BlockchainCache {
     ///
     /// Returns an error if database seeding, token loading, or block loading fails.
     pub async fn connect(&mut self, from_block: u64) -> anyhow::Result<()> {
-        tracing::debug!("Connecting and loading from_block {from_block}");
+        log::debug!("Connecting and loading from_block {from_block}");
 
         if let Err(e) = self.load_tokens().await {
-            tracing::error!("Error loading tokens from the database: {e}");
+            log::error!("Error loading tokens from the database: {e}");
         }
 
         // TODO disable block syncing for now as we don't have timestamps yet configured
@@ -189,7 +192,7 @@ impl BlockchainCache {
                 database.load_invalid_token_addresses(self.chain.chain_id)
             )?;
 
-            tracing::info!(
+            log::info!(
                 "Loading {} valid tokens and {} invalid tokens from cache database",
                 tokens.len(),
                 invalid_tokens.len()
@@ -215,11 +218,11 @@ impl BlockchainCache {
         if let Some(database) = &self.database {
             let dex = self
                 .get_dex(dex_id)
-                .ok_or_else(|| anyhow::anyhow!("DEX {:?} has not been registered", dex_id))?;
+                .ok_or_else(|| anyhow::anyhow!("DEX {dex_id:?} has not been registered"))?;
             let pool_rows = database
                 .load_pools(self.chain.clone(), &dex_id.to_string())
                 .await?;
-            tracing::info!(
+            log::info!(
                 "Loading {} pools for DEX {} from cache database",
                 pool_rows.len(),
                 dex_id,
@@ -229,7 +232,7 @@ impl BlockchainCache {
                 let token0 = if let Some(token) = self.tokens.get(&pool_row.token0_address) {
                     token
                 } else {
-                    tracing::error!(
+                    log::error!(
                         "Failed to load pool {} for DEX {}: Token0 with address {} not found in cache. \
                              This may indicate the token was not properly loaded from the database or the pool references an unknown token.",
                         pool_row.address,
@@ -242,7 +245,7 @@ impl BlockchainCache {
                 let token1 = if let Some(token) = self.tokens.get(&pool_row.token1_address) {
                     token
                 } else {
-                    tracing::error!(
+                    log::error!(
                         "Failed to load pool {} for DEX {}: Token1 with address {} not found in cache. \
                              This may indicate the token was not properly loaded from the database or the pool references an unknown token.",
                         pool_row.address,
@@ -253,10 +256,19 @@ impl BlockchainCache {
                 };
 
                 // Construct pool from row data and cached tokens
+                let Some(pool_identifier) = pool_row.pool_identifier.parse().ok() else {
+                    log::error!(
+                        "Invalid pool identifier '{}' in database for pool {}, skipping",
+                        pool_row.pool_identifier,
+                        pool_row.address
+                    );
+                    continue;
+                };
                 let mut pool = Pool::new(
                     self.chain.clone(),
                     dex.clone(),
                     pool_row.address,
+                    pool_identifier,
                     pool_row.creation_block as u64,
                     token0.clone(),
                     token1.clone(),
@@ -267,16 +279,24 @@ impl BlockchainCache {
                     UnixNanos::default(), // TODO use default for now
                 );
 
+                // Set hooks if available
+                if let Some(ref hook_address_str) = pool_row.hook_address
+                    && let Ok(hooks) = hook_address_str.parse()
+                {
+                    pool.set_hooks(hooks);
+                }
+
                 // Initialize pool with initial values if available
-                if let Some(initial_sqrt_price_x96_str) = &pool_row.initial_sqrt_price_x96 {
-                    if let Ok(initial_sqrt_price_x96) = initial_sqrt_price_x96_str.parse() {
-                        pool.initialize(initial_sqrt_price_x96);
-                    }
+                if let Some(initial_sqrt_price_x96_str) = &pool_row.initial_sqrt_price_x96
+                    && let Ok(initial_sqrt_price_x96) = initial_sqrt_price_x96_str.parse()
+                    && let Some(initial_tick) = pool_row.initial_tick
+                {
+                    pool.initialize(initial_sqrt_price_x96, initial_tick);
                 }
 
                 // Add pool to cache and loaded pools list
                 loaded_pools.push(pool.clone());
-                self.pools.insert(pool.address, Arc::new(pool));
+                self.pools.insert(pool.pool_identifier, Arc::new(pool));
             }
         }
         Ok(loaded_pools)
@@ -284,7 +304,7 @@ impl BlockchainCache {
 
     /// Loads block timestamps from the database starting `from_block` number
     /// into the in-memory cache.
-    #[allow(dead_code, reason = "TODO: Under development")]
+    #[allow(dead_code)]
     async fn load_blocks(&mut self, from_block: u64) -> anyhow::Result<()> {
         if let Some(database) = &self.database {
             let block_timestamps = database
@@ -305,11 +325,11 @@ impl BlockchainCache {
             }
 
             if block_timestamps.is_empty() {
-                tracing::info!("No blocks found in database");
+                log::info!("No blocks found in database");
                 return Ok(());
             }
 
-            tracing::info!(
+            log::info!(
                 "Loading {} blocks timestamps from the cache database with last block number {}",
                 block_timestamps.len(),
                 block_timestamps.last().unwrap().number,
@@ -374,7 +394,7 @@ impl BlockchainCache {
     ///
     /// Returns an error if adding the DEX to the database fails.
     pub async fn add_dex(&mut self, dex: SharedDex) -> anyhow::Result<()> {
-        tracing::info!("Adding dex {} to the cache", dex.name);
+        log::info!("Adding dex {} to the cache", dex.name);
 
         if let Some(database) = &self.database {
             database.add_dex(dex.clone()).await?;
@@ -390,12 +410,11 @@ impl BlockchainCache {
     ///
     /// Returns an error if adding the pool to the database fails.
     pub async fn add_pool(&mut self, pool: Pool) -> anyhow::Result<()> {
-        let pool_address = pool.address;
         if let Some(database) = &self.database {
             database.add_pool(&pool).await?;
         }
 
-        self.pools.insert(pool_address, Arc::new(pool));
+        self.pools.insert(pool.pool_identifier, Arc::new(pool));
         Ok(())
     }
 
@@ -410,8 +429,13 @@ impl BlockchainCache {
         }
 
         if let Some(database) = &self.database {
-            database.add_pools_batch(&pools).await?;
+            database.add_pools_copy(self.chain.chain_id, &pools).await?;
         }
+        self.pools.extend(
+            pools
+                .into_iter()
+                .map(|pool| (pool.pool_identifier, Arc::new(pool))),
+        );
 
         Ok(())
     }
@@ -427,6 +451,38 @@ impl BlockchainCache {
         }
         self.tokens.insert(token.address, token);
         Ok(())
+    }
+
+    /// Adds multiple tokens to the cache and persists them to the database in batch if available.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if adding the tokens to the database fails.
+    pub async fn add_tokens_batch(&mut self, tokens: Vec<Token>) -> anyhow::Result<()> {
+        if tokens.is_empty() {
+            return Ok(());
+        }
+
+        if let Some(database) = &self.database {
+            database
+                .add_tokens_copy(self.chain.chain_id, &tokens)
+                .await?;
+        }
+
+        self.tokens
+            .extend(tokens.into_iter().map(|token| (token.address, token)));
+
+        Ok(())
+    }
+
+    /// Updates the in-memory token cache without persisting to the database.
+    pub fn insert_token_in_memory(&mut self, token: Token) {
+        self.tokens.insert(token.address, token);
+    }
+
+    /// Marks a token address as invalid in the in-memory cache without persisting to the database.
+    pub fn insert_invalid_token_in_memory(&mut self, address: Address) {
+        self.invalid_tokens.insert(address);
     }
 
     /// Adds an invalid token address with associated error information to the cache.
@@ -554,24 +610,86 @@ impl BlockchainCache {
         Ok(())
     }
 
-    /// Adds multiple pool positions to the cache database in a single batch operation.
+    /// Adds a batch of pool flash events to the cache.
     ///
     /// # Errors
     ///
-    /// Returns an error if adding the positions to the database fails.
-    pub async fn add_pool_positions_batch(
-        &self,
-        positions: &[(Address, PoolPosition)],
-    ) -> anyhow::Result<()> {
+    /// Returns an error if adding the flash events to the database fails.
+    pub async fn add_pool_flash_batch(&self, flash_events: &[PoolFlash]) -> anyhow::Result<()> {
         if let Some(database) = &self.database {
             database
-                .add_pool_positions_batch(self.chain.chain_id, positions)
+                .add_pool_flash_batch(self.chain.chain_id, flash_events)
                 .await?;
         }
 
         Ok(())
     }
 
+    /// Adds a pool snapshot to the cache database.
+    ///
+    /// This method saves the complete snapshot including:
+    /// - Pool state and analytics (pool_snapshot table)
+    /// - All positions at this snapshot (pool_position table)
+    /// - All ticks at this snapshot (pool_tick table)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if adding the snapshot to the database fails.
+    pub async fn add_pool_snapshot(
+        &self,
+        dex: &DexType,
+        pool_identifier: &PoolIdentifier,
+        snapshot: &PoolSnapshot,
+    ) -> anyhow::Result<()> {
+        if let Some(database) = &self.database {
+            // Save snapshot first (required for foreign key constraints)
+            database
+                .add_pool_snapshot(self.chain.chain_id, dex, pool_identifier, snapshot)
+                .await?;
+
+            let positions: Vec<(PoolIdentifier, PoolPosition)> = snapshot
+                .positions
+                .iter()
+                .map(|pos| (*pool_identifier, pos.clone()))
+                .collect();
+            if !positions.is_empty() {
+                database
+                    .add_pool_positions_batch(
+                        self.chain.chain_id,
+                        snapshot.block_position.number,
+                        snapshot.block_position.transaction_index,
+                        snapshot.block_position.log_index,
+                        &positions,
+                    )
+                    .await?;
+            }
+
+            let ticks: Vec<(PoolIdentifier, &PoolTick)> = snapshot
+                .ticks
+                .iter()
+                .map(|tick| (*pool_identifier, tick))
+                .collect();
+            if !ticks.is_empty() {
+                database
+                    .add_pool_ticks_batch(
+                        self.chain.chain_id,
+                        snapshot.block_position.number,
+                        snapshot.block_position.transaction_index,
+                        snapshot.block_position.log_index,
+                        &ticks,
+                    )
+                    .await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Updates the initial price and tick for a pool.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database update fails.
     pub async fn update_pool_initialize_price_tick(
         &mut self,
         initialize_event: &InitializeEvent,
@@ -583,12 +701,12 @@ impl BlockchainCache {
         }
 
         // Update the cached pool if it exists
-        if let Some(cached_pool) = self.pools.get(&initialize_event.pool_address) {
+        let pool_identifier = initialize_event.pool_identifier;
+        if let Some(cached_pool) = self.pools.get(&pool_identifier) {
             let mut updated_pool = (**cached_pool).clone();
-            updated_pool.initialize(initialize_event.sqrt_price_x96);
+            updated_pool.initialize(initialize_event.sqrt_price_x96, initialize_event.tick);
 
-            self.pools
-                .insert(initialize_event.pool_address, Arc::new(updated_pool));
+            self.pools.insert(pool_identifier, Arc::new(updated_pool));
         }
 
         Ok(())
@@ -608,8 +726,8 @@ impl BlockchainCache {
 
     /// Returns a reference to the pool associated with the given address.
     #[must_use]
-    pub fn get_pool(&self, address: &Address) -> Option<&SharedPool> {
-        self.pools.get(address)
+    pub fn get_pool(&self, pool_identifier: &PoolIdentifier) -> Option<&SharedPool> {
+        self.pools.get(pool_identifier)
     }
 
     /// Returns a reference to the `Token` associated with the given address.
@@ -646,15 +764,25 @@ impl BlockchainCache {
         }
     }
 
+    /// Updates the last synced block number for a pool.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database update fails.
     pub async fn update_pool_last_synced_block(
         &self,
         dex: &DexType,
-        pool_address: &Address,
+        pool_identifier: &PoolIdentifier,
         block_number: u64,
     ) -> anyhow::Result<()> {
         if let Some(database) = &self.database {
             database
-                .update_pool_last_synced_block(self.chain.chain_id, dex, pool_address, block_number)
+                .update_pool_last_synced_block(
+                    self.chain.chain_id,
+                    dex,
+                    pool_identifier,
+                    block_number,
+                )
                 .await
         } else {
             Ok(())
@@ -676,14 +804,19 @@ impl BlockchainCache {
         }
     }
 
+    /// Retrieves the last synced block number for a pool.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database query fails.
     pub async fn get_pool_last_synced_block(
         &self,
         dex: &DexType,
-        pool_address: &Address,
+        pool_identifier: &PoolIdentifier,
     ) -> anyhow::Result<Option<u64>> {
         if let Some(database) = &self.database {
             database
-                .get_pool_last_synced_block(self.chain.chain_id, dex, pool_address)
+                .get_pool_last_synced_block(self.chain.chain_id, dex, pool_identifier)
                 .await
         } else {
             Ok(None)
@@ -697,26 +830,30 @@ impl BlockchainCache {
     /// Returns an error if any of the database queries fail.
     pub async fn get_pool_event_tables_last_block(
         &self,
-        pool_address: &Address,
+        pool_identifier: &PoolIdentifier,
     ) -> anyhow::Result<Option<u64>> {
         if let Some(database) = &self.database {
             let (swaps_last_block, liquidity_last_block, collect_last_block) = tokio::try_join!(
-                database.get_table_last_block(self.chain.chain_id, "pool_swap_event", pool_address),
+                database.get_table_last_block(
+                    self.chain.chain_id,
+                    "pool_swap_event",
+                    pool_identifier
+                ),
                 database.get_table_last_block(
                     self.chain.chain_id,
                     "pool_liquidity_event",
-                    pool_address
+                    pool_identifier
                 ),
                 database.get_table_last_block(
                     self.chain.chain_id,
                     "pool_collect_event",
-                    pool_address
+                    pool_identifier
                 ),
             )?;
 
             let max_block = [swaps_last_block, liquidity_last_block, collect_last_block]
                 .into_iter()
-                .filter_map(|x| x)
+                .flatten()
                 .max();
             Ok(max_block)
         } else {

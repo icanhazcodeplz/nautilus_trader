@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -13,9 +13,7 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
-use std::collections::HashMap;
-
-use nautilus_core::python::{IntoPyObjectNautilusExt, to_pyvalue_err};
+use nautilus_core::python::{IntoPyObjectNautilusExt, to_pyruntime_err, to_pyvalue_err};
 use pyo3::{basic::CompareOp, prelude::*, types::PyDict};
 
 use crate::{
@@ -120,8 +118,8 @@ impl CashAccount {
     }
 
     #[pyo3(name = "balances_total")]
-    fn py_balances_total(&self) -> HashMap<Currency, Money> {
-        self.balances_total()
+    fn py_balances_total(&self) -> std::collections::HashMap<Currency, Money> {
+        self.balances_total().into_iter().collect()
     }
 
     #[pyo3(name = "balance_free")]
@@ -131,8 +129,8 @@ impl CashAccount {
     }
 
     #[pyo3(name = "balances_free")]
-    fn py_balances_free(&self) -> HashMap<Currency, Money> {
-        self.balances_free()
+    fn py_balances_free(&self) -> std::collections::HashMap<Currency, Money> {
+        self.balances_free().into_iter().collect()
     }
 
     #[pyo3(name = "balance_locked")]
@@ -141,13 +139,13 @@ impl CashAccount {
         self.balance_locked(currency)
     }
     #[pyo3(name = "balances_locked")]
-    fn py_balances_locked(&self) -> HashMap<Currency, Money> {
-        self.balances_locked()
+    fn py_balances_locked(&self) -> std::collections::HashMap<Currency, Money> {
+        self.balances_locked().into_iter().collect()
     }
 
     #[pyo3(name = "apply")]
-    fn py_apply(&mut self, event: AccountState) {
-        self.apply(event);
+    fn py_apply(&mut self, event: AccountState) -> PyResult<()> {
+        self.apply(event).map_err(to_pyruntime_err)
     }
 
     #[pyo3(name = "calculate_balance_locked")]

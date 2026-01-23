@@ -1,5 +1,5 @@
 # -------------------------------------------------------------------------------------------------
-#  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+#  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 #  https://nautechsystems.io
 #
 #  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -41,6 +41,9 @@ def get_bitmex_http_client(
     retry_delay_ms: int | None = None,
     retry_delay_max_ms: int | None = None,
     recv_window_ms: int | None = None,
+    max_requests_per_second: int | None = None,
+    max_requests_per_minute: int | None = None,
+    proxy_url: str | None = None,
 ) -> nautilus_pyo3.BitmexHttpClient:
     """
     Cache and return a BitMEX HTTP client with the given key and secret.
@@ -69,6 +72,12 @@ def get_bitmex_http_client(
         The maximum delay in milliseconds between retry attempts.
     recv_window_ms : int, optional
         The expiration window in milliseconds for signed requests.
+    max_requests_per_second : int, optional
+        Maximum REST burst rate (requests per second).
+    max_requests_per_minute : int, optional
+        Maximum REST rolling rate (requests per minute).
+    proxy_url : str, optional
+        The proxy URL for HTTP requests.
 
     Returns
     -------
@@ -85,6 +94,9 @@ def get_bitmex_http_client(
         retry_delay_ms=retry_delay_ms,
         retry_delay_max_ms=retry_delay_max_ms,
         recv_window_ms=recv_window_ms,
+        max_requests_per_second=max_requests_per_second,
+        max_requests_per_minute=max_requests_per_minute,
+        proxy_url=proxy_url,
     )
 
 
@@ -165,6 +177,9 @@ class BitmexLiveDataClientFactory(LiveDataClientFactory):
             retry_delay_ms=config.retry_delay_initial_ms,
             retry_delay_max_ms=config.retry_delay_max_ms,
             recv_window_ms=config.recv_window_ms,
+            max_requests_per_second=config.max_requests_per_second,
+            max_requests_per_minute=config.max_requests_per_minute,
+            proxy_url=config.http_proxy_url,
         )
 
         provider = get_bitmex_instrument_provider(
@@ -232,6 +247,9 @@ class BitmexLiveExecClientFactory(LiveExecClientFactory):
             retry_delay_ms=config.retry_delay_initial_ms,
             retry_delay_max_ms=config.retry_delay_max_ms,
             recv_window_ms=config.recv_window_ms,
+            max_requests_per_second=config.max_requests_per_second,
+            max_requests_per_minute=config.max_requests_per_minute,
+            proxy_url=config.http_proxy_url,
         )
 
         provider = get_bitmex_instrument_provider(

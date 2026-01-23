@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -13,17 +13,22 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
-//! Conversion helpers that translate Bybit API schemas into Nautilus instruments.
+//! Conversion functions that translate Bybit API schemas into Nautilus instruments.
 
 use std::{convert::TryFrom, str::FromStr};
 
 use anyhow::Context;
-use nautilus_core::{datetime::NANOSECONDS_IN_MILLISECOND, nanos::UnixNanos};
+pub use nautilus_core::serialization::{
+    deserialize_decimal_or_zero, deserialize_optional_decimal,
+    deserialize_optional_decimal_or_zero, deserialize_string_to_u8,
+};
+use nautilus_core::{UUID4, datetime::NANOSECONDS_IN_MILLISECOND, nanos::UnixNanos};
 use nautilus_model::{
-    data::{Bar, BarType, TradeTick},
+    data::{Bar, BarType, BookOrder, OrderBookDelta, OrderBookDeltas, TradeTick},
     enums::{
-        AccountType, AggressorSide, AssetClass, BarAggregation, CurrencyType, LiquiditySide,
-        OptionKind, OrderSide, OrderStatus, OrderType, PositionSideSpecified, TimeInForce,
+        AccountType, AggressorSide, AssetClass, BarAggregation, BookAction, LiquiditySide,
+        OptionKind, OrderSide, OrderStatus, OrderType, PositionSideSpecified, RecordFlag,
+        TimeInForce, TriggerType,
     },
     events::account::state::AccountState,
     identifiers::{AccountId, ClientOrderId, InstrumentId, Symbol, TradeId, Venue, VenueOrderId},
@@ -40,56 +45,46 @@ use ustr::Ustr;
 
 use crate::{
     common::{
-        enums::{BybitContractType, BybitOptionType, BybitProductType},
+        enums::{
+            BybitContractType, BybitKlineInterval, BybitOptionType, BybitOrderSide,
+            BybitOrderStatus, BybitOrderType, BybitPositionSide, BybitProductType,
+            BybitStopOrderType, BybitTimeInForce, BybitTriggerDirection,
+        },
         symbol::BybitSymbol,
     },
     http::models::{
         BybitExecution, BybitFeeRate, BybitInstrumentInverse, BybitInstrumentLinear,
-        BybitInstrumentOption, BybitInstrumentSpot, BybitKline, BybitPosition, BybitTrade,
-        BybitWalletBalance,
+        BybitInstrumentOption, BybitInstrumentSpot, BybitKline, BybitOrderbookResult,
+        BybitPosition, BybitTrade, BybitWalletBalance,
     },
+    websocket::parse::parse_millis_i64,
 };
 
 const BYBIT_MINUTE_INTERVALS: &[u64] = &[1, 3, 5, 15, 30, 60, 120, 240, 360, 720];
 const BYBIT_HOUR_INTERVALS: &[u64] = &[1, 2, 4, 6, 12];
 
 /// Extracts the raw symbol from a Bybit symbol by removing the product type suffix.
-///
-/// # Examples
-/// ```ignore
-/// assert_eq!(extract_raw_symbol("ETHUSDT-LINEAR"), "ETHUSDT");
-/// assert_eq!(extract_raw_symbol("BTCUSDT-SPOT"), "BTCUSDT");
-/// assert_eq!(extract_raw_symbol("ETHUSDT"), "ETHUSDT"); // No suffix
-/// ```
 #[must_use]
 pub fn extract_raw_symbol(symbol: &str) -> &str {
-    symbol
-        .rsplit_once('-')
-        .map(|(prefix, _)| prefix)
-        .unwrap_or(symbol)
+    symbol.rsplit_once('-').map_or(symbol, |(prefix, _)| prefix)
 }
 
 /// Constructs a full Bybit symbol from a raw symbol and product type.
 ///
 /// Returns a `Ustr` for efficient string interning and comparisons.
-///
-/// # Examples
-/// ```ignore
-/// let symbol = make_bybit_symbol("ETHUSDT", BybitProductType::Linear);
-/// assert_eq!(symbol.as_str(), "ETHUSDT-LINEAR");
-/// ```
 #[must_use]
-pub fn make_bybit_symbol(raw_symbol: &str, product_type: BybitProductType) -> Ustr {
+pub fn make_bybit_symbol<S: AsRef<str>>(raw_symbol: S, product_type: BybitProductType) -> Ustr {
+    let raw = raw_symbol.as_ref();
     let suffix = match product_type {
         BybitProductType::Spot => "-SPOT",
         BybitProductType::Linear => "-LINEAR",
         BybitProductType::Inverse => "-INVERSE",
         BybitProductType::Option => "-OPTION",
     };
-    Ustr::from(&format!("{raw_symbol}{suffix}"))
+    Ustr::from(&format!("{raw}{suffix}"))
 }
 
-/// Converts a Nautilus bar aggregation and step to a Bybit kline interval string.
+/// Converts a Nautilus bar aggregation and step to a Bybit kline interval.
 ///
 /// Bybit supported intervals: 1, 3, 5, 15, 30, 60, 120, 240, 360, 720 (minutes), D, W, M
 ///
@@ -99,46 +94,54 @@ pub fn make_bybit_symbol(raw_symbol: &str, product_type: BybitProductType) -> Us
 pub fn bar_spec_to_bybit_interval(
     aggregation: BarAggregation,
     step: u64,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<BybitKlineInterval> {
     match aggregation {
-        BarAggregation::Minute => {
-            if !BYBIT_MINUTE_INTERVALS.contains(&step) {
-                anyhow::bail!(
-                    "Bybit only supports the following minute intervals: {:?}",
-                    BYBIT_MINUTE_INTERVALS
-                );
-            }
-            Ok(step.to_string())
-        }
-        BarAggregation::Hour => {
-            if !BYBIT_HOUR_INTERVALS.contains(&step) {
-                anyhow::bail!(
-                    "Bybit only supports the following hour intervals: {:?}",
-                    BYBIT_HOUR_INTERVALS
-                );
-            }
-            Ok((step * 60).to_string())
-        }
+        BarAggregation::Minute => match step {
+            1 => Ok(BybitKlineInterval::Minute1),
+            3 => Ok(BybitKlineInterval::Minute3),
+            5 => Ok(BybitKlineInterval::Minute5),
+            15 => Ok(BybitKlineInterval::Minute15),
+            30 => Ok(BybitKlineInterval::Minute30),
+            // Bybit normalizes minute intervals ≥60 to hour intervals
+            60 => Ok(BybitKlineInterval::Hour1),
+            120 => Ok(BybitKlineInterval::Hour2),
+            240 => Ok(BybitKlineInterval::Hour4),
+            360 => Ok(BybitKlineInterval::Hour6),
+            720 => Ok(BybitKlineInterval::Hour12),
+            _ => anyhow::bail!(
+                "Bybit only supports the following minute intervals: {BYBIT_MINUTE_INTERVALS:?}"
+            ),
+        },
+        BarAggregation::Hour => match step {
+            1 => Ok(BybitKlineInterval::Hour1),
+            2 => Ok(BybitKlineInterval::Hour2),
+            4 => Ok(BybitKlineInterval::Hour4),
+            6 => Ok(BybitKlineInterval::Hour6),
+            12 => Ok(BybitKlineInterval::Hour12),
+            _ => anyhow::bail!(
+                "Bybit only supports the following hour intervals: {BYBIT_HOUR_INTERVALS:?}"
+            ),
+        },
         BarAggregation::Day => {
             if step != 1 {
                 anyhow::bail!("Bybit only supports 1 DAY interval bars");
             }
-            Ok("D".to_string())
+            Ok(BybitKlineInterval::Day1)
         }
         BarAggregation::Week => {
             if step != 1 {
                 anyhow::bail!("Bybit only supports 1 WEEK interval bars");
             }
-            Ok("W".to_string())
+            Ok(BybitKlineInterval::Week1)
         }
         BarAggregation::Month => {
             if step != 1 {
                 anyhow::bail!("Bybit only supports 1 MONTH interval bars");
             }
-            Ok("M".to_string())
+            Ok(BybitKlineInterval::Month1)
         }
         _ => {
-            anyhow::bail!("Bybit does not support {:?} bars", aggregation);
+            anyhow::bail!("Bybit does not support {aggregation:?} bars");
         }
     }
 }
@@ -214,6 +217,18 @@ pub fn parse_linear_instrument(
     ts_event: UnixNanos,
     ts_init: UnixNanos,
 ) -> anyhow::Result<InstrumentAny> {
+    // Validate required fields
+    anyhow::ensure!(
+        !definition.base_coin.is_empty(),
+        "base_coin is empty for symbol '{}'",
+        definition.symbol
+    );
+    anyhow::ensure!(
+        !definition.quote_coin.is_empty(),
+        "quote_coin is empty for symbol '{}'",
+        definition.symbol
+    );
+
     let base_currency = get_currency(definition.base_coin.as_str());
     let quote_currency = get_currency(definition.quote_coin.as_str());
     let settlement_currency = resolve_settlement_currency(
@@ -328,6 +343,18 @@ pub fn parse_inverse_instrument(
     ts_event: UnixNanos,
     ts_init: UnixNanos,
 ) -> anyhow::Result<InstrumentAny> {
+    // Validate required fields
+    anyhow::ensure!(
+        !definition.base_coin.is_empty(),
+        "base_coin is empty for symbol '{}'",
+        definition.symbol
+    );
+    anyhow::ensure!(
+        !definition.quote_coin.is_empty(),
+        "quote_coin is empty for symbol '{}'",
+        definition.symbol
+    );
+
     let base_currency = get_currency(definition.base_coin.as_str());
     let quote_currency = get_currency(definition.quote_coin.as_str());
     let settlement_currency = resolve_settlement_currency(
@@ -483,7 +510,7 @@ pub fn parse_option_instrument(
         raw_symbol,
         AssetClass::Cryptocurrency,
         None,
-        Ustr::from(definition.base_coin.as_str()),
+        definition.base_coin,
         option_kind,
         strike_price,
         quote_currency,
@@ -533,6 +560,85 @@ pub fn parse_trade_tick(
         ts_init,
     )
     .context("failed to construct TradeTick from Bybit trade payload")
+}
+
+/// Parses an order book response into [`OrderBookDeltas`].
+pub fn parse_orderbook(
+    result: &BybitOrderbookResult,
+    instrument: &InstrumentAny,
+    ts_init: UnixNanos,
+) -> anyhow::Result<OrderBookDeltas> {
+    let ts_event = parse_millis_i64(result.ts, "orderbook.timestamp")?;
+
+    let instrument_id = instrument.id();
+    let price_precision = instrument.price_precision();
+    let size_precision = instrument.size_precision();
+    let update_id = u64::try_from(result.u)
+        .context("received negative update id in Bybit order book message")?;
+    let sequence = u64::try_from(result.seq)
+        .context("received negative sequence in Bybit order book message")?;
+
+    let total_levels = result.b.len() + result.a.len();
+    let mut deltas = Vec::with_capacity(total_levels + 1);
+
+    let mut clear = OrderBookDelta::clear(instrument_id, sequence, ts_event, ts_init);
+    if total_levels == 0 {
+        clear.flags |= RecordFlag::F_LAST as u8;
+    }
+    deltas.push(clear);
+
+    let mut processed = 0_usize;
+
+    let mut push_level = |values: &[String], side: OrderSide| -> anyhow::Result<()> {
+        let (price, size) = parse_book_level(values, price_precision, size_precision, "orderbook")?;
+
+        processed += 1;
+        let mut flags = RecordFlag::F_MBP as u8;
+        if processed == total_levels {
+            flags |= RecordFlag::F_LAST as u8;
+        }
+
+        let order = BookOrder::new(side, price, size, update_id);
+        let delta = OrderBookDelta::new_checked(
+            instrument_id,
+            BookAction::Add,
+            order,
+            flags,
+            sequence,
+            ts_event,
+            ts_init,
+        )
+        .context("failed to construct OrderBookDelta from Bybit book level")?;
+        deltas.push(delta);
+        Ok(())
+    };
+
+    for level in &result.b {
+        push_level(level, OrderSide::Buy)?;
+    }
+    for level in &result.a {
+        push_level(level, OrderSide::Sell)?;
+    }
+
+    OrderBookDeltas::new_checked(instrument_id, deltas)
+        .context("failed to assemble OrderBookDeltas from Bybit message")
+}
+
+pub fn parse_book_level(
+    level: &[String],
+    price_precision: u8,
+    size_precision: u8,
+    label: &str,
+) -> anyhow::Result<(Price, Quantity)> {
+    let price_str = level
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("missing price component in {label} level"))?;
+    let size_str = level
+        .get(1)
+        .ok_or_else(|| anyhow::anyhow!("missing size component in {label} level"))?;
+    let price = parse_price_with_precision(price_str, price_precision, label)?;
+    let size = parse_quantity_with_precision(size_str, size_precision, label)?;
+    Ok((price, size))
 }
 
 /// Parses a kline entry into a [`Bar`].
@@ -611,7 +717,8 @@ pub fn parse_fill_report(
         .exec_fee
         .parse::<f64>()
         .with_context(|| format!("Failed to parse execFee='{}'", execution.exec_fee))?;
-    let commission = Money::new(-fee_f64, Currency::from(execution.fee_currency.as_str()));
+    let currency = get_currency(&execution.fee_currency);
+    let commission = Money::new(-fee_f64, currency);
 
     // Determine liquidity side from is_maker flag
     let liquidity_side = if execution.is_maker {
@@ -671,15 +778,15 @@ pub fn parse_position_status_report(
 
     // Determine position side and quantity
     let (position_side, quantity) = match position.side {
-        crate::common::enums::BybitPositionSide::Buy => {
+        BybitPositionSide::Buy => {
             let qty = Quantity::new(size_f64, instrument.size_precision());
             (PositionSideSpecified::Long, qty)
         }
-        crate::common::enums::BybitPositionSide::Sell => {
+        BybitPositionSide::Sell => {
             let qty = Quantity::new(size_f64, instrument.size_precision());
             (PositionSideSpecified::Short, qty)
         }
-        crate::common::enums::BybitPositionSide::Flat => {
+        BybitPositionSide::Flat => {
             let qty = Quantity::new(0.0, instrument.size_precision());
             (PositionSideSpecified::Flat, qty)
         }
@@ -692,8 +799,12 @@ pub fn parse_position_status_report(
         Some(Decimal::from_str(&position.avg_price)?)
     };
 
-    // Parse timestamps
-    let ts_last = parse_millis_timestamp(&position.updated_time, "position.updatedTime")?;
+    // Use ts_init if updatedTime is empty (initial/flat positions)
+    let ts_last = if position.updated_time.is_empty() {
+        ts_init
+    } else {
+        parse_millis_timestamp(&position.updated_time, "position.updatedTime")?
+    };
 
     Ok(PositionStatusReport::new(
         account_id,
@@ -722,52 +833,32 @@ pub fn parse_account_state(
 ) -> anyhow::Result<AccountState> {
     let mut balances = Vec::new();
 
-    // Parse each coin balance
     for coin in &wallet_balance.coin {
-        let currency = Currency::from_str(&coin.coin)?;
+        let total_dec = coin.wallet_balance - coin.spot_borrow;
+        let locked_dec = coin.locked;
 
-        let total_f64 = if coin.wallet_balance.is_empty() {
-            0.0
-        } else {
-            coin.wallet_balance.parse::<f64>()?
-        };
-
-        let locked_f64 = if coin.locked.is_empty() {
-            0.0
-        } else {
-            coin.locked.parse::<f64>()?
-        };
-
-        let total = Money::new(total_f64, currency);
-        let locked = Money::new(locked_f64, currency);
-
-        // Calculate free balance
-        let free = if total.raw >= locked.raw {
-            Money::from_raw(total.raw - locked.raw, currency)
-        } else {
-            Money::new(0.0, currency)
-        };
+        let currency = get_currency(&coin.coin);
+        let total = Money::from_decimal(total_dec, currency)?;
+        let locked = Money::from_decimal(locked_dec, currency)?;
+        let free = Money::from_raw(total.raw - locked.raw, currency);
 
         balances.push(AccountBalance::new(total, locked, free));
     }
 
     let mut margins = Vec::new();
 
-    // Parse margin balances for each coin with position margin data
     for coin in &wallet_balance.coin {
-        let currency = Currency::from_str(&coin.coin)?;
-
-        let initial_margin_f64 = if coin.total_position_im.is_empty() {
-            0.0
-        } else {
-            coin.total_position_im.parse::<f64>()?
+        let initial_margin_f64 = match &coin.total_position_im {
+            Some(im) if !im.is_empty() => im.parse::<f64>()?,
+            _ => 0.0,
         };
 
-        let maintenance_margin_f64 = if coin.total_position_mm.is_empty() {
-            0.0
-        } else {
-            coin.total_position_mm.parse::<f64>()?
+        let maintenance_margin_f64 = match &coin.total_position_mm {
+            Some(mm) if !mm.is_empty() => mm.parse::<f64>()?,
+            _ => 0.0,
         };
+
+        let currency = get_currency(&coin.coin);
 
         // Only create margin balance if there are actual margin requirements
         if initial_margin_f64 > 0.0 || maintenance_margin_f64 > 0.0 {
@@ -790,7 +881,7 @@ pub fn parse_account_state(
 
     let account_type = AccountType::Margin;
     let is_reported = true;
-    let event_id = nautilus_core::uuid::UUID4::new();
+    let event_id = UUID4::new();
 
     // Use current time as ts_event since Bybit doesn't provide this in wallet balance
     let ts_event = ts_init;
@@ -875,9 +966,12 @@ fn resolve_settlement_currency(
     }
 }
 
-fn get_currency(code: &str) -> Currency {
-    Currency::try_from_str(code)
-        .unwrap_or_else(|| Currency::new(code, 8, 0, code, CurrencyType::Crypto))
+/// Returns a currency from the internal map or creates a new crypto currency.
+///
+/// Uses [`Currency::get_or_create_crypto`] to handle unknown currency codes,
+/// which automatically registers newly listed Bybit assets.
+pub fn get_currency(code: &str) -> Currency {
+    Currency::get_or_create_crypto(code)
 }
 
 fn extract_strike_from_symbol(symbol: &str) -> anyhow::Result<Price> {
@@ -892,20 +986,93 @@ fn extract_strike_from_symbol(symbol: &str) -> anyhow::Result<Price> {
 pub fn parse_order_status_report(
     order: &crate::http::models::BybitOrder,
     instrument: &InstrumentAny,
-    account_id: nautilus_model::identifiers::AccountId,
+    account_id: AccountId,
     ts_init: UnixNanos,
-) -> anyhow::Result<nautilus_model::reports::OrderStatusReport> {
-    use crate::common::enums::{BybitOrderStatus, BybitOrderType, BybitTimeInForce};
-
+) -> anyhow::Result<OrderStatusReport> {
     let instrument_id = instrument.id();
     let venue_order_id = VenueOrderId::new(order.order_id);
 
     let order_side: OrderSide = order.side.into();
 
-    let order_type: OrderType = match order.order_type {
-        BybitOrderType::Market => OrderType::Market,
-        BybitOrderType::Limit => OrderType::Limit,
-        BybitOrderType::Unknown => OrderType::Limit,
+    // Bybit represents conditional orders using orderType + stopOrderType + triggerDirection + side
+    let order_type: OrderType = match (
+        order.order_type,
+        order.stop_order_type,
+        order.trigger_direction,
+        order.side,
+    ) {
+        (BybitOrderType::Market, BybitStopOrderType::None | BybitStopOrderType::Unknown, _, _) => {
+            OrderType::Market
+        }
+        (BybitOrderType::Limit, BybitStopOrderType::None | BybitStopOrderType::Unknown, _, _) => {
+            OrderType::Limit
+        }
+
+        (
+            BybitOrderType::Market,
+            BybitStopOrderType::Stop,
+            BybitTriggerDirection::RisesTo,
+            BybitOrderSide::Buy,
+        ) => OrderType::StopMarket,
+        (
+            BybitOrderType::Market,
+            BybitStopOrderType::Stop,
+            BybitTriggerDirection::FallsTo,
+            BybitOrderSide::Buy,
+        ) => OrderType::MarketIfTouched,
+
+        (
+            BybitOrderType::Market,
+            BybitStopOrderType::Stop,
+            BybitTriggerDirection::FallsTo,
+            BybitOrderSide::Sell,
+        ) => OrderType::StopMarket,
+        (
+            BybitOrderType::Market,
+            BybitStopOrderType::Stop,
+            BybitTriggerDirection::RisesTo,
+            BybitOrderSide::Sell,
+        ) => OrderType::MarketIfTouched,
+
+        (
+            BybitOrderType::Limit,
+            BybitStopOrderType::Stop,
+            BybitTriggerDirection::RisesTo,
+            BybitOrderSide::Buy,
+        ) => OrderType::StopLimit,
+        (
+            BybitOrderType::Limit,
+            BybitStopOrderType::Stop,
+            BybitTriggerDirection::FallsTo,
+            BybitOrderSide::Buy,
+        ) => OrderType::LimitIfTouched,
+
+        (
+            BybitOrderType::Limit,
+            BybitStopOrderType::Stop,
+            BybitTriggerDirection::FallsTo,
+            BybitOrderSide::Sell,
+        ) => OrderType::StopLimit,
+        (
+            BybitOrderType::Limit,
+            BybitStopOrderType::Stop,
+            BybitTriggerDirection::RisesTo,
+            BybitOrderSide::Sell,
+        ) => OrderType::LimitIfTouched,
+
+        // triggerDirection=None means regular order with TP/SL attached, not a standalone conditional order
+        (BybitOrderType::Market, BybitStopOrderType::Stop, BybitTriggerDirection::None, _) => {
+            OrderType::Market
+        }
+        (BybitOrderType::Limit, BybitStopOrderType::Stop, BybitTriggerDirection::None, _) => {
+            OrderType::Limit
+        }
+
+        // TP/SL stopOrderTypes are attached to positions, not standalone conditional orders
+        (BybitOrderType::Market, _, _, _) => OrderType::Market,
+        (BybitOrderType::Limit, _, _, _) => OrderType::Limit,
+
+        (BybitOrderType::Unknown, _, _, _) => OrderType::Limit,
     };
 
     let time_in_force: TimeInForce = match order.time_in_force {
@@ -913,20 +1080,6 @@ pub fn parse_order_status_report(
         BybitTimeInForce::Ioc => TimeInForce::Ioc,
         BybitTimeInForce::Fok => TimeInForce::Fok,
         BybitTimeInForce::PostOnly => TimeInForce::Gtc,
-    };
-
-    let order_status: OrderStatus = match order.order_status {
-        BybitOrderStatus::Created | BybitOrderStatus::New | BybitOrderStatus::Untriggered => {
-            OrderStatus::Accepted
-        }
-        BybitOrderStatus::Rejected => OrderStatus::Rejected,
-        BybitOrderStatus::PartiallyFilled => OrderStatus::PartiallyFilled,
-        BybitOrderStatus::Filled => OrderStatus::Filled,
-        BybitOrderStatus::Canceled | BybitOrderStatus::PartiallyFilledCanceled => {
-            OrderStatus::Canceled
-        }
-        BybitOrderStatus::Triggered => OrderStatus::Triggered,
-        BybitOrderStatus::Deactivated => OrderStatus::Canceled,
     };
 
     let quantity =
@@ -937,6 +1090,31 @@ pub fn parse_order_status_report(
         instrument.size_precision(),
         "order.cumExecQty",
     )?;
+
+    // Map Bybit order status to Nautilus order status
+    // Special case: if Bybit reports "Rejected" but the order has fills, treat it as Canceled.
+    // This handles the case where the exchange partially fills an order then rejects the
+    // remaining quantity (e.g., due to margin, risk limits, or liquidity constraints).
+    // The state machine does not allow PARTIALLY_FILLED -> REJECTED transitions.
+    let order_status: OrderStatus = match order.order_status {
+        BybitOrderStatus::Created | BybitOrderStatus::New | BybitOrderStatus::Untriggered => {
+            OrderStatus::Accepted
+        }
+        BybitOrderStatus::Rejected => {
+            if filled_qty.is_positive() {
+                OrderStatus::Canceled
+            } else {
+                OrderStatus::Rejected
+            }
+        }
+        BybitOrderStatus::PartiallyFilled => OrderStatus::PartiallyFilled,
+        BybitOrderStatus::Filled => OrderStatus::Filled,
+        BybitOrderStatus::Canceled | BybitOrderStatus::PartiallyFilledCanceled => {
+            OrderStatus::Canceled
+        }
+        BybitOrderStatus::Triggered => OrderStatus::Triggered,
+        BybitOrderStatus::Deactivated => OrderStatus::Canceled,
+    };
 
     let ts_accepted = parse_millis_timestamp(&order.created_time, "order.createdTime")?;
     let ts_last = parse_millis_timestamp(&order.updated_time, "order.updatedTime")?;
@@ -955,7 +1133,7 @@ pub fn parse_order_status_report(
         ts_accepted,
         ts_last,
         ts_init,
-        Some(nautilus_core::uuid::UUID4::new()),
+        Some(UUID4::new()),
     );
 
     if !order.order_link_id.is_empty() {
@@ -975,7 +1153,7 @@ pub fn parse_order_status_report(
         let avg_px = avg_price
             .parse::<f64>()
             .with_context(|| format!("Failed to parse avg_price='{avg_price}' as f64"))?;
-        report = report.with_avg_px(avg_px);
+        report = report.with_avg_px(avg_px)?;
     }
 
     if !order.trigger_price.is_empty() && order.trigger_price != "0" {
@@ -985,14 +1163,14 @@ pub fn parse_order_status_report(
             "order.triggerPrice",
         )?;
         report = report.with_trigger_price(trigger_price);
+
+        // Set trigger_type for conditional orders
+        let trigger_type: TriggerType = order.trigger_by.into();
+        report = report.with_trigger_type(trigger_type);
     }
 
     Ok(report)
 }
-
-////////////////////////////////////////////////////////////////////////////////
-// Tests
-////////////////////////////////////////////////////////////////////////////////
 
 #[cfg(test)]
 mod tests {
@@ -1166,10 +1344,7 @@ mod tests {
         // Get the short position (ETHUSDT, side="Sell", size="5.0")
         let short_position = &response.result.list[1];
         assert_eq!(short_position.symbol.as_str(), "ETHUSDT");
-        assert_eq!(
-            short_position.side,
-            crate::common::enums::BybitPositionSide::Sell
-        );
+        assert_eq!(short_position.side, BybitPositionSide::Sell);
 
         // Create ETHUSDT instrument for parsing
         let eth_json = load_test_json("http_get_instruments_linear.json");
@@ -1192,5 +1367,96 @@ mod tests {
             Some(Decimal::try_from(3000.00).unwrap())
         );
         assert_eq!(report.ts_last, UnixNanos::new(1_697_673_700_112_000_000));
+    }
+
+    #[rstest]
+    fn parse_http_order_partially_filled_rejected_maps_to_canceled() {
+        use crate::http::models::BybitOrderHistoryResponse;
+
+        let instrument = linear_instrument();
+        let json = load_test_json("http_get_order_partially_filled_rejected.json");
+        let response: BybitOrderHistoryResponse = serde_json::from_str(&json).unwrap();
+        let order = &response.result.list[0];
+        let account_id = AccountId::new("BYBIT-001");
+
+        let report = parse_order_status_report(order, &instrument, account_id, TS).unwrap();
+
+        // Verify that Bybit "Rejected" status with fills is mapped to Canceled, not Rejected
+        assert_eq!(report.order_status, OrderStatus::Canceled);
+        assert_eq!(report.filled_qty, instrument.make_qty(0.005, None));
+        assert_eq!(
+            report.client_order_id.as_ref().unwrap().to_string(),
+            "O-20251001-164609-APEX-000-49"
+        );
+    }
+
+    #[rstest]
+    #[case(BarAggregation::Minute, 1, BybitKlineInterval::Minute1)]
+    #[case(BarAggregation::Minute, 3, BybitKlineInterval::Minute3)]
+    #[case(BarAggregation::Minute, 5, BybitKlineInterval::Minute5)]
+    #[case(BarAggregation::Minute, 15, BybitKlineInterval::Minute15)]
+    #[case(BarAggregation::Minute, 30, BybitKlineInterval::Minute30)]
+    #[case(BarAggregation::Minute, 60, BybitKlineInterval::Hour1)]
+    #[case(BarAggregation::Minute, 120, BybitKlineInterval::Hour2)]
+    #[case(BarAggregation::Minute, 240, BybitKlineInterval::Hour4)]
+    #[case(BarAggregation::Minute, 360, BybitKlineInterval::Hour6)]
+    #[case(BarAggregation::Minute, 720, BybitKlineInterval::Hour12)]
+    fn test_bar_spec_to_bybit_interval_minutes(
+        #[case] aggregation: BarAggregation,
+        #[case] step: u64,
+        #[case] expected: BybitKlineInterval,
+    ) {
+        let result = bar_spec_to_bybit_interval(aggregation, step).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    #[case(BarAggregation::Hour, 1, BybitKlineInterval::Hour1)]
+    #[case(BarAggregation::Hour, 2, BybitKlineInterval::Hour2)]
+    #[case(BarAggregation::Hour, 4, BybitKlineInterval::Hour4)]
+    #[case(BarAggregation::Hour, 6, BybitKlineInterval::Hour6)]
+    #[case(BarAggregation::Hour, 12, BybitKlineInterval::Hour12)]
+    fn test_bar_spec_to_bybit_interval_hours(
+        #[case] aggregation: BarAggregation,
+        #[case] step: u64,
+        #[case] expected: BybitKlineInterval,
+    ) {
+        let result = bar_spec_to_bybit_interval(aggregation, step).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    #[case(BarAggregation::Day, 1, BybitKlineInterval::Day1)]
+    #[case(BarAggregation::Week, 1, BybitKlineInterval::Week1)]
+    #[case(BarAggregation::Month, 1, BybitKlineInterval::Month1)]
+    fn test_bar_spec_to_bybit_interval_day_week_month(
+        #[case] aggregation: BarAggregation,
+        #[case] step: u64,
+        #[case] expected: BybitKlineInterval,
+    ) {
+        let result = bar_spec_to_bybit_interval(aggregation, step).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    #[case(BarAggregation::Minute, 2)]
+    #[case(BarAggregation::Minute, 10)]
+    #[case(BarAggregation::Hour, 3)]
+    #[case(BarAggregation::Hour, 24)]
+    #[case(BarAggregation::Day, 2)]
+    #[case(BarAggregation::Week, 2)]
+    #[case(BarAggregation::Month, 2)]
+    fn test_bar_spec_to_bybit_interval_unsupported_steps(
+        #[case] aggregation: BarAggregation,
+        #[case] step: u64,
+    ) {
+        let result = bar_spec_to_bybit_interval(aggregation, step);
+        assert!(result.is_err());
+    }
+
+    #[rstest]
+    fn test_bar_spec_to_bybit_interval_unsupported_aggregation() {
+        let result = bar_spec_to_bybit_interval(BarAggregation::Second, 1);
+        assert!(result.is_err());
     }
 }

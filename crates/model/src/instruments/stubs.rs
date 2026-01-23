@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -39,11 +39,11 @@ impl Default for SyntheticInstrument {
         let btc_binance = InstrumentId::from("BTC.BINANCE");
         let ltc_binance = InstrumentId::from("LTC.BINANCE");
         let formula = "(BTC.BINANCE + LTC.BINANCE) / 2.0".to_string();
-        SyntheticInstrument::new(
+        Self::new(
             Symbol::new("BTC-LTC"),
             2,
             vec![btc_binance, ltc_binance],
-            formula.clone(),
+            formula,
             0.into(),
             0.into(),
         )
@@ -614,7 +614,7 @@ pub fn option_spread() -> OptionSpread {
 #[fixture]
 pub fn betting() -> BettingInstrument {
     let raw_symbol = Symbol::new("1-123456789");
-    let id = InstrumentId::from(format!("{raw_symbol}.BETFAIR").as_str());
+    let id = InstrumentId::from(format!("{raw_symbol}.BETFAIR"));
     let event_type_id = 6423;
     let event_type_name = Ustr::from("American Football");
     let competition_id = 12282733;

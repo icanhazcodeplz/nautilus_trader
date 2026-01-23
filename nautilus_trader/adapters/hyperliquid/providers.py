@@ -1,5 +1,5 @@
 # -------------------------------------------------------------------------------------------------
-#  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+#  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 #  https://nautechsystems.io
 #
 #  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -16,9 +16,9 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import TYPE_CHECKING
 from typing import Any
 
-from nautilus_trader._libnautilus.hyperliquid import HyperliquidHttpClient
 from nautilus_trader.adapters.hyperliquid.constants import HYPERLIQUID_VENUE
 from nautilus_trader.adapters.hyperliquid.enums import DEFAULT_PRODUCT_TYPES
 from nautilus_trader.adapters.hyperliquid.enums import HyperliquidProductType
@@ -29,6 +29,12 @@ from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.instruments import CryptoPerpetual
 from nautilus_trader.model.instruments import CurrencyPair
 from nautilus_trader.model.instruments import Instrument
+from nautilus_trader.model.instruments import instruments_from_pyo3
+
+
+if TYPE_CHECKING:
+    # PyO3 types from Rust (temporary namespace qualification)
+    HyperliquidHttpClient = Any  # nautilus_pyo3.HyperliquidHttpClient (stub not yet available)
 
 
 class HyperliquidInstrumentProvider(InstrumentProvider):
@@ -59,16 +65,22 @@ class HyperliquidInstrumentProvider(InstrumentProvider):
         self._product_types = resolved_types
 
         self._loaded_instruments: dict[InstrumentId, Instrument] = {}
+        self._instruments_pyo3: list[Any] = []
 
     # ---------------------------------------------------------------------
     # Public helpers
     # ---------------------------------------------------------------------
 
-    def instruments_pyo3(self) -> list[Instrument]:
+    def instruments_pyo3(self) -> list[Any]:
         """
-        Return the cached PyO3 instruments (mostly for debugging/testing).
+        Return the cached PyO3 instruments (for WebSocket client).
+
+        Returns
+        -------
+        list[nautilus_pyo3.Instrument]
+
         """
-        return list(self._loaded_instruments.values())
+        return self._instruments_pyo3
 
     # ---------------------------------------------------------------------
     # InstrumentProvider interface
@@ -87,9 +99,7 @@ class HyperliquidInstrumentProvider(InstrumentProvider):
 
         loaded, skipped = self._ingest_instruments(instruments, filters)
 
-        if loaded:
-            self._log.info(f"Loaded {loaded} instruments for venue {HYPERLIQUID_VENUE.value}")
-        else:
+        if not loaded:
             self._log.warning("No Hyperliquid instruments matched the requested filters")
 
         if skipped:
@@ -97,21 +107,29 @@ class HyperliquidInstrumentProvider(InstrumentProvider):
 
     async def _load_instruments(self) -> list[Instrument]:
         try:
-            return await self._client.load_instrument_definitions(
+            pyo3_instruments = await self._client.load_instrument_definitions(
                 include_perp=HyperliquidProductType.PERP in self._product_types,
                 include_spot=HyperliquidProductType.SPOT in self._product_types,
             )
+            # Store PyO3 instruments for WebSocket client
+            self._instruments_pyo3 = pyo3_instruments
+            # Convert PyO3 instruments to Python (Cython) instruments
+            # This is necessary because the data engine expects Python instruments
+            instruments = instruments_from_pyo3(pyo3_instruments)
+            return instruments
         except AttributeError:  # method missing (old wheel?)
             self._log.error("HyperliquidHttpClient is missing load_instrument_definitions")
             raise
-        except Exception as exc:  # pragma: no cover - defensive logging
-            self._log.exception("Failed to fetch Hyperliquid instrument metadata", exc)
+        except Exception as e:  # pragma: no cover - defensive logging
+            self._log.exception("Failed to fetch Hyperliquid instrument metadata", e)
             raise
 
     def _reset_caches(self) -> None:
         self._instruments.clear()
         self._currencies.clear()
         self._loaded_instruments.clear()
+        # NOTE: Do NOT clear _instruments_pyo3 - it's needed by WebSocket client
+        # and was freshly populated by _load_instruments() just before this call
 
     def _ingest_instruments(
         self,
@@ -149,9 +167,7 @@ class HyperliquidInstrumentProvider(InstrumentProvider):
             return HyperliquidProductType.SPOT
 
         self._log.warning(
-            "Ignoring Hyperliquid instrument %s (unsupported type %s)",
-            instrument.id.value,
-            type(instrument).__name__,
+            f"Ignoring Hyperliquid instrument {instrument.id.value} (unsupported type {type(instrument).__name__})",
         )
         return None
 
@@ -192,10 +208,6 @@ class HyperliquidInstrumentProvider(InstrumentProvider):
         PyCondition.not_none(instrument_id, "instrument_id")
         await self.load_ids_async([instrument_id], filters)
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
     def _accept_instrument(
         self,
         instrument: Instrument,
@@ -234,7 +246,4 @@ class HyperliquidInstrumentProvider(InstrumentProvider):
 
         symbol_value = getattr(getattr(instrument, "symbol", None), "value", None)
         symbols = _normalize(filters.get("symbols"))
-        if symbols and (not symbol_value or symbol_value.upper() not in symbols):
-            return False
-
-        return True
+        return not (symbols and (not symbol_value or symbol_value.upper() not in symbols))

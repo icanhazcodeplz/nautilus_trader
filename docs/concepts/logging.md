@@ -20,22 +20,22 @@ Infrastructure such as [Vector](https://github.com/vectordotdev/vector) can be i
 Logging can be configured by importing the `LoggingConfig` object.
 By default, log events with an 'INFO' `LogLevel` and higher are written to stdout/stderr.
 
-Log level (`LogLevel`) values include (and generally match Rust's `tracing` level filters).
+Log level (`LogLevel`) values include the following (matching standard log level conventions).
 
-Python loggers expose the following levels:
+The following log levels are supported:
 
-- `OFF`
-- `TRACE` (can be set as a filter level, but not directly generated from Python)
-- `DEBUG`
-- `INFO`
-- `WARNING`
-- `ERROR`
+- `OFF` - Disable logging.
+- `TRACE` - Most verbose; only emitted by Rust components (cannot be generated from Python).
+- `DEBUG` - Detailed diagnostic information.
+- `INFO` - General operational messages.
+- `WARNING` - Potential issues that don't prevent operation.
+- `ERROR` - Errors that may affect functionality.
 
-:::warning
-The Python `Logger` does not provide a `trace()` method; `TRACE` level logs are only emitted by the underlying Rust components and cannot be generated directly from Python code. However, you can set `TRACE` as a logging level filter to see trace logs from Rust components.
+:::tip
+You can set `TRACE` as a filter level to capture trace logs from Rust components, even though Python code cannot emit them directly.
+:::
 
 See the `LoggingConfig` [API Reference](../api_reference/config.md#class-loggingconfig) for further details.
-:::
 
 Logging can be configured in the following ways:
 
@@ -61,7 +61,12 @@ Log messages are written to the console via stdout/stderr writers. The minimum l
 
 Log files are written to the current working directory by default. The naming convention and rotation behavior are configurable and follow specific patterns based on your settings.
 
-You can specify a custom log directory using `log_directory` and/or a custom file basename using `log_file_name`. Log files are always suffixed with `.log` (plain text) or `.json` (JSON).
+You can specify a custom log directory using `log_directory` and/or a custom file basename using `log_file_name`.
+
+**Log file formats:**
+
+- `None` (default) - Plain text format with `.log` extension.
+- `"json"` - JSON format with `.json` extension, useful for log aggregation tools.
 
 For detailed information about log file naming conventions and rotation behavior, see the [Log file rotation](#log-file-rotation) and [Log file naming convention](#log-file-naming-convention) sections below.
 
@@ -77,6 +82,7 @@ Rotation behavior depends on both the presence of a size limit and whether a cus
   - At each UTC date change (midnight), the current log file is closed and a new one is started, creating one file per UTC day.
 - **No rotation**:
   - When a custom `log_file_name` is provided without a `log_file_max_size`, logs continue to append to the same file.
+  - Note: Size-based rotation takes precedence - if both a custom name and size limit are provided, rotation still occurs.
 - **Backup file management**:
   - Controlled by the `log_file_max_backup_count` parameter (default: 5), limiting the total number of rotated files kept.
   - When this limit is exceeded, the oldest backup files are automatically removed.
@@ -139,6 +145,32 @@ config_node = TradingNodeConfig(
 
 For backtesting, the `BacktestEngineConfig` class can be used instead of `TradingNodeConfig`, as the same options are available.
 
+### Environment variable configuration
+
+The `NAUTILUS_LOG` environment variable provides an alternative way to configure logging using a semicolon-separated spec string. This is useful for Rust-only binaries or when you want to override logging settings without modifying code.
+
+```bash
+export NAUTILUS_LOG="stdout=Info;fileout=Debug;RiskEngine=Error;is_colored"
+```
+
+**Supported keys:**
+
+| Key                   | Type      | Description                                      |
+|-----------------------|-----------|--------------------------------------------------|
+| `stdout`              | Log level | Maximum level for stdout output.                 |
+| `fileout`             | Log level | Maximum level for file output.                   |
+| `is_colored`          | Flag      | Enable ANSI colors (default: true).              |
+| `print_config`        | Flag      | Print config to stdout at startup.               |
+| `log_components_only` | Flag      | Only log components with explicit filters.       |
+| `<Component>`         | Log level | Component-specific level (exact match).          |
+| `<module::path>`      | Log level | Module-specific level (prefix match, Rust only). |
+
+Flags are enabled by their presence in the spec string (no value needed). Log levels are case-insensitive: `Off`, `Trace`, `Debug`, `Info`, `Warning` (or `Warn`), `Error`.
+
+:::note
+For Rust-only binaries, setting `NAUTILUS_LOG` enables lazy initialization of the logging subsystem on first use, without requiring explicit `init_logging()` calls.
+:::
+
 ### Components-only logging
 
 When focusing on a subset of noisy systems, enable `log_components_only` to log messages only from components explicitly listed in `log_component_levels`. All other components are suppressed regardless of the global `log_level` or file level.
@@ -161,6 +193,25 @@ If configuring via the environment using the Rust spec string, include `log_comp
 ```bash
 export NAUTILUS_LOG="stdout=Info;log_components_only;RiskEngine=Debug;Portfolio=Info"
 ```
+
+### Module path filtering (Rust only)
+
+When using the `NAUTILUS_LOG` environment variable, you can filter by Rust module paths in addition to component names. Keys containing `::` are treated as module path filters with prefix matching, while keys without `::` are component filters with exact matching.
+
+```bash
+# Filter all adapters to Warn, but allow Debug for OKX specifically
+export NAUTILUS_LOG="stdout=Info;nautilus_okx=Warn;nautilus_okx::websocket=Debug"
+```
+
+The longest matching prefix takes precedence. In the example above, `nautilus_okx::websocket::handler` would use the `Debug` level (longer prefix), while `nautilus_okx::data` would use `Warn`.
+
+:::tip
+Rust log macros automatically capture the module path when no explicit component is provided. This enables module-level filtering to work seamlessly with standard logging calls.
+:::
+
+:::note
+Module path filtering is only available via the `NAUTILUS_LOG` environment variable. The Python `log_component_levels` configuration uses component name matching only.
+:::
 
 :::warning
 If `log_components_only=True` (or `log_components_only` is present in the spec string) and `log_component_levels` is empty, no log messages will be emitted to stdout/stderr or files. Add at least one component filter or disable components-only logging.
@@ -193,7 +244,7 @@ logger = Logger("MyLogger")
 ```
 
 :::info
-See the `init_logging` [API Reference](../api_reference/common) for further details.
+See the `init_logging` [API Reference](../api_reference/common.md) for further details.
 :::
 
 :::warning
@@ -212,13 +263,13 @@ The logging system uses reference counting to track active `LogGuard` instances:
 - **Counter increments**: When a new `LogGuard` is created, an atomic counter is incremented.
 - **Counter decrements**: When a `LogGuard` is dropped, the counter is decremented.
 - **Logging thread termination**: When the counter reaches zero (last `LogGuard` dropped), the logging thread is properly joined to ensure all pending log messages are written before the process terminates.
-- **Maximum guards**: The system supports up to 255 concurrent `LogGuard` instances. Attempting to create more will cause a panic.
+- **Maximum guards**: The system supports up to 255 concurrent `LogGuard` instances. Attempting to create more raises a `RuntimeError`.
 
 This mechanism ensures that:
 
-1. Log messages are never lost due to premature thread termination.
+1. `LogGuard` keeps the logging thread alive and flushes on drop; abrupt termination (crashes, kill signals) can still lose buffered logs.
 2. The logging thread remains active as long as any `LogGuard` exists.
-3. All buffered logs are properly flushed to their destinations when the program ends.
+3. On graceful shutdown, all buffered logs are properly flushed to their destinations.
 
 ### Why use LogGuard?
 
@@ -263,7 +314,7 @@ for i in range(number_of_backtests):
 ### Steps
 
 - **Initialize LogGuard once**: The `LogGuard` is obtained from the first engine (`engine.get_log_guard()`) and is retained throughout the process. This ensures that the logging subsystem remains active.
-- **Dispose engines safely**: Each engine is safely disposed of after its backtest completes, without affecting the logging subsystem.
+- **Dispose engines safely**: Each engine is safely disposed of after its backtest completes. The `LogGuard` remains valid after `engine.dispose()` - only the engine is cleaned up, not the logging subsystem.
 - **Reuse LogGuard**: The same `LogGuard` instance is reused for subsequent engines, preventing the logging subsystem from shutting down prematurely.
 
 ### Considerations
@@ -284,3 +335,7 @@ interpreter shutdown has begun, this join may not complete, resulting in truncat
 
 This issue is tracked in GitHub [issue #3027](https://github.com/nautechsystems/nautilus_trader/issues/3027).
 A more deterministic shutdown mechanism is under consideration.
+
+## Related guides
+
+- [Architecture](architecture.md) - System architecture including logging infrastructure.

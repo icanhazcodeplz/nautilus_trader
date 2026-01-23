@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -25,7 +25,10 @@ use nautilus_core::{
         serialization::{from_dict_pyo3, to_dict_pyo3},
         to_pyvalue_err,
     },
-    serialization::Serializable,
+    serialization::{
+        Serializable,
+        msgpack::{FromMsgPack, ToMsgPack},
+    },
 };
 use pyo3::{prelude::*, pyclass::CompareOp, types::PyDict};
 
@@ -77,6 +80,22 @@ impl BarSpecification {
     #[pyo3(name = "fully_qualified_name")]
     fn py_fully_qualified_name() -> String {
         format!("{}:{}", PY_MODULE_MODEL, stringify!(BarSpecification))
+    }
+
+    #[getter]
+    #[pyo3(name = "timedelta")]
+    fn py_timedelta(&self) -> PyResult<chrono::TimeDelta> {
+        match self.aggregation {
+            BarAggregation::Millisecond
+            | BarAggregation::Second
+            | BarAggregation::Minute
+            | BarAggregation::Hour
+            | BarAggregation::Day => Ok(self.timedelta()),
+            _ => Err(to_pyvalue_err(format!(
+                "Timedelta not supported for aggregation type: {:?}",
+                self.aggregation
+            ))),
+        }
     }
 }
 
@@ -166,6 +185,11 @@ impl BarType {
     fn py_composite(&self) -> Self {
         self.composite()
     }
+
+    #[pyo3(name = "id_spec_key")]
+    fn py_id_spec_key(&self) -> (InstrumentId, BarSpecification) {
+        self.id_spec_key()
+    }
 }
 
 impl Bar {
@@ -177,7 +201,7 @@ impl Bar {
     pub fn from_pyobject(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
         let bar_type_obj: Bound<'_, PyAny> = obj.getattr("bar_type")?.extract()?;
         let bar_type_str: String = bar_type_obj.call_method0("__str__")?.extract()?;
-        let bar_type = BarType::from(bar_type_str.as_str());
+        let bar_type = BarType::from(bar_type_str);
 
         let open_py: Bound<'_, PyAny> = obj.getattr("open")?;
         let price_prec: u8 = open_py.getattr("precision")?.extract()?;
@@ -405,9 +429,6 @@ impl Bar {
     }
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// Tests
-////////////////////////////////////////////////////////////////////////////////
 #[cfg(test)]
 mod tests {
     use nautilus_core::python::IntoPyObjectNautilusExt;

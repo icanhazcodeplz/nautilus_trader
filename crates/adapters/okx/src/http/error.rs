@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -20,8 +20,7 @@
 //! The types below mirror that structure and are reused across the entire
 //! crate.
 
-use nautilus_network::http::HttpClientError;
-use reqwest::StatusCode;
+use nautilus_network::http::{HttpClientError, StatusCode};
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -81,6 +80,9 @@ pub enum OKXHttpError {
     /// Parameter validation error.
     #[error("Parameter validation error: {0}")]
     ValidationError(String),
+    /// Request was canceled, typically due to shutdown or disconnect.
+    #[error("Request canceled: {0}")]
+    Canceled(String),
     /// Wrapping the underlying HttpClientError from the network crate.
     #[error("Network error: {0}")]
     HttpClientError(#[from] HttpClientError),
@@ -91,7 +93,7 @@ pub enum OKXHttpError {
 
 impl From<String> for OKXHttpError {
     fn from(error: String) -> Self {
-        OKXHttpError::ValidationError(error)
+        Self::ValidationError(error)
     }
 }
 
@@ -99,6 +101,6 @@ impl From<String> for OKXHttpError {
 // client implementation by converting them into our typed error.
 impl From<serde_json::Error> for OKXHttpError {
     fn from(error: serde_json::Error) -> Self {
-        OKXHttpError::JsonError(error.to_string())
+        Self::JsonError(error.to_string())
     }
 }

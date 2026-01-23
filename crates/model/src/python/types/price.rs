@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -20,15 +20,8 @@ use std::{
     str::FromStr,
 };
 
-use nautilus_core::python::{
-    IntoPyObjectNautilusExt, get_pytype_name, to_pytype_err, to_pyvalue_err,
-};
-use pyo3::{
-    conversion::IntoPyObjectExt,
-    prelude::*,
-    pyclass::CompareOp,
-    types::{PyFloat, PyTuple},
-};
+use nautilus_core::python::{get_pytype_name, to_pytype_err, to_pyvalue_err};
+use pyo3::{basic::CompareOp, conversion::IntoPyObjectExt, prelude::*, types::PyFloat};
 use rust_decimal::{Decimal, RoundingStrategy};
 
 #[cfg(not(feature = "high-precision"))]
@@ -44,26 +37,47 @@ impl Price {
         Self::new_checked(value, precision).map_err(to_pyvalue_err)
     }
 
-    fn __setstate__(&mut self, state: &Bound<'_, PyAny>) -> PyResult<()> {
-        let py_tuple: &Bound<'_, PyTuple> = state.downcast::<PyTuple>()?;
-        self.raw = py_tuple.get_item(0)?.extract::<PriceRaw>()?;
-        self.precision = py_tuple.get_item(1)?.extract::<u8>()?;
-        Ok(())
-    }
-
-    fn __getstate__(&self, py: Python) -> PyResult<Py<PyAny>> {
-        (self.raw, self.precision).into_py_any(py)
-    }
-
     fn __reduce__(&self, py: Python) -> PyResult<Py<PyAny>> {
-        let safe_constructor = py.get_type::<Self>().getattr("_safe_constructor")?;
-        let state = self.__getstate__(py)?;
-        (safe_constructor, PyTuple::empty(py), state).into_py_any(py)
+        let from_raw = py.get_type::<Self>().getattr("from_raw")?;
+        let args = (self.raw, self.precision).into_py_any(py)?;
+        (from_raw, args).into_py_any(py)
     }
 
-    #[staticmethod]
-    fn _safe_constructor() -> PyResult<Self> {
-        Ok(Self::zero(0)) // Safe default
+    fn __richcmp__(
+        &self,
+        other: &Bound<'_, PyAny>,
+        op: CompareOp,
+        py: Python<'_>,
+    ) -> PyResult<Py<PyAny>> {
+        if let Ok(other_price) = other.extract::<Self>() {
+            let result = match op {
+                CompareOp::Eq => self.eq(&other_price),
+                CompareOp::Ne => self.ne(&other_price),
+                CompareOp::Ge => self.ge(&other_price),
+                CompareOp::Gt => self.gt(&other_price),
+                CompareOp::Le => self.le(&other_price),
+                CompareOp::Lt => self.lt(&other_price),
+            };
+            result.into_py_any(py)
+        } else if let Ok(other_dec) = other.extract::<Decimal>() {
+            let result = match op {
+                CompareOp::Eq => self.as_decimal() == other_dec,
+                CompareOp::Ne => self.as_decimal() != other_dec,
+                CompareOp::Ge => self.as_decimal() >= other_dec,
+                CompareOp::Gt => self.as_decimal() > other_dec,
+                CompareOp::Le => self.as_decimal() <= other_dec,
+                CompareOp::Lt => self.as_decimal() < other_dec,
+            };
+            result.into_py_any(py)
+        } else {
+            Ok(py.NotImplemented())
+        }
+    }
+
+    fn __hash__(&self) -> isize {
+        let mut h = DefaultHasher::new();
+        self.hash(&mut h);
+        h.finish() as isize
     }
 
     fn __add__(&self, other: &Bound<'_, PyAny>, py: Python) -> PyResult<Py<PyAny>> {
@@ -71,7 +85,7 @@ impl Price {
             let other_float: f64 = other.extract()?;
             (self.as_f64() + other_float).into_py_any(py)
         } else if let Ok(other_price) = other.extract::<Self>() {
-            (self.as_decimal() + other_price.as_decimal()).into_py_any(py)
+            (*self + other_price).into_py_any(py)
         } else if let Ok(other_dec) = other.extract::<Decimal>() {
             (self.as_decimal() + other_dec).into_py_any(py)
         } else {
@@ -87,7 +101,7 @@ impl Price {
             let other_float: f64 = other.extract()?;
             (other_float + self.as_f64()).into_py_any(py)
         } else if let Ok(other_price) = other.extract::<Self>() {
-            (other_price.as_decimal() + self.as_decimal()).into_py_any(py)
+            (other_price + *self).into_py_any(py)
         } else if let Ok(other_dec) = other.extract::<Decimal>() {
             (other_dec + self.as_decimal()).into_py_any(py)
         } else {
@@ -103,7 +117,7 @@ impl Price {
             let other_float: f64 = other.extract()?;
             (self.as_f64() - other_float).into_py_any(py)
         } else if let Ok(other_price) = other.extract::<Self>() {
-            (self.as_decimal() - other_price.as_decimal()).into_py_any(py)
+            (*self - other_price).into_py_any(py)
         } else if let Ok(other_dec) = other.extract::<Decimal>() {
             (self.as_decimal() - other_dec).into_py_any(py)
         } else {
@@ -119,7 +133,7 @@ impl Price {
             let other_float: f64 = other.extract()?;
             (other_float - self.as_f64()).into_py_any(py)
         } else if let Ok(other_price) = other.extract::<Self>() {
-            (other_price.as_decimal() - self.as_decimal()).into_py_any(py)
+            (other_price - *self).into_py_any(py)
         } else if let Ok(other_dec) = other.extract::<Decimal>() {
             (other_dec - self.as_decimal()).into_py_any(py)
         } else {
@@ -290,36 +304,6 @@ impl Price {
             .round_dp_with_strategy(ndigits.unwrap_or(0), RoundingStrategy::MidpointNearestEven)
     }
 
-    fn __richcmp__(&self, other: Py<PyAny>, op: CompareOp, py: Python<'_>) -> Py<PyAny> {
-        if let Ok(other_price) = other.extract::<Self>(py) {
-            match op {
-                CompareOp::Eq => self.eq(&other_price).into_py_any_unwrap(py),
-                CompareOp::Ne => self.ne(&other_price).into_py_any_unwrap(py),
-                CompareOp::Ge => self.ge(&other_price).into_py_any_unwrap(py),
-                CompareOp::Gt => self.gt(&other_price).into_py_any_unwrap(py),
-                CompareOp::Le => self.le(&other_price).into_py_any_unwrap(py),
-                CompareOp::Lt => self.lt(&other_price).into_py_any_unwrap(py),
-            }
-        } else if let Ok(other_dec) = other.extract::<Decimal>(py) {
-            match op {
-                CompareOp::Eq => (self.as_decimal() == other_dec).into_py_any_unwrap(py),
-                CompareOp::Ne => (self.as_decimal() != other_dec).into_py_any_unwrap(py),
-                CompareOp::Ge => (self.as_decimal() >= other_dec).into_py_any_unwrap(py),
-                CompareOp::Gt => (self.as_decimal() > other_dec).into_py_any_unwrap(py),
-                CompareOp::Le => (self.as_decimal() <= other_dec).into_py_any_unwrap(py),
-                CompareOp::Lt => (self.as_decimal() < other_dec).into_py_any_unwrap(py),
-            }
-        } else {
-            py.NotImplemented()
-        }
-    }
-
-    fn __hash__(&self) -> isize {
-        let mut h = DefaultHasher::new();
-        self.hash(&mut h);
-        h.finish() as isize
-    }
-
     fn __repr__(&self) -> String {
         format!("{self:?}")
     }
@@ -361,6 +345,18 @@ impl Price {
     #[pyo3(name = "from_str")]
     fn py_from_str(value: &str) -> PyResult<Self> {
         Self::from_str(value).map_err(to_pyvalue_err)
+    }
+
+    #[staticmethod]
+    #[pyo3(name = "from_decimal")]
+    fn py_from_decimal(decimal: Decimal) -> PyResult<Self> {
+        Self::from_decimal(decimal).map_err(to_pyvalue_err)
+    }
+
+    #[staticmethod]
+    #[pyo3(name = "from_decimal_dp")]
+    fn py_from_decimal_dp(decimal: Decimal, precision: u8) -> PyResult<Self> {
+        Self::from_decimal_dp(decimal, precision).map_err(to_pyvalue_err)
     }
 
     #[pyo3(name = "is_zero")]

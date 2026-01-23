@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -98,7 +98,7 @@ impl MarketIfTouchedOrder {
     #[staticmethod]
     #[pyo3(name = "create")]
     fn py_create(init: OrderInitialized) -> PyResult<Self> {
-        Ok(MarketIfTouchedOrder::from(init))
+        Ok(Self::from(init))
     }
 
     #[staticmethod]
@@ -147,6 +147,6 @@ impl MarketIfTouchedOrder {
     #[pyo3(name = "apply")]
     fn py_apply(&mut self, event: Py<PyAny>, py: Python<'_>) -> PyResult<()> {
         let event_any = pyobject_to_order_event(py, event).unwrap();
-        self.apply(event_any).map(|_| ()).map_err(to_pyruntime_err)
+        self.apply(event_any).map_err(to_pyruntime_err)
     }
 }

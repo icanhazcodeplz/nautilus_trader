@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -19,17 +19,14 @@ use std::str::FromStr;
 
 use nautilus_core::{UnixNanos, time::get_atomic_clock_realtime, uuid::UUID4};
 use nautilus_model::{
-    currencies::CURRENCY_MAP,
     data::{Bar, BarType, TradeTick},
-    enums::{
-        ContingencyType, CurrencyType, OrderSide, OrderStatus, OrderType, TimeInForce, TriggerType,
-    },
+    enums::{ContingencyType, OrderSide, OrderStatus, OrderType, TimeInForce, TriggerType},
     identifiers::{AccountId, ClientOrderId, OrderListId, Symbol, TradeId, VenueOrderId},
     instruments::{CryptoFuture, CryptoPerpetual, CurrencyPair, Instrument, InstrumentAny},
     reports::{FillReport, OrderStatusReport, PositionStatusReport},
     types::{Currency, Money, Price, Quantity, fixed::FIXED_PRECISION},
 };
-use rust_decimal::{Decimal, prelude::FromPrimitive};
+use rust_decimal::Decimal;
 use ustr::Ustr;
 use uuid::Uuid;
 
@@ -37,7 +34,7 @@ use super::models::{
     BitmexExecution, BitmexInstrument, BitmexOrder, BitmexPosition, BitmexTrade, BitmexTradeBin,
 };
 use crate::common::{
-    enums::{BitmexExecInstruction, BitmexExecType, BitmexInstrumentType},
+    enums::{BitmexExecInstruction, BitmexExecType, BitmexInstrumentState, BitmexInstrumentType},
     parse::{
         clean_reason, convert_contract_quantity, derive_contract_decimal_and_increment,
         map_bitmex_currency, normalize_trade_bin_prices, normalize_trade_bin_volume,
@@ -46,6 +43,29 @@ use crate::common::{
         parse_signed_contracts_quantity,
     },
 };
+
+/// Result of attempting to parse a BitMEX instrument.
+#[derive(Debug)]
+pub enum InstrumentParseResult {
+    /// Successfully parsed into a Nautilus instrument.
+    Ok(Box<InstrumentAny>),
+    /// Instrument type is not yet supported (intentionally skipped).
+    Unsupported {
+        symbol: String,
+        instrument_type: BitmexInstrumentType,
+    },
+    /// Instrument is not tradeable (delisted, settled, unlisted).
+    Inactive {
+        symbol: String,
+        state: BitmexInstrumentState,
+    },
+    /// Failed to parse due to an error.
+    Failed {
+        symbol: String,
+        instrument_type: BitmexInstrumentType,
+        error: String,
+    },
+}
 
 /// Returns the appropriate position multiplier for a BitMEX instrument.
 ///
@@ -67,61 +87,89 @@ fn get_position_multiplier(definition: &BitmexInstrument) -> Option<f64> {
 pub fn parse_instrument_any(
     instrument: &BitmexInstrument,
     ts_init: UnixNanos,
-) -> Option<InstrumentAny> {
+) -> InstrumentParseResult {
+    let symbol = instrument.symbol.to_string();
+    let instrument_type = instrument.instrument_type;
+
+    match instrument.state {
+        BitmexInstrumentState::Open | BitmexInstrumentState::Closed => {}
+        state @ (BitmexInstrumentState::Unlisted
+        | BitmexInstrumentState::Settled
+        | BitmexInstrumentState::Delisted) => {
+            return InstrumentParseResult::Inactive { symbol, state };
+        }
+    }
+
     match instrument.instrument_type {
-        BitmexInstrumentType::Spot => parse_spot_instrument(instrument, ts_init)
-            .map_err(|e| {
-                tracing::warn!("Failed to parse spot instrument {}: {e}", instrument.symbol);
-                e
-            })
-            .ok(),
+        BitmexInstrumentType::Spot => match parse_spot_instrument(instrument, ts_init) {
+            Ok(inst) => InstrumentParseResult::Ok(Box::new(inst)),
+            Err(e) => InstrumentParseResult::Failed {
+                symbol,
+                instrument_type,
+                error: e.to_string(),
+            },
+        },
         BitmexInstrumentType::PerpetualContract | BitmexInstrumentType::PerpetualContractFx => {
             // Handle both crypto and FX perpetuals the same way
-            parse_perpetual_instrument(instrument, ts_init)
-                .map_err(|e| {
-                    tracing::warn!(
-                        "Failed to parse perpetual instrument {}: {e}",
-                        instrument.symbol,
-                    );
-                    e
-                })
-                .ok()
+            match parse_perpetual_instrument(instrument, ts_init) {
+                Ok(inst) => InstrumentParseResult::Ok(Box::new(inst)),
+                Err(e) => InstrumentParseResult::Failed {
+                    symbol,
+                    instrument_type,
+                    error: e.to_string(),
+                },
+            }
         }
-        BitmexInstrumentType::Futures => parse_futures_instrument(instrument, ts_init)
-            .map_err(|e| {
-                tracing::warn!(
-                    "Failed to parse futures instrument {}: {e}",
-                    instrument.symbol,
-                );
-                e
-            })
-            .ok(),
+        BitmexInstrumentType::Futures => match parse_futures_instrument(instrument, ts_init) {
+            Ok(inst) => InstrumentParseResult::Ok(Box::new(inst)),
+            Err(e) => InstrumentParseResult::Failed {
+                symbol,
+                instrument_type,
+                error: e.to_string(),
+            },
+        },
+        BitmexInstrumentType::PredictionMarket => {
+            // Prediction markets work similarly to futures (bounded 0-100, cash settled)
+            match parse_futures_instrument(instrument, ts_init) {
+                Ok(inst) => InstrumentParseResult::Ok(Box::new(inst)),
+                Err(e) => InstrumentParseResult::Failed {
+                    symbol,
+                    instrument_type,
+                    error: e.to_string(),
+                },
+            }
+        }
         BitmexInstrumentType::BasketIndex
         | BitmexInstrumentType::CryptoIndex
         | BitmexInstrumentType::FxIndex
         | BitmexInstrumentType::LendingIndex
-        | BitmexInstrumentType::VolatilityIndex => {
+        | BitmexInstrumentType::VolatilityIndex
+        | BitmexInstrumentType::StockIndex
+        | BitmexInstrumentType::YieldIndex => {
             // Parse index instruments as perpetuals for cache purposes
             // They need to be in cache for WebSocket price updates
-            parse_index_instrument(instrument, ts_init)
-                .map_err(|e| {
-                    tracing::warn!(
-                        "Failed to parse index instrument {}: {}",
-                        instrument.symbol,
-                        e
-                    );
-                    e
-                })
-                .ok()
+            match parse_index_instrument(instrument, ts_init) {
+                Ok(inst) => InstrumentParseResult::Ok(Box::new(inst)),
+                Err(e) => InstrumentParseResult::Failed {
+                    symbol,
+                    instrument_type,
+                    error: e.to_string(),
+                },
+            }
         }
-        _ => {
-            tracing::warn!(
-                "Unsupported instrument type {:?} for symbol {}",
-                instrument.instrument_type,
-                instrument.symbol
-            );
-            None
-        }
+
+        // Explicitly list unsupported types for clarity
+        BitmexInstrumentType::StockPerpetual
+        | BitmexInstrumentType::CallOption
+        | BitmexInstrumentType::PutOption
+        | BitmexInstrumentType::SwapRate
+        | BitmexInstrumentType::ReferenceBasket
+        | BitmexInstrumentType::LegacyFutures
+        | BitmexInstrumentType::LegacyFuturesN
+        | BitmexInstrumentType::FuturesSpreads => InstrumentParseResult::Unsupported {
+            symbol,
+            instrument_type,
+        },
     }
 }
 
@@ -186,8 +234,8 @@ pub fn parse_spot_instrument(
 ) -> anyhow::Result<InstrumentAny> {
     let instrument_id = parse_instrument_id(definition.symbol);
     let raw_symbol = Symbol::new(definition.symbol);
-    let base_currency = get_currency(definition.underlying.to_uppercase());
-    let quote_currency = get_currency(definition.quote_currency.to_uppercase());
+    let base_currency = get_currency(&definition.underlying.to_uppercase());
+    let quote_currency = get_currency(&definition.quote_currency.to_uppercase());
 
     let price_increment = Price::from(definition.tick_size.to_string());
 
@@ -204,22 +252,22 @@ pub fn parse_spot_instrument(
 
     let taker_fee = definition
         .taker_fee
-        .and_then(|fee| Decimal::from_str(&fee.to_string()).ok())
+        .and_then(|fee| Decimal::try_from(fee).ok())
         .unwrap_or(Decimal::ZERO);
     let maker_fee = definition
         .maker_fee
-        .and_then(|fee| Decimal::from_str(&fee.to_string()).ok())
+        .and_then(|fee| Decimal::try_from(fee).ok())
         .unwrap_or(Decimal::ZERO);
 
     let margin_init = definition
         .init_margin
         .as_ref()
-        .and_then(|margin| Decimal::from_str(&margin.to_string()).ok())
+        .and_then(|margin| Decimal::try_from(*margin).ok())
         .unwrap_or(Decimal::ZERO);
     let margin_maint = definition
         .maint_margin
         .as_ref()
-        .and_then(|margin| Decimal::from_str(&margin.to_string()).ok())
+        .and_then(|margin| Decimal::try_from(*margin).ok())
         .unwrap_or(Decimal::ZERO);
 
     let lot_size =
@@ -277,9 +325,9 @@ pub fn parse_perpetual_instrument(
 ) -> anyhow::Result<InstrumentAny> {
     let instrument_id = parse_instrument_id(definition.symbol);
     let raw_symbol = Symbol::new(definition.symbol);
-    let base_currency = get_currency(definition.underlying.to_uppercase());
-    let quote_currency = get_currency(definition.quote_currency.to_uppercase());
-    let settlement_currency = get_currency(definition.settl_currency.as_ref().map_or_else(
+    let base_currency = get_currency(&definition.underlying.to_uppercase());
+    let quote_currency = get_currency(&definition.quote_currency.to_uppercase());
+    let settlement_currency = get_currency(&definition.settl_currency.as_ref().map_or_else(
         || definition.quote_currency.to_uppercase(),
         |s| s.to_uppercase(),
     ));
@@ -296,22 +344,22 @@ pub fn parse_perpetual_instrument(
 
     let taker_fee = definition
         .taker_fee
-        .and_then(|fee| Decimal::from_str(&fee.to_string()).ok())
+        .and_then(|fee| Decimal::try_from(fee).ok())
         .unwrap_or(Decimal::ZERO);
     let maker_fee = definition
         .maker_fee
-        .and_then(|fee| Decimal::from_str(&fee.to_string()).ok())
+        .and_then(|fee| Decimal::try_from(fee).ok())
         .unwrap_or(Decimal::ZERO);
 
     let margin_init = definition
         .init_margin
         .as_ref()
-        .and_then(|margin| Decimal::from_str(&margin.to_string()).ok())
+        .and_then(|margin| Decimal::try_from(*margin).ok())
         .unwrap_or(Decimal::ZERO);
     let margin_maint = definition
         .maint_margin
         .as_ref()
-        .and_then(|margin| Decimal::from_str(&margin.to_string()).ok())
+        .and_then(|margin| Decimal::try_from(*margin).ok())
         .unwrap_or(Decimal::ZERO);
 
     // TODO: How to handle negative multipliers?
@@ -372,9 +420,9 @@ pub fn parse_futures_instrument(
 ) -> anyhow::Result<InstrumentAny> {
     let instrument_id = parse_instrument_id(definition.symbol);
     let raw_symbol = Symbol::new(definition.symbol);
-    let underlying = get_currency(definition.underlying.to_uppercase());
-    let quote_currency = get_currency(definition.quote_currency.to_uppercase());
-    let settlement_currency = get_currency(definition.settl_currency.as_ref().map_or_else(
+    let underlying = get_currency(&definition.underlying.to_uppercase());
+    let quote_currency = get_currency(&definition.quote_currency.to_uppercase());
+    let settlement_currency = get_currency(&definition.settl_currency.as_ref().map_or_else(
         || definition.quote_currency.to_uppercase(),
         |s| s.to_uppercase(),
     ));
@@ -384,8 +432,7 @@ pub fn parse_futures_instrument(
     let activation_ns = definition
         .listing
         .as_ref()
-        .map(|dt| UnixNanos::from(*dt))
-        .unwrap_or(ts_event);
+        .map_or(ts_event, |dt| UnixNanos::from(*dt));
     let expiration_ns = parse_optional_datetime_to_unix_nanos(&definition.expiry, "expiry");
     let price_increment = Price::from(definition.tick_size.to_string());
 
@@ -398,22 +445,22 @@ pub fn parse_futures_instrument(
 
     let taker_fee = definition
         .taker_fee
-        .and_then(|fee| Decimal::from_str(&fee.to_string()).ok())
+        .and_then(|fee| Decimal::try_from(fee).ok())
         .unwrap_or(Decimal::ZERO);
     let maker_fee = definition
         .maker_fee
-        .and_then(|fee| Decimal::from_str(&fee.to_string()).ok())
+        .and_then(|fee| Decimal::try_from(fee).ok())
         .unwrap_or(Decimal::ZERO);
 
     let margin_init = definition
         .init_margin
         .as_ref()
-        .and_then(|margin| Decimal::from_str(&margin.to_string()).ok())
+        .and_then(|margin| Decimal::try_from(*margin).ok())
         .unwrap_or(Decimal::ZERO);
     let margin_maint = definition
         .maint_margin
         .as_ref()
-        .and_then(|margin| Decimal::from_str(&margin.to_string()).ok())
+        .and_then(|margin| Decimal::try_from(*margin).ok())
         .unwrap_or(Decimal::ZERO);
 
     // TODO: How to handle negative multipliers?
@@ -518,16 +565,16 @@ pub fn parse_trade_bin(
 
     let open = bin
         .open
-        .ok_or_else(|| anyhow::anyhow!("Trade bin missing open price for {}", instrument_id))?;
+        .ok_or_else(|| anyhow::anyhow!("Trade bin missing open price for {instrument_id}"))?;
     let high = bin
         .high
-        .ok_or_else(|| anyhow::anyhow!("Trade bin missing high price for {}", instrument_id))?;
+        .ok_or_else(|| anyhow::anyhow!("Trade bin missing high price for {instrument_id}"))?;
     let low = bin
         .low
-        .ok_or_else(|| anyhow::anyhow!("Trade bin missing low price for {}", instrument_id))?;
+        .ok_or_else(|| anyhow::anyhow!("Trade bin missing low price for {instrument_id}"))?;
     let close = bin
         .close
-        .ok_or_else(|| anyhow::anyhow!("Trade bin missing close price for {}", instrument_id))?;
+        .ok_or_else(|| anyhow::anyhow!("Trade bin missing close price for {instrument_id}"))?;
 
     let open = Price::new(open, price_precision);
     let high = Price::new(high, price_precision);
@@ -554,7 +601,7 @@ pub fn parse_trade_bin(
 /// the parser defensively infers the status from `leaves_qty` and `cum_qty`:
 /// - `leaves_qty=0, cum_qty>0` -> `Filled`
 /// - `leaves_qty=0, cum_qty<=0` -> `Canceled`
-/// - Otherwise -> Returns error (unparseable)
+/// - Otherwise -> Returns error (unparsable)
 ///
 /// # Errors
 ///
@@ -580,7 +627,7 @@ pub fn parse_order_status_report(
 
     // BitMEX may not include ord_type in cancel responses,
     // for robustness default to LIMIT if not provided.
-    let order_type: OrderType = order.ord_type.map(|t| t.into()).unwrap_or(OrderType::Limit);
+    let order_type: OrderType = order.ord_type.map_or(OrderType::Limit, |t| t.into());
 
     // BitMEX may not include time_in_force in cancel responses,
     // for robustness default to GTC if not provided.
@@ -590,36 +637,49 @@ pub fn parse_order_status_report(
         .unwrap_or(TimeInForce::Gtc);
 
     // BitMEX may omit ord_status in responses for completed orders
-    // Defensively infer from leaves_qty and cum_qty when possible
+    // Defensively infer from leaves_qty, cum_qty, and working_indicator when possible
     let order_status: OrderStatus = if let Some(status) = order.ord_status.as_ref() {
         (*status).into()
     } else {
-        // Infer status from quantity fields
-        match (order.leaves_qty, order.cum_qty) {
-            (Some(0), Some(cum)) if cum > 0 => {
-                tracing::debug!(
-                    order_id = ?order.order_id,
-                    client_order_id = ?order.cl_ord_id,
-                    cum_qty = cum,
-                    "Inferred Filled from missing ordStatus (leaves_qty=0, cum_qty>0)"
+        // Infer status from quantity fields and working indicator
+        match (order.leaves_qty, order.cum_qty, order.working_indicator) {
+            (Some(0), Some(cum), _) if cum > 0 => {
+                log::debug!(
+                    "Inferred Filled from missing ordStatus (leaves_qty=0, cum_qty>0): order_id={:?}, client_order_id={:?}, cum_qty={}",
+                    order.order_id,
+                    order.cl_ord_id,
+                    cum,
                 );
                 OrderStatus::Filled
             }
-            (Some(0), _) => {
-                tracing::debug!(
-                    order_id = ?order.order_id,
-                    client_order_id = ?order.cl_ord_id,
-                    cum_qty = ?order.cum_qty,
-                    "Inferred Canceled from missing ordStatus (leaves_qty=0, cum_qty<=0)"
+            (Some(0), _, _) => {
+                log::debug!(
+                    "Inferred Canceled from missing ordStatus (leaves_qty=0, cum_qty<=0): order_id={:?}, client_order_id={:?}, cum_qty={:?}",
+                    order.order_id,
+                    order.cl_ord_id,
+                    order.cum_qty,
+                );
+                OrderStatus::Canceled
+            }
+            // BitMEX cancel responses may omit all quantity fields but include working_indicator
+            (None, None, Some(false)) => {
+                log::debug!(
+                    "Inferred Canceled from missing ordStatus with working_indicator=false: order_id={:?}, client_order_id={:?}",
+                    order.order_id,
+                    order.cl_ord_id,
                 );
                 OrderStatus::Canceled
             }
             _ => {
+                let order_json = serde_json::to_string(order)?;
                 anyhow::bail!(
-                    "Order missing ord_status and cannot infer (order_id={}, leaves_qty={:?}, cum_qty={:?})",
+                    "Order missing ord_status and cannot infer (order_id={}, client_order_id={:?}, leaves_qty={:?}, cum_qty={:?}, working_indicator={:?}, order_json={})",
                     order.order_id,
+                    order.cl_ord_id,
                     order.leaves_qty,
-                    order.cum_qty
+                    order.cum_qty,
+                    order.working_indicator,
+                    order_json
                 );
             }
         }
@@ -631,12 +691,12 @@ pub fn parse_order_status_report(
         let filled_qty = parse_signed_contracts_quantity(order.cum_qty.unwrap_or(0), instrument);
         (quantity, filled_qty)
     } else if let (Some(cum), Some(leaves)) = (order.cum_qty, order.leaves_qty) {
-        tracing::debug!(
-            order_id = ?order.order_id,
-            client_order_id = ?order.cl_ord_id,
-            cum_qty = cum,
-            leaves_qty = leaves,
-            "Reconstructing order_qty from cum_qty + leaves_qty"
+        log::debug!(
+            "Reconstructing order_qty from cum_qty + leaves_qty: order_id={:?}, client_order_id={:?}, cum_qty={}, leaves_qty={}",
+            order.order_id,
+            order.cl_ord_id,
+            cum,
+            leaves,
         );
         let quantity = parse_signed_contracts_quantity(cum + leaves, instrument);
         let filled_qty = parse_signed_contracts_quantity(cum, instrument);
@@ -644,11 +704,11 @@ pub fn parse_order_status_report(
     } else if order_status == OrderStatus::Canceled || order_status == OrderStatus::Rejected {
         // For canceled/rejected orders, both quantities will be reconciled from cache
         // BitMEX sometimes omits all quantity fields in cancel responses
-        tracing::debug!(
-            order_id = ?order.order_id,
-            client_order_id = ?order.cl_ord_id,
-            status = ?order_status,
-            "Order missing quantity fields, using 0 for both (will be reconciled from cache)"
+        log::debug!(
+            "Order missing quantity fields, using 0 for both (will be reconciled from cache): order_id={:?}, client_order_id={:?}, status={:?}",
+            order.order_id,
+            order.cl_ord_id,
+            order_status,
         );
         let zero_qty = Quantity::zero(instrument.size_precision());
         (zero_qty, zero_qty)
@@ -702,7 +762,7 @@ pub fn parse_order_status_report(
     }
 
     if let Some(avg_px) = order.avg_px {
-        report = report.with_avg_px(avg_px);
+        report = report.with_avg_px(avg_px)?;
     }
 
     if let Some(trigger_price) = order.stop_px {
@@ -738,42 +798,42 @@ pub fn parse_order_status_report(
         ContingencyType::Oco | ContingencyType::Oto | ContingencyType::Ouo
     ) && report.order_list_id.is_none()
     {
-        tracing::debug!(
-            order_id = %order.order_id,
-            client_order_id = ?report.client_order_id,
-            contingency_type = ?report.contingency_type,
-            "BitMEX order missing clOrdLinkID for contingent order",
+        log::debug!(
+            "BitMEX order missing clOrdLinkID for contingent order: order_id={}, client_order_id={:?}, contingency_type={:?}",
+            order.order_id,
+            report.client_order_id,
+            report.contingency_type,
         );
     }
 
     // Extract rejection/cancellation reason
     if order_status == OrderStatus::Rejected {
         if let Some(reason) = order.ord_rej_reason.or(order.text) {
-            tracing::debug!(
-                order_id = ?order.order_id,
-                client_order_id = ?order.cl_ord_id,
-                reason = ?reason,
-                "Order rejected with reason"
+            log::debug!(
+                "Order rejected with reason: order_id={:?}, client_order_id={:?}, reason={:?}",
+                order.order_id,
+                order.cl_ord_id,
+                reason,
             );
             report = report.with_cancel_reason(clean_reason(reason.as_ref()));
         } else {
-            tracing::debug!(
-                order_id = ?order.order_id,
-                client_order_id = ?order.cl_ord_id,
-                ord_status = ?order.ord_status,
-                ord_rej_reason = ?order.ord_rej_reason,
-                text = ?order.text,
-                "Order rejected without reason from BitMEX"
+            log::debug!(
+                "Order rejected without reason from BitMEX: order_id={:?}, client_order_id={:?}, ord_status={:?}, ord_rej_reason={:?}, text={:?}",
+                order.order_id,
+                order.cl_ord_id,
+                order.ord_status,
+                order.ord_rej_reason,
+                order.text,
             );
         }
     } else if order_status == OrderStatus::Canceled
         && let Some(reason) = order.ord_rej_reason.or(order.text)
     {
-        tracing::debug!(
-            order_id = ?order.order_id,
-            client_order_id = ?order.cl_ord_id,
-            reason = ?reason,
-            "Order canceled with reason"
+        log::trace!(
+            "Order canceled with reason: order_id={:?}, client_order_id={:?}, reason={:?}",
+            order.order_id,
+            order.cl_ord_id,
+            reason,
         );
         report = report.with_cancel_reason(clean_reason(reason.as_ref()));
     }
@@ -837,10 +897,8 @@ pub fn parse_fill_report(
     // Map BitMEX currency to standard currency code
     let settlement_currency_str = exec.settl_currency.unwrap_or(Ustr::from("XBT")).as_str();
     let mapped_currency = map_bitmex_currency(settlement_currency_str);
-    let commission = Money::new(
-        exec.commission.unwrap_or(0.0),
-        Currency::from(mapped_currency.as_str()),
-    );
+    let currency = get_currency(&mapped_currency);
+    let commission = Money::new(exec.commission.unwrap_or(0.0), currency);
     let liquidity_side = parse_liquidity_side(&exec.last_liquidity_ind);
     let client_order_id = exec.cl_ord_id.map(ClientOrderId::new);
     let venue_position_id = None; // Not applicable on BitMEX
@@ -883,7 +941,9 @@ pub fn parse_position_report(
     let position_side = parse_position_side(position.current_qty).as_specified();
     let quantity = parse_signed_contracts_quantity(position.current_qty.unwrap_or(0), instrument);
     let venue_position_id = None; // Not applicable on BitMEX
-    let avg_px_open = position.avg_entry_price.and_then(Decimal::from_f64);
+    let avg_px_open = position
+        .avg_entry_price
+        .and_then(|p| Decimal::from_str(&p.to_string()).ok());
     let ts_last = parse_optional_datetime_to_unix_nanos(&position.timestamp, "timestamp");
 
     Ok(PositionStatusReport::new(
@@ -899,26 +959,23 @@ pub fn parse_position_report(
     ))
 }
 
-/// Returns the currency either from the internal currency map or creates a default crypto.
-fn get_currency(code: String) -> Currency {
-    CURRENCY_MAP
-        .lock()
-        .unwrap()
-        .get(&code)
-        .copied()
-        .unwrap_or(Currency::new(&code, 8, 0, &code, CurrencyType::Crypto))
+/// Returns a currency from the internal map or creates a new crypto currency.
+///
+/// Uses [`Currency::get_or_create_crypto`] to handle unknown currency codes,
+/// which automatically registers newly listed BitMEX assets.
+pub fn get_currency(code: &str) -> Currency {
+    Currency::get_or_create_crypto(code)
 }
-
-////////////////////////////////////////////////////////////////////////////////
-// Tests
-////////////////////////////////////////////////////////////////////////////////
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use chrono::{DateTime, Utc};
     use nautilus_model::{
         data::{BarSpecification, BarType},
         enums::{AggregationSource, BarAggregation, LiquiditySide, PositionSide, PriceType},
+        instruments::InstrumentAny,
     };
     use rstest::rstest;
     use rust_decimal::{Decimal, prelude::ToPrimitive};
@@ -1096,7 +1153,10 @@ mod tests {
         let instrument: BitmexInstrument = serde_json::from_str(&instrument_json).unwrap();
 
         let ts_init = UnixNanos::from(1u64);
-        let instrument_any = parse_instrument_any(&instrument, ts_init).expect("instrument parsed");
+        let instrument_any = match parse_instrument_any(&instrument, ts_init) {
+            InstrumentParseResult::Ok(inst) => inst,
+            other => panic!("Expected Ok, got {other:?}"),
+        };
 
         let spec = BarSpecification::new(1, BarAggregation::Minute, PriceType::Last);
         let bar_type = BarType::new(instrument_any.id(), spec, AggregationSource::External);
@@ -1104,10 +1164,12 @@ mod tests {
         let bar = parse_trade_bin(bins[0].clone(), &instrument_any, &bar_type, ts_init).unwrap();
 
         let precision = instrument_any.price_precision();
-        let expected_open = Price::from_decimal(Decimal::from_str("98900.0").unwrap(), precision)
-            .expect("open price");
-        let expected_close = Price::from_decimal(Decimal::from_str("98950.0").unwrap(), precision)
-            .expect("close price");
+        let expected_open =
+            Price::from_decimal_dp(Decimal::from_str("98900.0").unwrap(), precision)
+                .expect("open price");
+        let expected_close =
+            Price::from_decimal_dp(Decimal::from_str("98950.0").unwrap(), precision)
+                .expect("close price");
 
         assert_eq!(bar.bar_type, bar_type);
         assert_eq!(bar.open, expected_open);
@@ -1120,7 +1182,10 @@ mod tests {
         let instrument: BitmexInstrument = serde_json::from_str(&instrument_json).unwrap();
 
         let ts_init = UnixNanos::from(1u64);
-        let instrument_any = parse_instrument_any(&instrument, ts_init).expect("instrument parsed");
+        let instrument_any = match parse_instrument_any(&instrument, ts_init) {
+            InstrumentParseResult::Ok(inst) => inst,
+            other => panic!("Expected Ok, got {other:?}"),
+        };
 
         let spec = BarSpecification::new(1, BarAggregation::Minute, PriceType::Last);
         let bar_type = BarType::new(instrument_any.id(), spec, AggregationSource::External);
@@ -1143,15 +1208,17 @@ mod tests {
             foreign_notional: None,
         };
 
-        let bar = parse_trade_bin(bin.clone(), &instrument_any, &bar_type, ts_init).unwrap();
+        let bar = parse_trade_bin(bin, &instrument_any, &bar_type, ts_init).unwrap();
 
         let precision = instrument_any.price_precision();
-        let expected_high = Price::from_decimal(Decimal::from_str("50010.0").unwrap(), precision)
-            .expect("high price");
-        let expected_low = Price::from_decimal(Decimal::from_str("49990.0").unwrap(), precision)
+        let expected_high =
+            Price::from_decimal_dp(Decimal::from_str("50010.0").unwrap(), precision)
+                .expect("high price");
+        let expected_low = Price::from_decimal_dp(Decimal::from_str("49990.0").unwrap(), precision)
             .expect("low price");
-        let expected_open = Price::from_decimal(Decimal::from_str("50000.0").unwrap(), precision)
-            .expect("open price");
+        let expected_open =
+            Price::from_decimal_dp(Decimal::from_str("50000.0").unwrap(), precision)
+                .expect("open price");
 
         assert_eq!(bar.high, expected_high);
         assert_eq!(bar.low, expected_low);
@@ -2252,10 +2319,6 @@ mod tests {
         assert!((report.quantity.as_f64() - 0.1).abs() < 1e-9);
     }
 
-    // ========================================================================
-    // Test Fixtures for Instrument Parsing
-    // ========================================================================
-
     fn create_test_spot_instrument() -> BitmexInstrument {
         BitmexInstrument {
             symbol: Ustr::from("XBTUSD"),
@@ -2435,8 +2498,8 @@ mod tests {
                     .unwrap()
                     .with_timezone(&Utc),
             ),
-            funding_rate: Some(0.0001),
-            indicative_funding_rate: Some(0.0001),
+            funding_rate: Some(Decimal::from_str("0.0001").unwrap()),
+            indicative_funding_rate: Some(Decimal::from_str("0.0001").unwrap()),
             funding_base_rate: Some(0.01),
             funding_quote_rate: Some(-0.01),
             // Other fields
@@ -2610,10 +2673,6 @@ mod tests {
         }
     }
 
-    // ========================================================================
-    // Instrument Parsing Tests
-    // ========================================================================
-
     #[rstest]
     fn test_parse_spot_instrument() {
         let instrument = create_test_spot_instrument();
@@ -2622,7 +2681,7 @@ mod tests {
 
         // Check it's a CurrencyPair variant
         match result {
-            nautilus_model::instruments::InstrumentAny::CurrencyPair(spot) => {
+            InstrumentAny::CurrencyPair(spot) => {
                 assert_eq!(spot.id.symbol.as_str(), "XBTUSD");
                 assert_eq!(spot.id.venue.as_str(), "BITMEX");
                 assert_eq!(spot.raw_symbol.as_str(), "XBTUSD");
@@ -2646,7 +2705,7 @@ mod tests {
 
         // Check it's a CryptoPerpetual variant
         match result {
-            nautilus_model::instruments::InstrumentAny::CryptoPerpetual(perp) => {
+            InstrumentAny::CryptoPerpetual(perp) => {
                 assert_eq!(perp.id.symbol.as_str(), "XBTUSD");
                 assert_eq!(perp.id.venue.as_str(), "BITMEX");
                 assert_eq!(perp.raw_symbol.as_str(), "XBTUSD");
@@ -2670,7 +2729,7 @@ mod tests {
 
         // Check it's a CryptoFuture variant
         match result {
-            nautilus_model::instruments::InstrumentAny::CryptoFuture(instrument) => {
+            InstrumentAny::CryptoFuture(instrument) => {
                 assert_eq!(instrument.id.symbol.as_str(), "XBTH25");
                 assert_eq!(instrument.id.venue.as_str(), "BITMEX");
                 assert_eq!(instrument.raw_symbol.as_str(), "XBTH25");

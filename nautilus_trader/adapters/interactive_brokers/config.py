@@ -1,5 +1,5 @@
 # -------------------------------------------------------------------------------------------------
-#  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+#  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 #  https://nautechsystems.io
 #
 #  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -136,10 +136,16 @@ class InteractiveBrokersInstrumentProviderConfig(InstrumentProviderConfig, froze
         Example: value set to 1, InstrumentProvider will make fresh pull every day even if TradingNode is not restarted.
     pickle_path: str (default: None)
         If provided valid path, will store the ContractDetails as pickle, and use during cache_validity period.
+    filter_sec_types: FrozenSet[str], optional
+        A set of IB `secType` values which should be ignored by the provider. Any contract whose
+        `secType` matches one of these entries will be skipped with a warning before reconciliation is
+        attempted. Use this to opt out from assets that are not yet supported (for example `WAR` or `IOPT`).
 
     """
 
     def __eq__(self, other: object) -> bool:
+        if other is None:
+            return False
         if not isinstance(other, InteractiveBrokersInstrumentProviderConfig):
             return False
 
@@ -150,6 +156,7 @@ class InteractiveBrokersInstrumentProviderConfig(InstrumentProviderConfig, froze
             and self.max_expiry_days == other.max_expiry_days
             and self.build_options_chain == other.build_options_chain
             and self.build_futures_chain == other.build_futures_chain
+            and self.filter_sec_types == other.filter_sec_types
         )
 
     def __hash__(self) -> int:
@@ -170,6 +177,7 @@ class InteractiveBrokersInstrumentProviderConfig(InstrumentProviderConfig, froze
                 ),
                 self.cache_validity_days,
                 self.pickle_path,
+                self.filter_sec_types,
             ),
         )
 
@@ -184,6 +192,7 @@ class InteractiveBrokersInstrumentProviderConfig(InstrumentProviderConfig, froze
 
     cache_validity_days: int | None = None
     pickle_path: str | None = None
+    filter_sec_types: frozenset[str] = frozenset()
 
 
 class InteractiveBrokersDataClientConfig(LiveDataClientConfig, frozen=True):

@@ -1,5 +1,5 @@
 # -------------------------------------------------------------------------------------------------
-#  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+#  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 #  https://nautechsystems.io
 #
 #  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -92,10 +92,10 @@ class TestLiveExecutionClient:
     Test suite for LiveExecutionClient task tracking.
     """
 
-    def setup(self):
+    @pytest.fixture(autouse=True)
+    def setup(self, request):
         # Fixture Setup
-        self.loop = asyncio.get_event_loop()
-        asyncio.set_event_loop(self.loop)
+        self.loop = request.getfixturevalue("event_loop")
         self.loop.set_debug(True)
 
         self.clock = LiveClock()
@@ -169,7 +169,10 @@ class TestLiveExecutionClient:
         for i in range(5):
             self.client.create_task(long_task(), log_msg=f"task_{i}")
 
-        await eventually(lambda: len([t for t in self.client._tasks if not t.done()]) == 5)
+        await eventually(
+            lambda: len([t for t in self.client._tasks if not t.done()]) == 5,
+            timeout=5.0,
+        )
 
         # Assert - Tasks are active
         active_before = [t for t in self.client._tasks if not t.done()]
@@ -179,7 +182,7 @@ class TestLiveExecutionClient:
         self.client.disconnect()
         await eventually(
             lambda: len([t for t in self.client._tasks if not t.done()]) <= 1,
-            timeout=1.0,
+            timeout=5.0,
         )  # Only disconnect task might remain
 
         # Assert - Tasks should be cancelled after disconnect

@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -389,6 +389,10 @@ impl Order for LimitOrder {
         self.leaves_qty
     }
 
+    fn overfill_qty(&self) -> Quantity {
+        self.overfill_qty
+    }
+
     fn avg_px(&self) -> Option<f64> {
         self.avg_px
     }
@@ -492,7 +496,7 @@ impl Order for LimitOrder {
     }
 
     fn set_liquidity_side(&mut self, liquidity_side: LiquiditySide) {
-        self.liquidity_side = Some(liquidity_side)
+        self.liquidity_side = Some(liquidity_side);
     }
 
     fn would_reduce_only(&self, side: PositionSide, position_qty: Quantity) -> bool {
@@ -577,9 +581,6 @@ impl From<OrderInitialized> for LimitOrder {
     }
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// Tests
-////////////////////////////////////////////////////////////////////////////////
 #[cfg(test)]
 mod tests {
     use nautilus_core::UnixNanos;

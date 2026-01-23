@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -------------------------------------------------------------------------------------------------
-#  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+#  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 #  https://nautechsystems.io
 #
 #  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -45,14 +45,14 @@ from nautilus_trader.test_kit.strategies.tester_exec import ExecTesterConfig
 
 # To find active markets run `python nautilus_trader/adapters/polymarket/scripts/active_markets.py`
 
-# Slug: fed-rate-hike-in-2025
+# Slug: gta-vi-released-before-june-2026
 # Active: True
-# Condition ID: 0x4319532e181605cb15b1bd677759a3bc7f7394b2fdf145195b700eeaedfd5221
-# Token IDs: 60487116984468020978247225474488676749601001829886755968952521846780452448915,
-# 81104637750588840860328515305303028259865221573278091453716127842023614249200
-# Link: https://polymarket.com/event/fed-rate-hike-in-2025
-condition_id = "0x4319532e181605cb15b1bd677759a3bc7f7394b2fdf145195b700eeaedfd5221"
-token_id = "60487116984468020978247225474488676749601001829886755968952521846780452448915"
+# Condition ID: 0xcccb7e7613a087c132b69cbf3a02bece3fdcb824c1da54ae79acc8d4a562d902
+# Token IDs: 8441400852834915183759801017793514978104486628517653995211751018945988243154,
+# 109289569086508934142323222102974769075074494425163878721602922903101062859033
+# Link: https://polymarket.com/event/gta-vi-released-before-june-2026
+condition_id = "0xcccb7e7613a087c132b69cbf3a02bece3fdcb824c1da54ae79acc8d4a562d902"
+token_id = "8441400852834915183759801017793514978104486628517653995211751018945988243154"
 
 instrument_id = get_polymarket_instrument_id(condition_id, token_id)
 
@@ -62,7 +62,7 @@ load_ids = [str(instrument_id)]
 instrument_provider_config = InstrumentProviderConfig(load_ids=frozenset(load_ids))
 
 # Order configuration
-order_qty = Decimal("10")  # Number of shares to trade
+order_qty = Decimal(10)  # Number of shares for limit orders, or notional value for market BUY
 
 # Configure the trading node
 config_node = TradingNodeConfig(
@@ -74,6 +74,7 @@ config_node = TradingNodeConfig(
         use_pyo3=True,
     ),
     exec_engine=LiveExecEngineConfig(
+        convert_quote_qty_to_base=False,  # Required for submitting market BUY orders
         reconciliation=True,
         reconciliation_instrument_ids=[instrument_id],  # Only reconcile these instruments
         open_check_interval_secs=5.0,
@@ -131,9 +132,6 @@ config_node = TradingNodeConfig(
             base_url_http=None,  # Override with custom endpoint
             instrument_provider=instrument_provider_config,
             generate_order_history_from_trades=False,
-            max_retries=3,
-            retry_delay_initial_ms=1_000,
-            retry_delay_max_ms=10_000,
         ),
     },
     timeout_connection=20.0,
@@ -153,9 +151,12 @@ config_tester = ExecTesterConfig(
     subscribe_quotes=True,
     subscribe_trades=True,
     # subscribe_book=True,
-    # enable_sells=False,
+    # enable_limit_buys=False,
+    enable_limit_sells=False,
+    tob_offset_ticks=10,
     order_qty=order_qty,
     # open_position_on_start_qty=order_qty,
+    # use_quote_quantity=True,  # Required for submitting market BUY orders
     use_post_only=False,  # Polymarket does not support post-only orders
     # test_reject_post_only=True,
     reduce_only_on_stop=False,  # Polymarket does not support reduce-only orders

@@ -1,5 +1,5 @@
 # -------------------------------------------------------------------------------------------------
-#  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+#  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 #  https://nautechsystems.io
 #
 #  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -199,7 +199,7 @@ cdef class FuturesContract(Instrument):
     @property
     def expiration_utc(self) -> pd.Timestamp:
         """
-        Return the contract expriation timestamp (UTC).
+        Return the contract expiration timestamp (UTC).
 
         Returns
         -------
@@ -282,10 +282,14 @@ cdef class FuturesContract(Instrument):
             underlying=pyo3_instrument.underlying,
             activation_ns=pyo3_instrument.activation_ns,
             expiration_ns=pyo3_instrument.expiration_ns,
-            info=pyo3_instrument.info,
+            margin_init=Decimal(pyo3_instrument.margin_init),
+            margin_maint=Decimal(pyo3_instrument.margin_maint),
+            maker_fee=Decimal(pyo3_instrument.maker_fee),
+            taker_fee=Decimal(pyo3_instrument.taker_fee),
+            exchange=pyo3_instrument.exchange,
             ts_event=pyo3_instrument.ts_event,
             ts_init=pyo3_instrument.ts_init,
-            exchange=pyo3_instrument.exchange,
+            info=pyo3_instrument.info,
         )
 
     @staticmethod

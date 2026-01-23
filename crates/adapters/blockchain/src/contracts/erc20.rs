@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 //  https://nautechsystems.io
 //
 //  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -130,7 +130,7 @@ impl Erc20Contract {
             },
         ];
 
-        let results = self.base.execute_multicall(calls).await?;
+        let results = self.base.execute_multicall(calls, None).await?;
 
         if results.len() != 3 {
             return Err(TokenInfoError::UnexpectedResultCount {
@@ -166,10 +166,14 @@ impl Erc20Contract {
 
     /// Fetches token information for multiple tokens in a single multicall.
     ///
+    /// If the multicall fails (typically due to expired/broken contracts causing RPC "out of gas"),
+    /// automatically falls back to individual token fetches to isolate problematic contracts.
+    ///
     /// # Errors
     ///
-    /// Returns an error if the multicall itself fails. Individual token failures
-    /// are captured in the Result values of the returned `HashMap`.
+    /// Returns an error only if the operation cannot proceed. Multicall failures trigger
+    /// automatic fallback to individual fetches. Individual token failures are captured
+    /// in the Result values of the returned `HashMap`.
     pub async fn batch_fetch_token_info(
         &self,
         token_addresses: &[Address],
@@ -197,7 +201,36 @@ impl Erc20Contract {
             ]);
         }
 
-        let results = self.base.execute_multicall(calls).await?;
+        // Try batch multicall first
+        let results = match self.base.execute_multicall(calls, None).await {
+            Ok(results) => results,
+            Err(e) => {
+                // Multicall failed (likely expired/broken contract causing RPC failure)
+                log::warn!(
+                    "Batch multicall failed: {}. Falling back to individual fetches for {} tokens",
+                    e,
+                    token_addresses.len()
+                );
+
+                // Fallback: fetch each token individually to isolate problematic contracts
+                let mut token_infos = HashMap::with_capacity(token_addresses.len());
+                for token_address in token_addresses {
+                    match self.fetch_token_info(token_address).await {
+                        Ok(info) => {
+                            token_infos.insert(*token_address, Ok(info));
+                        }
+                        Err(e) => {
+                            log::debug!(
+                                "Token {token_address} failed individual fetch (likely expired/broken): {e}"
+                            );
+                            token_infos.insert(*token_address, Err(e));
+                        }
+                    }
+                }
+
+                return Ok(token_infos);
+            }
+        };
 
         let mut token_infos = HashMap::with_capacity(token_addresses.len());
         for (i, token_address) in token_addresses.iter().enumerate() {
@@ -205,7 +238,7 @@ impl Erc20Contract {
 
             // Check if we have all 3 results for this token.
             if base_idx + 2 >= results.len() {
-                tracing::error!("Incomplete results from multicall for token {token_address}");
+                log::error!("Incomplete results from multicall for token {token_address}");
                 token_infos.insert(
                     *token_address,
                     Err(TokenInfoError::UnexpectedResultCount {
@@ -237,7 +270,10 @@ impl Erc20Contract {
         account: &Address,
     ) -> Result<U256, BlockchainRpcClientError> {
         let call_data = ERC20::balanceOfCall { account: *account }.abi_encode();
-        let result = self.base.execute_call(token_address, &call_data).await?;
+        let result = self
+            .base
+            .execute_call(token_address, &call_data, None)
+            .await?;
 
         ERC20::balanceOfCall::abi_decode_returns(&result)
             .map_err(|e| BlockchainRpcClientError::AbiDecodingError(e.to_string()))
@@ -289,7 +325,15 @@ fn parse_erc20_string_result(
     match field_name {
         Erc20Field::Name => ERC20::nameCall::abi_decode_returns(&result.returnData),
         Erc20Field::Symbol => ERC20::symbolCall::abi_decode_returns(&result.returnData),
-        _ => panic!("Expected Name or Symbol for for parse_erc20_string_result function argument"),
+        Erc20Field::Decimals => {
+            return Err(TokenInfoError::DecodingError {
+                field: field_name.to_string(),
+                address: *token_address,
+                reason: "Expected Name or Symbol for parse_erc20_string_result function argument"
+                    .to_string(),
+                raw_data: result.returnData.to_string(),
+            });
+        }
     }
     .map_err(|e| TokenInfoError::DecodingError {
         field: field_name.to_string(),

@@ -1,5 +1,5 @@
 # -------------------------------------------------------------------------------------------------
-#  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+#  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
 #  https://nautechsystems.io
 #
 #  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
@@ -57,17 +57,17 @@ def _create_currency(
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def venue():
     return OKX_VENUE
 
 
-@pytest.fixture()
+@pytest.fixture
 def account_id(venue) -> AccountId:
     return AccountId(f"{venue.value}-123")
 
 
-@pytest.fixture()
+@pytest.fixture
 def instrument() -> CurrencyPair:
     btc = _create_currency(
         "BTC",
@@ -94,14 +94,47 @@ def instrument() -> CurrencyPair:
     )
 
 
-@pytest.fixture()
+@pytest.fixture
+def eth_usdt_instrument() -> CurrencyPair:
+    eth = _create_currency(
+        "ETH",
+        precision=8,
+        iso4217=0,
+        name="Ethereum",
+        currency_type=CurrencyType.CRYPTO,
+    )
+    usdt = _create_currency(
+        "USDT",
+        precision=8,
+        iso4217=0,
+        name="Tether",
+        currency_type=CurrencyType.CRYPTO,
+    )
+
+    return CurrencyPair(
+        instrument_id=InstrumentId(Symbol("ETH-USDT"), OKX_VENUE),
+        raw_symbol=Symbol("ETH-USDT"),
+        base_currency=eth,
+        quote_currency=usdt,
+        price_precision=2,
+        size_precision=6,
+        price_increment=Price.from_str("0.01"),
+        size_increment=Quantity.from_str("0.000001"),
+        ts_event=0,
+        ts_init=0,
+        maker_fee=Decimal("-0.0002"),
+        taker_fee=Decimal("0.0005"),
+    )
+
+
+@pytest.fixture
 def account_state(account_id) -> AccountState:
     usd_currency = USD
 
     return AccountState(
         account_id=account_id,
         account_type=AccountType.CASH,
-        base_currency=usd_currency,
+        base_currency=None,  # Multi-currency account
         reported=True,
         balances=[
             AccountBalance(
@@ -118,7 +151,7 @@ def account_state(account_id) -> AccountState:
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def mock_http_client():
     mock = MagicMock(spec=nautilus_pyo3.OKXHttpClient)
     mock.api_key = "test_api_key"
@@ -126,18 +159,26 @@ def mock_http_client():
     mock.api_passphrase = "test_passphrase"
 
     mock.request_instruments = AsyncMock(return_value=[])
-    mock.add_instrument = MagicMock()
+    mock.cache_instrument = MagicMock()
     mock.cancel_all_requests = MagicMock()
     mock.is_initialized = MagicMock(return_value=True)
+    mock.get_server_time = AsyncMock(return_value=1234567890000)
 
     mock_account_state = MagicMock()
     mock_account_state.to_dict = MagicMock(
         return_value={
             "account_id": "OKX-123",
             "account_type": "CASH",
-            "base_currency": "USD",
+            "base_currency": None,
             "reported": True,
-            "balances": [],
+            "balances": [
+                {
+                    "currency": "USD",
+                    "total": "100000.0",
+                    "locked": "0.0",
+                    "free": "100000.0",
+                },
+            ],
             "margins": [],
             "info": {},
             "event_id": str(TestIdStubs.uuid()),
@@ -164,10 +205,13 @@ def _create_ws_mock() -> MagicMock:
     mock.wait_until_active = AsyncMock()
     mock.close = AsyncMock()
     mock.subscribe_instruments = AsyncMock()
+    mock.subscribe_instrument = AsyncMock()
+    mock.cache_instruments = MagicMock()
     mock.subscribe_book = AsyncMock()
     mock.subscribe_book50_l2_tbt = AsyncMock()
     mock.subscribe_book_l2_tbt = AsyncMock()
     mock.subscribe_book_depth5 = AsyncMock()
+    mock.subscribe_book_with_depth = AsyncMock()
     mock.subscribe_quotes = AsyncMock()
     mock.subscribe_trades = AsyncMock()
     mock.subscribe_mark_prices = AsyncMock()
@@ -189,15 +233,17 @@ def _create_ws_mock() -> MagicMock:
     mock.subscribe_orders_algo = AsyncMock()
     mock.subscribe_fills = AsyncMock()
     mock.subscribe_account = AsyncMock()
+    mock.batch_cancel_orders = AsyncMock()
+    mock.mass_cancel_orders = AsyncMock()
     return mock
 
 
-@pytest.fixture()
+@pytest.fixture
 def mock_ws_clients():
     return _create_ws_mock(), _create_ws_mock()
 
 
-@pytest.fixture()
+@pytest.fixture
 def mock_instrument_provider(instrument):
     provider = MagicMock(spec=OKXInstrumentProvider)
     provider.initialize = AsyncMock()
@@ -210,7 +256,7 @@ def mock_instrument_provider(instrument):
     return provider
 
 
-@pytest.fixture()
+@pytest.fixture
 def exec_client(
     event_loop,
     mock_http_client,
@@ -256,6 +302,6 @@ def exec_client(
     return client
 
 
-@pytest.fixture()
+@pytest.fixture
 def data_client():
     return None
