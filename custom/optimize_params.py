@@ -73,7 +73,7 @@ def optimize(trial):
 
     params = dict(
         trade_size=100,
-        max_position_multiplier=1,
+        max_position_multiplier=10,
         stop_loss=1.0,
         take_profit=None,
         take_ratio=0.8,
@@ -172,10 +172,13 @@ if __name__ == "__main__":
             # stop_loss=linspace_float(low=0.18, high=0.28, step=0.03),
             # take_profit=linspace_float(low=0.25, high=0.35, step=0.10),
             # take_ratio=linspace_float(low=0.5, high=1.0, step=0.50),
-            variance_window=linspace_int(low=280, high=320, step=20),
-            vwap_window=linspace_int(low=120, high=180, step=20),
-            upper_scalar_multiplier=linspace_float(low=0.6, high=1, step=0.1),
-            lower_scalar_multiplier=linspace_float(low=1.8, high=3.2, step=0.3),
+            # variance_window=linspace_int(low=280, high=320, step=20),
+            vwap_window=linspace_int(low=120, high=200, step=40),
+            upper_scalar_multiplier=linspace_float(low=0.6, high=2.0, step=0.4),
+            lower_scalar_multiplier=linspace_float(low=1.6, high=2.5, step=0.3),
+            outer_band_multiplier=linspace_float(low=1.0, high=3.0, step=1.0),
+            pressure_window=linspace_int(low=50, high=100, step=50),
+            # num_sell_tiers=linspace_int(1,4,step=1),
             # trailing_buy_order=[True, False],
         )
 
@@ -198,6 +201,7 @@ if __name__ == "__main__":
         n_processes = 9
         trials_per_process = 1
         trials_started = 0
+        last_progress_report = 0
         pm = ProcessManager()
         while trials_started < total_trials:
             if pm.num_running_processes < n_processes:
@@ -208,7 +212,20 @@ if __name__ == "__main__":
                 trials_started += trials_per_process
                 pm.remove_completed()
             else:
+                pm.remove_completed()
                 sleep(1)
+
+            # Progress tracking every 10 trials
+            trials_completed = trials_started - pm.num_running_processes
+            if trials_completed >= last_progress_report + 10:
+                last_progress_report = (trials_completed // 10) * 10
+                elapsed = datetime.now() - start
+                avg_time_per_trial = elapsed / trials_completed
+                remaining_trials = total_trials - trials_completed
+                estimated_remaining = avg_time_per_trial * remaining_trials
+                print(f"\n=== Progress: {trials_completed}/{total_trials} trials ({trials_completed * 100 // total_trials}%) ===")
+                print(f"    Elapsed: {elapsed}, Estimated remaining: {estimated_remaining}\n")
+
         pm.block(sleep_secs=1)
         print(f"TOTAL RUN TIME: {datetime.now() - start}")
 

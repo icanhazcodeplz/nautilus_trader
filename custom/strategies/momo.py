@@ -43,6 +43,7 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     vwap_window: int
     variance_window: int
     outer_band_multiplier:float=1.0
+    pressure_window: int=50
 
     only_buy_if_macd_positive: bool = False
     trailing_buy_order: bool = False
@@ -204,7 +205,8 @@ class MomoStrategy(BaseStrategy):
                 self.buy(self.config.trade_size, vwap_lower, cancel_after_secs=None, tag=f"{self.buy_orders_count}")
 
         if (
-            price < self.vwap.low and price_1ago > self.vwap.low
+            price < self.vwap.low
+            # and price_1ago > self.vwap.low
             # and (price > price_1ago)
             # and (price > self.vwap_day.value)
         ):

@@ -58,10 +58,10 @@ class VWAPBands(Indicator):
         self._upper_scalar_base = 0.0
 
         self.vwap = None
-        self.mean_variance = 0
-        self.lower_base = 0
-        self.low = 0
-        self.high = 0
+        self.mean_variance = 0.0
+        self.lower_base = 0.0
+        self.low = 0.0
+        self.high = 0.0
 
     @property
     def value(self):
@@ -182,6 +182,7 @@ class VWAPBandsNew(Indicator):
                 variance_window,
                 adjustment_window,
                 pressure_window,
+                outer_band_multiplier
             ]
         )
         if rolling_window > adjustment_window:
@@ -215,16 +216,16 @@ class VWAPBandsNew(Indicator):
         self._upper_scalar = self.initial_upper_lower_scalar
 
         self.vwap = None
-        self.mean_variance = 0
+        self.mean_variance = 0.0
         self.pressure = 0
 
-        self.low_inner = 0
-        self.low_outer = 0
-        self.low = 0
+        self.low_inner = 0.0
+        self.low_outer = 0.0
+        self.low = 0.0
 
-        self.high_inner = 0
-        self.high_outer = 0
-        self.high = 0
+        self.high_inner = 0.0
+        self.high_outer = 0.0
+        self.high = 0.0
 
     @property
     def value(self):

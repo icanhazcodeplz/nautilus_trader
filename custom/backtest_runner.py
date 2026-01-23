@@ -216,21 +216,23 @@ if __name__ == "__main__":
     params = dict(
         allow_trades=True,
         take_ratio=0.8,
-        max_position_multiplier=1,
+        max_position_multiplier=10,
         trade_size=100,
         stop_loss=1.0,
         take_profit=None,
-        upper_scalar_multiplier=0.6,
-        lower_scalar_multiplier=3,
-        vwap_window=180,
-        variance_window=280,
+        upper_scalar_multiplier=2.0,
+        lower_scalar_multiplier=1.5,
+        vwap_window=150,
+        variance_window=300,
+        outer_band_multiplier=2.5,
+        pressure_window=50,
         simple_take=False,
         only_buy_if_macd_positive=True,
         trailing_take=True,
         num_sell_tiers=3,
         trailing_buy_order=False,
         random_buy=False,
-        random_seed=None,
+        random_seed=11,
     )
     datasets = ["radx"]
 
@@ -245,6 +247,7 @@ if __name__ == "__main__":
             print(stats)
             pass
     else:
+        start_time = pd.Timestamp.now()
         run_single_backtest(
             datasets[0], strategy_name, params, artifacts_location=VIZ_ARTIFACTS_PATH, log_level=log_level
         )
@@ -260,4 +263,4 @@ if __name__ == "__main__":
 
         trades, sell_legs = orders_to_trades(df)
         analyze_trades(trades, print_report=True)
-        print()
+        print(f"\nTotal Runtime {pd.Timestamp.now()-start_time}")
