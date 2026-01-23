@@ -10,18 +10,34 @@ run_dir = Path("data/runs/20251114_093405")
 
 with open(run_dir / "config.json", "r") as f:
     config = json.load(f)
-with open(run_dir / "order_submissions.json", "r") as f:
-    _order_submissions = []
-    for line in f:
-        _order_submissions.append(json.loads(line))
+# with open(run_dir / "order_submissions.json", "r") as f:
+#     _order_submissions = []
+#     for line in f:
+#         _order_submissions.append(json.loads(line))
 with open(run_dir / "alpaca_trade_updates.json", "r") as f:
     _ws_updates = json.load(f)
 with open(run_dir / "orders_events.json", "r") as f:
     _order_events = json.load(f)
 
-order_submissions_df = pd.DataFrame(_order_submissions)
-ws_updates_df = pd.DataFrame(_ws_updates)
+filt = [e for e in _ws_updates if e["event"] in ["fill", "partial_fill"]]
+
+
+df = pd.DataFrame(_ws_updates)
+
+df = df[~df["position_qty"].isna()]
+df = df[["event_id", "status", "event", "at", "side","qty","filled_qty", "position_qty"]]
+# if df["side"]=="sell", flip the directions of "qty" to negative
+df["qty"] = df["qty"].astype(int)
+df.loc[df["side"] == "sell", "qty"] = -df.loc[df["side"] == "sell", "qty"].astype(int)
+df["cum"] = df["qty"].cumsum()
+# df.loc[df["side"] == "sell", "filled_qty"] = -df.loc[df["side"] == "sell", "filled_qty"].astype(float)
+# df.loc[df["side"] == "sell", "position_qty"] = -df.loc[df["side"] == "sell", "position_qty"].astype(float)
+print(df)
+
+
+
 order_events_df = pd.DataFrame(_order_events)
+order_submissions_df = pd.DataFrame(_order_submissions)
 
 # Load ticks_with_orders.pkl
 ticks_and_metrics = load_ticks_and_metrics_file(run_dir)

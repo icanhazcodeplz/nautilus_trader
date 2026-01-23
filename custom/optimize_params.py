@@ -5,15 +5,12 @@ from datetime import datetime
 from time import sleep
 
 import numpy as np
-
-from custom.utils.process_manager import ProcessManager
-
-sys.path.append(os.getcwd())
-
 import optuna
 import logging
+
+sys.path.append(os.getcwd())
+from custom.utils.process_manager import ProcessManager
 from custom.backtest_runner import run_single_backtest
-from custom.statistics.trade_avg_scaled import TotalBought
 
 DATABASE_STR = "sqlite:///optuna.db"
 # mysql_optuna = "mysql://root@localhost/optuna"
@@ -26,10 +23,10 @@ DATASET_NAMES = [
     "bttc",
     "crbp",
     "migi",
-    "jzxn",
-    "mbrx",
-    "lhai",
-    "azi",
+    # "jzxn",
+    # "mbrx",
+    # "lhai",
+    # "azi",
 ]
 OPTIMIZE_BUY_SIGNALS = False
 RANDOM_BUY = False
@@ -158,16 +155,19 @@ def target(study_name, sampler, n_trials):
 
 if __name__ == "__main__":
     delete_existing = False
-    run_trials = False or delete_existing
-    load_random_buy_study = True
+    run_trials = False
+    load_random_buy_study = False
 
     if RANDOM_BUY:
         study_name = "random"
         search_space = dict(random_seed=[1, 2, 3, 4, 5, 6])
     else:
         study_name = "test"
+        # study_name = "test_macd"
+        # study_name = "test_macd_outer_band"
+        # study_name = "sell_tiers"
         search_space = dict(
-            random_seed=[1, 2, 3, 4, 5],
+            random_seed=[1, 2, 3, 4],
             # max_position_multiplier=linspace_int(low=1, high=1, step=1),
             # stop_loss=linspace_float(low=0.18, high=0.28, step=0.03),
             # take_profit=linspace_float(low=0.25, high=0.35, step=0.10),
@@ -218,13 +218,15 @@ if __name__ == "__main__":
             # Progress tracking every 10 trials
             trials_completed = trials_started - pm.num_running_processes
             if trials_completed >= last_progress_report + 10:
+                time_fmt = '%H:%M:%S'
                 last_progress_report = (trials_completed // 10) * 10
                 elapsed = datetime.now() - start
                 avg_time_per_trial = elapsed / trials_completed
                 remaining_trials = total_trials - trials_completed
-                estimated_remaining = avg_time_per_trial * remaining_trials
+                est_remaining = (avg_time_per_trial * remaining_trials).strftime(time_fmt)
+                est_finish = (datetime.now() + est_remaining).strftime(time_fmt)
                 print(f"\n=== Progress: {trials_completed}/{total_trials} trials ({trials_completed * 100 // total_trials}%) ===")
-                print(f"    Elapsed: {elapsed}, Estimated remaining: {estimated_remaining}\n")
+                print(f"\tElapsed: {elapsed.strftime(time_fmt)} | Remaining: {est_remaining} | Finish: {est_finish}")
 
         pm.block(sleep_secs=1)
         print(f"TOTAL RUN TIME: {datetime.now() - start}")
