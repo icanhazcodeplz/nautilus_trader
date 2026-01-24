@@ -20,7 +20,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use nautilus_common::runtime::get_runtime;
+use nautilus_common::live::get_runtime;
 use nautilus_core::consts::NAUTILUS_USER_AGENT;
 use nautilus_network::websocket::{WebSocketClient, WebSocketConfig, channel_message_handler};
 use serde_json::Value;
@@ -108,20 +108,26 @@ impl AlpacaWebSocketClient {
         let config = WebSocketConfig {
             url: self.url.clone(),
             headers: Self::default_headers(),
-            message_handler: Some(message_handler),
             heartbeat: self.heartbeat,
             heartbeat_msg: None,
-            ping_handler: None,
             reconnect_timeout_ms: Some(5_000),
             reconnect_delay_initial_ms: Some(500),
             reconnect_delay_max_ms: Some(5_000),
             reconnect_backoff_factor: Some(1.5),
             reconnect_jitter_ms: Some(250),
+            reconnect_max_attempts: None,
         };
 
-        let client = WebSocketClient::connect(config, None, vec![], None)
-            .await
-            .map_err(|e| AlpacaError::WebSocketConnection(e.to_string()))?;
+        let client = WebSocketClient::connect(
+            config,
+            Some(message_handler),
+            None,
+            None,
+            vec![],
+            None,
+        )
+        .await
+        .map_err(|e| AlpacaError::WebSocketConnection(e.to_string()))?;
 
         {
             let mut guard = self.inner.write().await;
@@ -154,7 +160,7 @@ impl AlpacaWebSocketClient {
                     }
                     Ok(None) => {}
                     Err(err) => {
-                        tracing::error!("Error handling Alpaca WebSocket message: {err}");
+                        log::error!("Error handling Alpaca WebSocket message: {err}");
                     }
                 }
             }
@@ -313,7 +319,7 @@ impl AlpacaWebSocketClient {
     fn handle_message(message: Message) -> AlpacaResult<Option<AlpacaWebSocketMessage>> {
         match message {
             Message::Text(text) => {
-                tracing::trace!("Alpaca WS message: {text}");
+                log::trace!("Alpaca WS message: {text}");
 
                 let value: Value = serde_json::from_str(&text)?;
 
@@ -329,7 +335,7 @@ impl AlpacaWebSocketClient {
                 Self::classify_message(&value)
             }
             Message::Ping(payload) => {
-                tracing::trace!("Received ping ({} bytes)", payload.len());
+                log::trace!("Received ping ({} bytes)", payload.len());
                 Ok(None)
             }
             Message::Pong(_) => Ok(Some(AlpacaWebSocketMessage::Pong)),

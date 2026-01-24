@@ -223,10 +223,10 @@ if __name__ == "__main__":
                 elapsed = datetime.now() - start
                 avg_time_per_trial = elapsed / trials_completed
                 remaining_trials = total_trials - trials_completed
-                est_remaining = (avg_time_per_trial * remaining_trials).strftime(time_fmt)
+                est_remaining = (avg_time_per_trial * remaining_trials)
                 est_finish = (datetime.now() + est_remaining).strftime(time_fmt)
                 print(f"\n=== Progress: {trials_completed}/{total_trials} trials ({trials_completed * 100 // total_trials}%) ===")
-                print(f"\tElapsed: {elapsed.strftime(time_fmt)} | Remaining: {est_remaining} | Finish: {est_finish}")
+                print(f"\tElapsed: {str(elapsed).split('.')[0]} | Remaining: {str(est_remaining).split('.')[0]} | Finish: {est_finish}")
 
         pm.block(sleep_secs=1)
         print(f"TOTAL RUN TIME: {datetime.now() - start}")

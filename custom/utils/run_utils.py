@@ -49,4 +49,4 @@ def run_strategy(strategy, node_or_engine, artifacts_location=None, run_config=N
 
         node_or_engine.dispose()
 
-        return performance_stats
+    return performance_stats

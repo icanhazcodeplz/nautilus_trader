@@ -861,6 +861,8 @@ cdef class CompetitionAwareFillModel(FillModel):
         Order order,
         Price best_bid,
         Price best_ask,
+        quote: QuoteTick,
+        last_trade: TradeTick,
     ):
         """
         Return OrderBook with competition-adjusted liquidity.

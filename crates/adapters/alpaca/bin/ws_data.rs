@@ -38,10 +38,8 @@ use nautilus_alpaca::websocket::{AlpacaWebSocketClient, AlpacaWebSocketMessage};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize tracing
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .init();
+    // Initialize logging
+    nautilus_common::logging::ensure_logging_initialized();
 
     println!("Alpaca WebSocket Client Example");
     println!("=================================\n");
@@ -122,10 +120,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 eprintln!("✗ Error: {} (code: {})", err.msg, err.code);
             }
             AlpacaWebSocketMessage::Pong => {
-                tracing::debug!("Received pong");
+                log::debug!("Received pong");
             }
             AlpacaWebSocketMessage::Raw(value) => {
-                tracing::debug!("Raw message: {:?}", value);
+                log::debug!("Raw message: {:?}", value);
             }
             _ => {}
         }

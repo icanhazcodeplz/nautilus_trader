@@ -5,7 +5,6 @@ from custom.strategies.momo import MomoStrategy
 from custom.strategies.momo import MomoStrategyConfig
 from custom.utils.paths import run_artifacts_subdir
 from custom.utils.run_utils import run_strategy
-from custom.utils.alpaca_trader_http_client import AlpacaTraderHttpClient
 from nautilus_trader.adapters.alpaca import ALPACA, AlpacaExecClientConfig, AlpacaDataClientConfig
 from nautilus_trader.adapters.alpaca import AlpacaLiveDataClientFactory
 from nautilus_trader.adapters.alpaca import AlpacaLiveExecClientFactory
@@ -108,6 +107,7 @@ node.add_exec_client_factory(ALPACA, AlpacaLiveExecClientFactory)
 
 
 def place_orders_for_testing(paper: bool = True):
+    from custom.utils.alpaca_trader_http_client import AlpacaTraderHttpClient
     client = AlpacaTraderHttpClient(paper=paper)
     client.limit_order(side="buy", symbol=symbol, qty=1000, price=2.50)
     sleep(3)

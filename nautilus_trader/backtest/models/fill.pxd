@@ -51,6 +51,8 @@ cdef class BestPriceFillModel(FillModel):
         Order order,
         Price best_bid,
         Price best_ask,
+        QuoteTick quote,
+        TradeTick last_trade
     )
 
 
@@ -61,6 +63,8 @@ cdef class OneTickSlippageFillModel(FillModel):
         Order order,
         Price best_bid,
         Price best_ask,
+        QuoteTick quote,
+        TradeTick last_trade
     )
 
 
@@ -71,6 +75,8 @@ cdef class TwoTierFillModel(FillModel):
         Order order,
         Price best_bid,
         Price best_ask,
+        QuoteTick quote,
+        TradeTick last_trade
     )
 
 
@@ -81,6 +87,8 @@ cdef class ProbabilisticFillModel(FillModel):
         Order order,
         Price best_bid,
         Price best_ask,
+        QuoteTick quote,
+        TradeTick last_trade
     )
 
 
@@ -91,6 +99,8 @@ cdef class SizeAwareFillModel(FillModel):
         Order order,
         Price best_bid,
         Price best_ask,
+        QuoteTick quote,
+        TradeTick last_trade
     )
 
 
@@ -101,6 +111,8 @@ cdef class LimitOrderPartialFillModel(FillModel):
         Order order,
         Price best_bid,
         Price best_ask,
+        QuoteTick quote,
+        TradeTick last_trade
     )
 
 
@@ -111,6 +123,8 @@ cdef class ThreeTierFillModel(FillModel):
         Order order,
         Price best_bid,
         Price best_ask,
+        QuoteTick quote,
+        TradeTick last_trade
     )
 
 
@@ -125,6 +139,8 @@ cdef class MarketHoursFillModel(FillModel):
         Order order,
         Price best_bid,
         Price best_ask,
+        QuoteTick quote,
+        TradeTick last_trade
     )
 
 
@@ -138,6 +154,8 @@ cdef class VolumeSensitiveFillModel(FillModel):
         Order order,
         Price best_bid,
         Price best_ask,
+        QuoteTick quote,
+        TradeTick last_trade
     )
 
 
@@ -150,4 +168,6 @@ cdef class CompetitionAwareFillModel(FillModel):
         Order order,
         Price best_bid,
         Price best_ask,
+        QuoteTick quote,
+        TradeTick last_trade
     )

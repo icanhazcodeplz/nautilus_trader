@@ -19,10 +19,9 @@ use std::{collections::HashMap, sync::Arc};
 
 use nautilus_core::consts::NAUTILUS_USER_AGENT;
 use nautilus_network::{
-    http::HttpClient,
+    http::{HttpClient, Method, USER_AGENT},
     retry::{RetryConfig, RetryManager},
 };
-use reqwest::{header::USER_AGENT, Method};
 use serde::{de::DeserializeOwned, Serialize};
 use tokio_util::sync::CancellationToken;
 
@@ -74,8 +73,7 @@ impl AlpacaHttpInnerClient {
             max_elapsed_ms: Some(180_000),
         };
 
-        let retry_manager = RetryManager::new(retry_config)
-            .map_err(|e| AlpacaError::Generic(format!("Failed to create retry manager: {e}")))?;
+        let retry_manager = RetryManager::new(retry_config);
 
         Ok(Self {
             base_url,
@@ -85,7 +83,9 @@ impl AlpacaHttpInnerClient {
                 vec![],
                 None,
                 timeout_secs,
-            ),
+                None,
+            )
+            .map_err(|e| AlpacaError::Generic(format!("Failed to create HTTP client: {e}")))?,
             api_key: None,
             api_secret: None,
             retry_manager,
@@ -169,7 +169,7 @@ impl AlpacaHttpInnerClient {
 
                 let response = self
                     .client
-                    .request(method, url, Some(headers), body, None, None)
+                    .request(method, url, None, Some(headers), body, None, None)
                     .await
                     .map_err(|e| AlpacaError::HttpRequest(e.to_string()))?;
 
