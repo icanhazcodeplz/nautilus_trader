@@ -34,9 +34,11 @@ dependencies = [
   "pytz>=2025.2.0",
   "tqdm>=4.67.1,<5.0.0",
   "uvloop==0.22.1,<1.0.0; sys_platform != \"win32\"", # Pinned to 0.22.1 for stability
-  "websockets",
+  "websockets",  # Remove?
   "pydantic>=2.12.5",
   "aiohttp",
+  "finvizfinance",
+  "loguru" # Remove later?
 ]
 
 [project.urls]
