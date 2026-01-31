@@ -247,6 +247,7 @@ if __name__ == "__main__":
             print(stats)
             pass
     else:
+        print(f"\nRunning single backtest for {datasets[0]}")
         start_time = pd.Timestamp.now()
         run_single_backtest(
             datasets[0], strategy_name, params, artifacts_location=VIZ_ARTIFACTS_PATH, log_level=log_level
