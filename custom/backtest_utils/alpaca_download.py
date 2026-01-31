@@ -162,48 +162,6 @@ def prepare_alpaca_data(symbol, start_dt_str):
 
 
 if __name__ == "__main__":
-    """
-       Candidates
-
-       10/13 - ELAB after hours
-       10/13 - AQMS after hours
-       10/13 - NDRA
-       10/13 - STI
-       10/13 - PMAX
-       10/13 - GWH
-       10/10 - GWH
-       10/10 - SGBX
-       10/9 - YDDL after hours
-       10/9 - LFS after hours
-       10/9 - BJDX
-       10/9 - TTRX (ipo 10/8)
-       10/9 - BAOS
-       10/8 - AMBO (after hours)
-       10/8 - XBIO
-       10/8 - ACXB
-       10/8 - XTLB
-       10/8 - BIAF
-       10/7 - BJDX
-       10/7 - CISS
-       10/7 - GLTO
-       10/6 - SPRB
-       10/6 - CRML
-       10/6 - SOPA
-       10/2 - IVDA
-       10/2 - CIGL
-       10/1 - AKAN
-       10/1 - PALI
-       10/1 - LAC
-       9/30 - LAC (after hours)
-       9/30 - SPRC
-       9/29 - POAI
-       9/25 - SPRC
-       9/25 - EVAX
-       9/24 - TNFA
-       9/24 - SHFS
-       9/23 - SHFS (after hours)
-       9/23 - FLD
-       9/29 - MSS
 
        9/19 - ZOOZ
        9/19 - AGMH
