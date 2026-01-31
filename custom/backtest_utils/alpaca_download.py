@@ -47,27 +47,38 @@ api_key, api_secret = get_alpaca_key_and_secret(paper=True)
 client = StockHistoricalDataClient(api_key, api_secret, raw_data=False)
 
 
-def get_trades_and_save_to_catalog(symbol, start_dt_str, end_dt_str):
+def get_trades_and_save_to_catalog_if_needed(symbol, start_dt_str, end_dt_str, force=False):
+    instrument_id = TestInstrumentProvider.equity(symbol=symbol, venue=ALPACA).id
+
+    # Check if trades exist for the range in BACKTESTING_CATALOG
+    if not force:
+        existing_trades = BACKTESTING_CATALOG.query(
+            data_cls=TradeTick,
+            identifiers=[str(instrument_id)],
+            start=start_dt_str,
+            end=end_dt_str,
+        )
+        if existing_trades:
+            print(
+                f"Trades already exist for {symbol} from {start_dt_str} to {end_dt_str}, skipping download"
+            )
+            return
+
     request = StockTradesRequest(
-        feed="sip",
-        symbol_or_symbols=symbol,
-        start=start_dt_str,
-        end=end_dt_str,
-        limit=None,
+        feed="sip", symbol_or_symbols=symbol, start=start_dt_str, end=end_dt_str
     )
 
-    instrument_id = TestInstrumentProvider.equity(symbol=symbol, venue=ALPACA).id
     # Fetch the tick data
     trades = client.get_stock_trades(request)
-    df = trades.df
+    df = trades.df  # TODO: Converting to df is slow. Could do without maybe?
     df = df.reset_index()
     print(f"Fetched {len(df)} trades")
     df = df[df["exchange"] != "D"]
-    print(f"Drop Finra {len(df)} trades")
+    print(f"Droped Finra. Now {len(df)} trades")
 
     # Convert each row in df into a TradeTick object and then save to the catalog `BACKTESTING_CATALOG`
     trade_ticks = []
-    for i, row in df.iterrows():
+    for i, row in df.iterrows():  # TODO: Do in a faster way?
         ts_event = dt_to_unix_nanos(row["timestamp"])
         ts_init = ts_event  # Use same timestamp for initialization
 
