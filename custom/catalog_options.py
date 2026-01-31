@@ -1,24 +1,6 @@
-CATALOG_OPTIONS = dict(
-    zooz=dict(symbol="ZOOZ", start="2025-09-19 00:00", end="2025-09-20 00:00", notes="Early move"),
-    zoozsm=dict(symbol="ZOOZ", start="2025-09-19 00:00", end="2025-09-19 13:01", notes="Small set"),
-    agmh=dict(symbol="AGMH", start="2025-09-19 00:00", end="2025-09-20 00:00", notes="Up 3x. Huge volume"),
-    nva=dict(symbol="NVA", start="2025-10-14 00:00", end="2025-10-15 00:00", notes="$50 stock"),
-    gwav=dict(symbol="GWAV", start="2025-10-14 00:00", end="2025-10-15 00:00", notes="$20"),
-    jdzg=dict(symbol="JDZG", start="2025-10-14 00:00", end="2025-10-15 00:00", notes="$3, most action 7am-open"),
-    chnr=dict(symbol="CHNR", start="2025-10-13 00:00", end="2025-10-14 00:00", notes="$7"),
-    chnrsm=dict(symbol="CHNR", start="2025-10-13 00:00", end="2025-10-13 11:25", notes="$7"),
-    sgbx=dict(symbol="SGBX", start="2025-11-13 00:00", end="2025-11-14 00:00", notes="$4"),
-    sgbxsm=dict(symbol="SGBX", start="2025-11-13 00:00", end="2025-11-13 12:00", notes="$4"),
-    cnck=dict(symbol="CNCK", start="2025-12-01 00:00", end="2025-12-01 23:00", notes=""),
-    radxsm=dict(symbol="RADX", start="2025-12-15 12:16", end="2025-12-15 12:20", notes="$8 to $26"),
-    radx=dict(symbol="RADX", start="2025-12-15 00:00", end="2025-12-15 23:00", notes="$8 to $26"),
-    bttc=dict(symbol="BTTC", start="2025-12-11 00:00", end="2025-12-11 23:00", notes="4 o 12"),
-    crbp=dict(symbol="CRBP", start="2025-12-11 00:00", end="2025-12-11 23:00", notes="$10. Massive early drop"),
-    migi=dict(symbol="MIGI", start="2025-12-11 00:00", end="2025-12-11 23:00", notes="7 to 16"),
-    migism=dict(symbol="MIGI", start="2025-12-11 00:00", end="2025-12-11 13:04", notes="7 to 16"),
-    jzxn=dict(symbol="JZXN", start="2025-12-12 00:00", end="2025-12-12 23:00", notes="5 to 12 to 2.5"),
-    mbrx=dict(symbol="MBRX", start="2025-12-17 00:00", end="2025-12-17 23:00", notes="4.5 to 6.5 to 4"),
-    lhai=dict(symbol="LHAI", start="2025-12-18 00:00", end="2025-12-18 23:00", notes="10 to 15"),
-    azi=dict(symbol="AZI", start="2025-12-19 00:00", end="2025-12-19 23:00", notes="1.5 to 3.5"),
-    aapl1118=dict(symbol="AAPL", start="2025-11-18 14:15", end="2025-11-18 21:00"),
-)
+import json
+from pathlib import Path
+
+_json_path = Path(__file__).parent / "catalog_options.json"
+with open(_json_path) as f:
+    CATALOG_OPTIONS = json.load(f)
