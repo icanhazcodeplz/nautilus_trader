@@ -16,7 +16,6 @@ class RandomConfig(StrategyConfig, frozen=True):
     max_position_multiplier:int
     stop_loss:float
     take_profit:float
-    take_ratio:float = 1.0
 
 
 class Random(BaseStrategy):
@@ -49,7 +48,7 @@ class Random(BaseStrategy):
                 if self.position_qty < 10:
                     sell_qty = self.position_qty
                 else:
-                    sell_qty = int(self.position_qty * self.config.take_ratio)
+                    sell_qty = self.position_qty
                 self.sell(quantity=sell_qty, limit_price=take_price, tag="t")
 
     def on_order_filled(self, order) -> None:

@@ -215,7 +215,6 @@ if __name__ == "__main__":
     strategy_name = "momo"
     params = dict(
         allow_trades=True,
-        take_ratio=0.8,
         max_position_multiplier=10,
         trade_size=100,
         stop_loss=1.0,

@@ -37,7 +37,6 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     stop_loss: float
 
     take_profit: float
-    take_ratio: float
     lower_scalar_multiplier: float
     upper_scalar_multiplier: float
     vwap_window: int
@@ -249,7 +248,7 @@ class MomoStrategy(BaseStrategy):
                     tick.size > 1
                 ):
                     # and price > self.vwap.upper
-                    sell_qty = max(int(position_qty * self.config.take_ratio), int(self.config.trade_size / 10), 1)
+                    sell_qty = max(int(position_qty), int(self.config.trade_size / 10), 1)
                     self.sell(sell_qty, limit_price=price, cancel_after_secs=10, tag="t")
                     self.last_take_ts = self.clock.utc_now()
 
