@@ -21,8 +21,7 @@ from nautilus_trader.model.data import OrderBookDeltas
 from nautilus_trader.model.data import QuoteTick
 from nautilus_trader.model.data import TradeTick
 
-from nautilus_trader.model.enums import OrderSide, ContingencyType, OrderStatus
-from nautilus_trader.model.enums import OrderType
+from nautilus_trader.model.enums import OrderSide, OrderStatus
 from nautilus_trader.model.enums import TimeInForce
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.events import OrderRejected
@@ -536,27 +535,6 @@ class BaseStrategy(Strategy):
         if self.save_artifacts:
             self._artifacts_io.save_ticks_and_metrics(self._tick_data_dicts)
             self._artifacts_io.save_signals(self.buy_sell_signals)
-
-            # Get and save order events
-            all_orders = self.cache.orders(strategy_id=self.id)
-            all_events = []
-            for order in all_orders:
-                for event in order.events:
-                    all_events.append(
-                        {
-                            "id": str(order.client_order_id),
-                            "venue_id": str(order.venue_order_id),
-                            "side": str(order.side),
-                            "quantity": float(order.quantity),
-                            "filled_qty": float(order.filled_qty),
-                            "price": float(order.price) if hasattr(order, "price") else None,
-                            "avg_px": float(order.avg_px) if order.avg_px else None,
-                            "event": str(event.__class__.__name__),
-                            "ts_init": event.ts_init,
-                            "ts_event": event.ts_event,
-                        }
-                    )
-            self._artifacts_io.save_orders_events(all_events)
 
     def on_instrument(self, instrument: Instrument) -> None:
         pass
