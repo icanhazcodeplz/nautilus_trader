@@ -453,7 +453,7 @@ class BaseStrategy(Strategy):
             vals = {k: str(round(v, 3)) for k, v in metric.get_vals().items()}
             metrics_data = {**metrics_data, **vals}
         self.log.info(
-            f"UPDATE: {tick_str}\n"
+            f"UPDATE:\n{tick_str}\n"
             f"Total Bought {self._total_buy_qty} | Realized: {realized_pnl} | {OpenBuysQty=} Orders: {open_buys_str}\n"
             f"{position_str}"
             # f"{open_sells_str}"

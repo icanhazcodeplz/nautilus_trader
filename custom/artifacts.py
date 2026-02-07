@@ -67,6 +67,26 @@ class CreateMarkers:
     def _make_marker_dict(dt, position, color, shape, text, price):
         return dict(time=dt, position=position, color=color, shape=shape, text=text, price=price)
 
+    def _arrow_above(self, dt: int, price: float, color: Colors, text: str) -> dict:
+        return self._make_marker_dict(
+            dt=dt,
+            price=market_round(price),
+            color=color.value,
+            text=text,
+            position="aboveBar",
+            shape="arrowDown",
+        )
+
+    def _arrow_below(self, dt: int, price: float, color: Colors, text: str) -> dict:
+        return self._make_marker_dict(
+            dt=dt,
+            price=market_round(price),
+            color=color.value,
+            text=text,
+            position="belowBar",
+            shape="arrowUp",
+        )
+
     def create_trades_markers(self, trades, sell_legs):
         if trades.empty:
             print("No trades to create markers for")
@@ -77,46 +97,24 @@ class CreateMarkers:
 
         for _, ser in trades.iterrows():
             # Buy markers
-            price_markers.append(
-                self._make_marker_dict(
-                    dt=ser["buy_dt"],
-                    position="aboveBar",
-                    color="#f77a0c",
-                    shape="arrowDown",
-                    text=f"{ser['desc']}|{ser['qty']}",
-                    price=round(ser["buy_price"], 2),
-                )
-            )
+            text = f"{ser['desc']}|{ser['qty']}"
+            price_markers.append(self._arrow_above(ser["buy_dt"], ser["buy_price"], Colors.ORANGE, text))
 
             # Trade ending markers
-            pnl = ser["pnl"]
             price_markers.append(
-                self._make_marker_dict(
+                self._arrow_above(
                     dt=ser["sell_dt"],
-                    position="aboveBar",
-                    color="#fc0317" if pnl < 0 else "#07fc03",
-                    shape="arrowDown",
-                    # text=f"{order['desc']}-{qty}",
-                    text=f"{pnl}",
+                    color=(Colors.RED if ser["pnl"] < 0 else Colors.GREEN),
+                    text=f"{ser['pnl']}",
                     price=ser["avg_sell_price"],
                 )
             )
 
         # Sell leg markers
         for _, ser in sell_legs.iterrows():
-            color = "#fc0317" if ser["pnl"] < 0 else "#07fc03"
-
+            color = Colors.RED if ser["pnl"] < 0 else Colors.GREEN
             text = f"{ser['desc']}|{ser['qty']}"
-            price_markers.append(
-                self._make_marker_dict(
-                    dt=ser["dt"],
-                    position="belowBar",
-                    color=color,
-                    shape="arrowUp",
-                    text=text,
-                    price=ser["price"],
-                )
-            )
+            price_markers.append(self._arrow_below(dt=ser["dt"], color=color, text=text, price=ser["price"]))
 
         price_markers.sort(key=lambda x: x["time"])
         return price_markers

@@ -3,7 +3,7 @@ from typing import Tuple
 import pandas as pd
 
 
-def market_round(price):
+def market_round_3_or_4(price):
     if price < 1.0:
         return round(price, 4)
     return round(price, 3)
@@ -35,7 +35,7 @@ def orders_to_trades(orders_report: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Data
         qty = buy_qty
         sell_value = 0
         latest_sell_dt = buy_dt  # just to initialize
-        record_trade = True  # Only record trades that get completely close
+        record_trade = True  # Only record trades that get completely closed
         while qty > 0:
             if not sells:
                 print(f"No more sells. Ignoring last buy: {buy_dt} qty {buy_qty} at ${buy_price}.")
@@ -60,12 +60,12 @@ def orders_to_trades(orders_report: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Data
                     dt=sell_dt,
                     qty=sell_qty,
                     price=sell_price,
-                    pnl=market_round((sell_price - buy_price) * sell_qty),
+                    pnl=market_round_3_or_4((sell_price - buy_price) * sell_qty),
                 )
             ]
         if record_trade:
-            sell_price = market_round(sell_value / buy_qty)
-            price_diff = market_round(sell_price - buy_price)
+            sell_price = market_round_3_or_4(sell_value / buy_qty)
+            price_diff = market_round_3_or_4(sell_price - buy_price)
             trades += [
                 dict(
                     buy_id=buy_id,
@@ -76,7 +76,7 @@ def orders_to_trades(orders_report: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Data
                     qty=buy_qty,
                     buy_price=buy_price,
                     avg_sell_price=sell_price,
-                    pnl=market_round(price_diff * buy_qty),
+                    pnl=market_round_3_or_4(price_diff * buy_qty),
                 )
             ]
 

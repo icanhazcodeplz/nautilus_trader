@@ -16,9 +16,10 @@ app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, expose_headers=["Content-Range"])
 
 api = Api(app)
-artifacts_io = ArtifactsIO(data_subdir("runs", "20251117_182800"))
-artifacts_io = ArtifactsIO(VIZ_ARTIFACTS_PATH)
+artifacts_dir = data_subdir("runs", "20260206_160334")
+artifacts_dir = VIZ_ARTIFACTS_PATH
 
+artifacts_io = ArtifactsIO(artifacts_dir)
 
 def convert_bar_to_json(bar):
     return {

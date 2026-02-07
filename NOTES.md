@@ -99,4 +99,18 @@ Sync time with ntp
    - echo "* * * * * /usr/bin/sntp -sS time.apple.com" | sudo crontab -
    - sudo crontab -l
    - Check mail after 1 min by typing "mail" to see if any errors
-   - 
+
+## Creating own Redis server
+```bash
+brew install redis
+# Start as background service, persists across reboots
+brew services start redis 
+# Verify running
+redis-cli ping
+# Stop service
+brew services stop redis
+# Defaults to localhost:6379
+
+# Size of db file
+ls -lh "$(redis-cli CONFIG GET dir | tail -1)/$(redis-cli CONFIG GET dbfilename | tail -1)"
+```

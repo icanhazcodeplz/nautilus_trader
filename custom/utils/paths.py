@@ -20,8 +20,8 @@ def data_subdir(*dirs):
     return repo_path("data", *dirs)
 
 
-_DT_STR = datetime.datetime.now(ZoneInfo("America/New_York")).strftime("%Y%m%d_%H%M%S")
+DT_STR = datetime.datetime.now(ZoneInfo("America/New_York")).strftime("%Y%m%d_%H%M%S")
 
 
 def run_artifacts_subdir(*dirs):
-    return data_subdir("runs", _DT_STR, *dirs)
+    return data_subdir("runs", DT_STR, *dirs)
