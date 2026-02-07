@@ -21,6 +21,7 @@ import uuid
 from decimal import Decimal
 from typing import Any
 
+from custom.utils.paths import DT_STR
 from nautilus_trader.adapters.alpaca.enums import AlpacaOrderStatus
 from nautilus_trader.adapters.alpaca.enums import AlpacaOrderType
 from nautilus_trader.adapters.alpaca.enums import AlpacaTimeInForce
@@ -53,13 +54,8 @@ def is_uuid(value: str) -> bool:
 
 
 def client_id_is_real(client_order_id: str) -> bool:
-    # Alpaca generates a random UUID if client_order_id is not provided
-    # TODO: WARNING This assumes that we never produce a client_id that is a valid UUID!
-    if is_uuid(client_order_id):
-        return False
-    if len(client_order_id) > 32:
-        return False
-    return True
+    # FIXME: This requires that DT_STR is part of the trader_id in TradingNodeConfig()
+    return DT_STR in str(client_order_id)
 
 
 class AlpacaEnumParser:

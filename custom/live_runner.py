@@ -3,12 +3,13 @@ from time import sleep
 
 from custom.strategies.momo import MomoStrategy
 from custom.strategies.momo import MomoStrategyConfig
-from custom.utils.paths import run_artifacts_subdir
+from custom.utils.paths import run_artifacts_subdir, DT_STR
 from custom.utils.run_utils import run_strategy
 from nautilus_trader.adapters.alpaca import ALPACA, AlpacaExecClientConfig, AlpacaDataClientConfig
 from nautilus_trader.adapters.alpaca import AlpacaLiveDataClientFactory
 from nautilus_trader.adapters.alpaca import AlpacaLiveExecClientFactory
 from nautilus_trader.cache.config import CacheConfig
+from nautilus_trader.common.config import DatabaseConfig
 from nautilus_trader.config import InstrumentProviderConfig
 from nautilus_trader.config import LiveExecEngineConfig
 from nautilus_trader.config import LoggingConfig
@@ -30,7 +31,7 @@ file_log_level = "DEBUG"
 
 artifacts_directory = run_artifacts_subdir()
 config_node = TradingNodeConfig(
-    trader_id=TraderId("TESTER-001"),
+    trader_id=TraderId(f"T-{DT_STR}"),  # FIXME: DO NOT REMOVE DT_STR, Is there a more robust way?
     logging=LoggingConfig(
         log_level=log_level,
         log_level_file=file_log_level,
@@ -52,12 +53,14 @@ config_node = TradingNodeConfig(
         open_check_lookback_mins=10,  # TODO: Reduce this?
         open_check_threshold_ms=3000,
         graceful_shutdown_on_exception=True,
+        allow_overfills=True, # FIXME: Do we want this?
     ),
     cache=CacheConfig(
-        # database=DatabaseConfig(),
+        database=DatabaseConfig(),
         encoding="msgpack",
         timestamps_as_iso8601=True,
         buffer_interval_ms=None,
+        flush_on_start=False,
     ),
     data_clients={
         ALPACA: AlpacaDataClientConfig(
@@ -86,20 +89,23 @@ strategy_config = MomoStrategyConfig(
     instrument_id=instrument_id,
     external_order_claims=[instrument_id],
     trade_size=100,
-    max_position_multiplier=1,
-    stop_loss=0.50,
+    max_position_multiplier=10,
+    stop_loss=1.0,
     take_profit=None,
     upper_scalar_multiplier=1.0,
     lower_scalar_multiplier=1.5,
     vwap_window=150,
     variance_window=300,
+    outer_band_multiplier=3.0,
+    pressure_window=100,
     trailing_buy_order=False,
     trailing_take=True,
-    num_sell_tiers=4,
+    num_sell_tiers=3,
     random_buy=True,
     simple_take=False,
     allow_trades=True,
-    print_update_every_secs=3,
+    print_update_every_secs=5,
+    only_buy_if_macd_positive=False,
 )
 node.add_data_client_factory(ALPACA, AlpacaLiveDataClientFactory)
 node.add_exec_client_factory(ALPACA, AlpacaLiveExecClientFactory)
