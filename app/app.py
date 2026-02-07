@@ -21,6 +21,7 @@ artifacts_dir = VIZ_ARTIFACTS_PATH
 
 artifacts_io = ArtifactsIO(artifacts_dir)
 
+
 def convert_bar_to_json(bar):
     return {
         "time": bar.ts_event / 1e9,
@@ -47,7 +48,15 @@ def get_data():
     trades, sell_legs = orders_to_trades(orders_report)
     analyze_trades(trades, print_report=True)
 
-    markers = CreateMarkers().create_trades_markers(trades, sell_legs)
+    if artifacts_dir == VIZ_ARTIFACTS_PATH:
+        # FIXME: Refactor so backtests use the same markers!
+        markers = CreateMarkers().create_trades_markers(trades, sell_legs)
+    else:
+        trades["desc"] = trades["buy_id"].astype(str)
+        trades_markers = CreateMarkers().create_trades_markers(trades)
+        fills = artifacts_io.get_fills()
+        fill_markers = CreateMarkers().create_fill_markers(fills)
+        markers = sorted(trades_markers + fill_markers, key=lambda x: x["time"])
 
     # Markers may not have same time as a tick
     for m in markers:
@@ -72,7 +81,7 @@ def get_data():
     for s in signals:
         s["time"] = str(s["time"])
 
-    baby_blue = '#59e5ea'
+    baby_blue = "#59e5ea"
     records = dict(
         ticks=ticks,
         ten_sec=[],
@@ -86,11 +95,11 @@ def get_data():
             dict(key="vwap_low_inner", color=baby_blue, width=1, type=0),
             dict(key="vwap_low_outer", color=baby_blue, width=1, type=0),
             dict(key="vwap_high", color=baby_blue, width=1.5, type=0),
-            dict(key="vwap_high_inner", color='red', width=1, type=0),
-            dict(key="vwap_high_outer", color='red', width=1, type=0),
+            dict(key="vwap_high_inner", color="red", width=1, type=0),
+            dict(key="vwap_high_outer", color="red", width=1, type=0),
         ],
         SecondaryTickChartLines=[
-            dict(key='vwap_pressure', color='#e70f0f', color_negative=baby_blue, width=1, type=0),
+            dict(key="vwap_pressure", color="#e70f0f", color_negative=baby_blue, width=1, type=0),
         ],
     )
     return jsonify(records)
