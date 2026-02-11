@@ -16,7 +16,7 @@ from nautilus_trader.serialization.serializer import MsgSpecSerializer
 from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.model.identifiers import TraderId
 
-VIZ_ARTIFACTS_PATH = data_subdir("viz")
+BACKTEST_RUNS_PATH = data_subdir("backtest_runs")
 
 
 def dict_to_file(dict_, filename):

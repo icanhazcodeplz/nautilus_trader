@@ -6,7 +6,7 @@ import pandas as pd
 from custom.backtest_utils.load_catalog_data import load_catalog_data_to_engine_for_backtest
 from custom.nt_extensions.limit_fill_model import LimitFillModel
 from custom.strategies.momo import MomoStrategyConfig, MomoStrategy
-from custom.artifacts import ArtifactsIO, VIZ_ARTIFACTS_PATH
+from custom.artifacts import ArtifactsIO, BACKTEST_RUNS_PATH
 from custom.strategies.random import RandomConfig, Random
 from nautilus_trader.backtest.engine import BacktestEngine
 from nautilus_trader.backtest.engine import BacktestEngineConfig
@@ -249,9 +249,9 @@ if __name__ == "__main__":
         print(f"\nRunning single backtest for {datasets[0]}")
         start_time = pd.Timestamp.now()
         run_single_backtest(
-            datasets[0], strategy_name, params, artifacts_location=VIZ_ARTIFACTS_PATH, log_level=log_level
+            datasets[0], strategy_name, params, artifacts_location=BACKTEST_RUNS_PATH, log_level=log_level
         )
-        artifacts_io = ArtifactsIO(VIZ_ARTIFACTS_PATH)
+        artifacts_io = ArtifactsIO(BACKTEST_RUNS_PATH)
         num_buy_sells, long_wins = buy_signal_stats(artifacts_io.load_signals())
 
         p_mets = artifacts_io.load_performance_metrics()

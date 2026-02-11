@@ -10,14 +10,14 @@ from flask_cors import CORS
 from custom.backtest_runner import analyze_trades
 from custom.utils.paths import data_subdir
 from custom.utils.orders_to_trades import orders_to_trades
-from custom.artifacts import CreateMarkers, ArtifactsIO, VIZ_ARTIFACTS_PATH
+from custom.artifacts import CreateMarkers, ArtifactsIO, BACKTEST_RUNS_PATH
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, expose_headers=["Content-Range"])
 
 api = Api(app)
-artifacts_dir = data_subdir("runs", "20260206_160334")
-artifacts_dir = VIZ_ARTIFACTS_PATH
+# artifacts_dir = data_subdir("runs", "20260206_160334")
+artifacts_dir = BACKTEST_RUNS_PATH
 
 artifacts_io = ArtifactsIO(artifacts_dir)
 
@@ -48,7 +48,7 @@ def get_data():
     trades, sell_legs = orders_to_trades(orders_report)
     analyze_trades(trades, print_report=True)
 
-    if artifacts_dir == VIZ_ARTIFACTS_PATH:
+    if artifacts_dir == BACKTEST_RUNS_PATH:
         # FIXME: Refactor so backtests use the same markers!
         markers = CreateMarkers().create_trades_markers(trades, sell_legs)
     else:
