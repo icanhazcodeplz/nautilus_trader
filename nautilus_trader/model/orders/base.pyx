@@ -1063,6 +1063,14 @@ cdef class Order:
             if self._fsm.state == OrderStatus.PENDING_UPDATE:
                 self._fsm.trigger(self._previous_status)
             self._updated(event)
+            # If qty reduction makes order fully filled, transition to FILLED
+            if (
+                self.leaves_qty._mem.raw == 0
+                and self.filled_qty._mem.raw > 0
+                and self._fsm.state == OrderStatus.PARTIALLY_FILLED
+            ):
+                self._fsm.trigger(OrderStatus.FILLED)
+                self.ts_closed = event.ts_event
         elif isinstance(event, OrderTriggered):
             Condition.is_true(
                 (
