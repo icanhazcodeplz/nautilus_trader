@@ -197,6 +197,10 @@ class AlpacaExecutionClient(LiveExecutionClient):
         # Keep track of the associated client_order_id with the venue_order_id as orders are replaced/modified
         self._venue_id__client_id_map = {}
 
+        # Store pending modify params so the "replaced" WS handler uses the correct qty/price
+        # (the "replaced" event only contains OLD order data, not the new replacement order's data)
+        self._pending_modify_params: dict[ClientOrderId, tuple[Quantity | None, Price | None]] = {}
+
     @property
     def instrument_provider(self):
         """
@@ -728,6 +732,10 @@ class AlpacaExecutionClient(LiveExecutionClient):
             limit_price = str(command.price) if command.price else None
             stop_price = str(command.trigger_price) if command.trigger_price else None
 
+            # Store pending params so the WS "replaced" handler uses the correct values
+            # (the "replaced" event only contains the OLD order's data)
+            self._pending_modify_params[command.client_order_id] = (command.quantity, command.price)
+
             # Modify order via HTTP API (Alpaca uses PATCH for replace)
             try:
                 await self._http_client.replace_order(
@@ -1009,15 +1017,27 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 self._log.debug(f"Order {client_order_id} replaced")
 
                 replaced_by = msg["data"]["order"]["replaced_by"]
-                qty = msg["data"]["order"]["qty"]
-                limit_price = msg["data"]["order"]["limit_price"]
+
+                # Use pending modify params if available (from our _modify_order call).
+                # The "replaced" event's order data contains the OLD order's qty/price,
+                # not the new replacement order's values.
+                pending = self._pending_modify_params.pop(client_order_id, None)
+                if pending:
+                    pending_qty, pending_price = pending
+                    quantity = pending_qty if pending_qty is not None else order.quantity
+                    price = pending_price if pending_price is not None else order.price
+                else:
+                    # External replacement or no pending params - fall back to old order data
+                    quantity = Quantity.from_str(msg["data"]["order"]["qty"])
+                    price = Price(float(msg["data"]["order"]["limit_price"]), precision=order.price.precision)
+
                 self.generate_order_updated(
                     strategy_id=order.strategy_id,
                     instrument_id=instrument_id,
                     client_order_id=client_order_id,
                     venue_order_id=VenueOrderId(replaced_by),
-                    quantity=Quantity.from_str(qty),
-                    price=Price(float(limit_price), precision=order.price.precision),
+                    quantity=quantity,
+                    price=price,
                     trigger_price=order.trigger_price if order.has_trigger_price else None,
                     ts_event=ts_event,
                     venue_order_id_modified=True,
