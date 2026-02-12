@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import random
+import shutil
 
 import pandas as pd
 
@@ -20,6 +21,8 @@ from nautilus_trader.adapters.alpaca import ALPACA
 from nautilus_trader.backtest.models import LatencyModel
 from nautilus_trader.cache.config import CacheConfig
 from nautilus_trader.config import LoggingConfig
+from nautilus_trader.model.events import OrderFilled
+from nautilus_trader.persistence.config import StreamingConfig
 from nautilus_trader.core.nautilus_pyo3 import (
     Expectancy,
     LongRatio,
@@ -113,6 +116,14 @@ def run_single_backtest(dataset_name, strategy_name, params, artifacts_location=
     random_seed = params_copy.pop("random_seed", None)
     random.seed(random_seed)
 
+    streaming = None
+    if artifacts_location is not None:
+        streaming = StreamingConfig(
+            catalog_path=str(artifacts_location),
+            include_types=[OrderFilled],
+            replace_existing=True,
+        )
+
     engine = BacktestEngine(
         config=BacktestEngineConfig(
             trader_id=TraderId("M-1"),
@@ -128,6 +139,7 @@ def run_single_backtest(dataset_name, strategy_name, params, artifacts_location=
                 use_pyo3=False,
             ),
             cache=CacheConfig(tick_capacity=1000, bar_capacity=1000),
+            streaming=streaming,
         )
     )
 
@@ -178,6 +190,20 @@ def run_single_backtest(dataset_name, strategy_name, params, artifacts_location=
         strategy = MomoStrategy(config=config)
 
     performance_stats = run_strategy(strategy, engine, artifacts_location, run_config=config.dict())
+
+    if artifacts_location is not None:
+        # --- SAVE ORDER FILLS TO PKL ---
+        from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
+
+        catalog = ParquetDataCatalog(str(artifacts_location))
+        fills = catalog.read_backtest(instance_id=str(engine.kernel.instance_id), data_cls=OrderFilled)
+        # Deduplicate: OrderFilled events are published twice in engine.pyx
+        # (once from _handle_order_fill, once from _handle_event)
+        fills = list(set(f for f in fills))
+        artifacts_io = ArtifactsIO(BACKTEST_RUNS_PATH)
+        artifacts_io.save_backtest_fills_to_pkl(fills)
+        shutil.rmtree(BACKTEST_RUNS_PATH / "backtest", ignore_errors=True)
+
     return performance_stats
 
 
@@ -263,4 +289,4 @@ if __name__ == "__main__":
 
         trades, sell_legs = orders_to_trades(df)
         analyze_trades(trades, print_report=True)
-        print(f"\nTotal Runtime {pd.Timestamp.now()-start_time}")
+        print(f"\nTotal Runtime {pd.Timestamp.now() - start_time}")

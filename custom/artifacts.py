@@ -32,7 +32,18 @@ def load_txt_file_to_dict(filename):
 class ArtifactsIO:
     def __init__(self, directory):
         self.directory = directory
+        self._backtest = directory == BACKTEST_RUNS_PATH
         self._run_dt_str = str(directory).split("/")[-1]  # TODO: Sloppy. Should pass this in as arg
+
+    def _save_pickle(self, data, filename):
+        filepath = self.directory / filename
+        with open(filepath, "wb") as f:
+            pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    def _load_pickle(self, filename):
+        filepath = self.directory / filename
+        with open(filepath, "rb") as f:
+            return pickle.load(f)
 
     def save_config(self, config):
         dict_to_file(config, self.directory / "config.json")
@@ -60,7 +71,7 @@ class ArtifactsIO:
         dict_to_file(events, self.directory / "orders_events.json")
 
     @staticmethod
-    def _parse_fill_event(fill_event):
+    def parse_fill_event(fill_event: OrderFilled) -> dict[str, Any]:
         return {
             "ts_init": fill_event.ts_init,
             "ts_event": fill_event.ts_event,
@@ -84,16 +95,23 @@ class ArtifactsIO:
         return database.load_orders()
 
     def get_fills(self) -> list[dict[str, Any]]:
-        orders = self.read_db_order_events()
-        fill_events = [
-            self._parse_fill_event(event)
-            for order in orders.values()
-            for event in order.events
-            if isinstance(event, OrderFilled)
-        ]
+        if self._backtest:
+            fills = self._load_pickle("fills.pkl")
+            fill_events = [self.parse_fill_event(event) for event in fills]
+        else:
+            orders = self.read_db_order_events()
+            fill_events = [
+                self.parse_fill_event(event)
+                for order in orders.values()
+                for event in order.events
+                if isinstance(event, OrderFilled)
+            ]
 
         fill_events = sorted(fill_events, key=lambda e: e["ts_event"])
         return fill_events
+
+    def save_backtest_fills_to_pkl(self, fills_list: list[OrderFilled]):
+        self._save_pickle(fills_list, "fills.pkl")
 
     def get_fills_and_buys(self) -> list[dict[str, Any]]:
         fills = self.get_fills()
@@ -114,11 +132,15 @@ class ArtifactsIO:
     def load_performance_metrics(self):
         return load_txt_file_to_dict(self.directory / "performance_metrics.json")
 
+    def load_alpaca_trade_updates(self):
+        txt = load_txt_file_to_dict(self.directory / "alpaca_trade_updates.json")
+        return pd.DataFrame.from_dict(txt)
+
     def save_orders_report(self, orders_report_df: pd.DataFrame):
-        orders_report_df.to_pickle(self.directory / "orders_report.pkl")
+        self._save_pickle(orders_report_df, "orders_report.pkl")
 
     def load_orders_report(self, process=False):
-        df = pd.read_pickle(self.directory / "orders_report.pkl")
+        df = self._load_pickle("orders_report.pkl")
         if process:
             cols = [
                 "venue_order_id",
@@ -146,14 +168,10 @@ class ArtifactsIO:
         return load_txt_file_to_dict(self.directory / "signals.txt")
 
     def save_ticks_and_metrics(self, metrics):
-        filepath = self.directory / "ticks_and_metrics.pkl"
-        with open(filepath, "wb") as f:
-            pickle.dump(metrics, f, protocol=pickle.HIGHEST_PROTOCOL)
+        self._save_pickle(metrics, "ticks_and_metrics.pkl")
 
     def load_ticks_and_metrics_file(self):
-        filepath = self.directory / "ticks_and_metrics.pkl"
-        with open(filepath, "rb") as f:
-            return pickle.load(f)
+        return self._load_pickle("ticks_and_metrics.pkl")
 
 
 class Colors(StrEnum):

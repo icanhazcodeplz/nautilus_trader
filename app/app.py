@@ -48,15 +48,11 @@ def get_data():
     trades, sell_legs = orders_to_trades(orders_report)
     analyze_trades(trades, print_report=True)
 
-    if artifacts_dir == BACKTEST_RUNS_PATH:
-        # FIXME: Refactor so backtests use the same markers!
-        markers = CreateMarkers().create_trades_markers(trades, sell_legs)
-    else:
-        trades["desc"] = trades["buy_id"].astype(str)
-        trades_markers = CreateMarkers().create_trades_markers(trades)
-        fills = artifacts_io.get_fills()
-        fill_markers = CreateMarkers().create_fill_markers(fills)
-        markers = sorted(trades_markers + fill_markers, key=lambda x: x["time"])
+    trades["desc"] = trades["buy_id"].astype(str)
+    trades_markers = CreateMarkers().create_trades_markers(trades)
+    fills = artifacts_io.get_fills()
+    fill_markers = CreateMarkers().create_fill_markers(fills)
+    markers = sorted(trades_markers + fill_markers, key=lambda x: x["time"])
 
     # Markers may not have same time as a tick
     for m in markers:
