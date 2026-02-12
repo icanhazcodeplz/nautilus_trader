@@ -393,7 +393,7 @@ class BaseStrategy(Strategy):
                 for order in cache_open_orders:
                     self.log.warning(f"Cache order {order}")
                 for open_order in self_open_orders:
-                    self.log.warning(f"OpenOrder {open_order.order}")
+                    self.log.warning(f"OpenOrder {open_order}")
 
             for order in self_open_orders - cache_open_orders:
                 self.log.warning(f"OpenOrder {order} not found in cache.")
@@ -452,7 +452,7 @@ class BaseStrategy(Strategy):
             vals = {k: str(round(v, 3)) for k, v in metric.get_vals().items()}
             metrics_data = {**metrics_data, **vals}
         self.log.info(
-            f"UPDATE:\n{tick_str}\n"
+            f"UPDATE: {self.config.instrument_id}\n{tick_str}\n"
             f"Total Bought {self._total_buy_qty} | Realized: {realized_pnl} | {OpenBuysQty=} Orders: {open_buys_str}\n"
             f"{position_str}"
             # f"{open_sells_str}"

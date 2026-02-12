@@ -203,9 +203,7 @@ if __name__ == "__main__":
         while trials_started < total_trials:
             if pm.num_running_processes < n_processes:
                 print(f"Starting process {trials_started}")
-                pm.add_and_start(
-                    name=str(trials_started), target=target, args=(study_name, sampler, trials_per_process)
-                )
+                pm.add_and_start(name=str(trials_started), target=target, args=(study_name, sampler, trials_per_process))  # fmt: skip
                 trials_started += trials_per_process
                 pm.remove_completed()
             else:
@@ -215,15 +213,15 @@ if __name__ == "__main__":
             # Progress tracking every 10 trials
             trials_completed = trials_started - pm.num_running_processes
             if trials_completed >= last_progress_report + 10:
-                time_fmt = '%H:%M:%S'
+                time_fmt = "%H:%M:%S"
                 last_progress_report = (trials_completed // 10) * 10
                 elapsed = datetime.now() - start
                 avg_time_per_trial = elapsed / trials_completed
                 remaining_trials = total_trials - trials_completed
-                est_remaining = (avg_time_per_trial * remaining_trials)
+                est_remaining = avg_time_per_trial * remaining_trials
                 est_finish = (datetime.now() + est_remaining).strftime(time_fmt)
-                print(f"\n=== Progress: {trials_completed}/{total_trials} trials ({trials_completed * 100 // total_trials}%) ===")
-                print(f"\tElapsed: {str(elapsed).split('.')[0]} | Remaining: {str(est_remaining).split('.')[0]} | Finish: {est_finish}")
+                print(f"\n\tProgress: {trials_completed}/{total_trials} trials ({trials_completed * 100 // total_trials}%)")  # fmt: skip
+                print(f"\tElapsed: {str(elapsed).split('.')[0]} | Remaining: {str(est_remaining).split('.')[0]} | Finish: {est_finish}")  # fmt: skip
 
         pm.block(sleep_secs=1)
         print(f"TOTAL RUN TIME: {datetime.now() - start}")

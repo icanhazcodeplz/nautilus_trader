@@ -946,8 +946,8 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
                 # previous_qty, previous_value = self.order_previous_qty_and_value.get(client_order_id, (0, 0.0))
 
-                this_fill_qty = int(msg['data']['qty'])
-                this_fill_price = float(msg['data']['price'])
+                this_fill_qty = int(msg["data"]["qty"])
+                this_fill_price = float(msg["data"]["price"])
                 # current_total_value = round(filled_qty * filled_avg_price, 4)
                 # this_fill_value = current_total_value - previous_value
                 # this_fill_px = round(this_fill_value / this_fill_qty, 4)
@@ -972,8 +972,8 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 #         ts_event=ts_event,
                 #         venue_order_id_modified=False,
                 #     )
-                    # FIXME: BRENT is this where the rust failure is happening? Need to delay sending order filled
-                    #     until update has finished? Create a queue for this?
+                # FIXME: BRENT is this where the rust failure is happening? Need to delay sending order filled
+                #     until update has finished? Create a queue for this?
 
                 alpaca_event_id = msg["data"]["event_id"]  # This is a unique id for the trade event
                 currency = Currency.from_str("USD")
@@ -1030,6 +1030,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
                     # External replacement or no pending params - fall back to old order data
                     quantity = Quantity.from_str(msg["data"]["order"]["qty"])
                     price = Price(float(msg["data"]["order"]["limit_price"]), precision=order.price.precision)
+                    raise RuntimeError("Should not fall here")
 
                 self.generate_order_updated(
                     strategy_id=order.strategy_id,

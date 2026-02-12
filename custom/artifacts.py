@@ -67,11 +67,8 @@ class ArtifactsIO:
             config["strategy"].pop(drop_key)
         return config
 
-    def save_orders_events(self, events):
-        dict_to_file(events, self.directory / "orders_events.json")
-
     @staticmethod
-    def parse_fill_event(fill_event: OrderFilled) -> dict[str, Any]:
+    def _parse_fill_event(fill_event: OrderFilled) -> dict[str, Any]:
         return {
             "ts_init": fill_event.ts_init,
             "ts_event": fill_event.ts_event,
@@ -97,11 +94,11 @@ class ArtifactsIO:
     def get_fills(self) -> list[dict[str, Any]]:
         if self._backtest:
             fills = self._load_pickle("fills.pkl")
-            fill_events = [self.parse_fill_event(event) for event in fills]
+            fill_events = [self._parse_fill_event(event) for event in fills]
         else:
             orders = self.read_db_order_events()
             fill_events = [
-                self.parse_fill_event(event)
+                self._parse_fill_event(event)
                 for order in orders.values()
                 for event in order.events
                 if isinstance(event, OrderFilled)
@@ -113,7 +110,8 @@ class ArtifactsIO:
     def save_backtest_fills_to_pkl(self, fills_list: list[OrderFilled]):
         self._save_pickle(fills_list, "fills.pkl")
 
-    def get_fills_and_buys(self) -> list[dict[str, Any]]:
+    def __get_fills_and_buys(self) -> list[dict[str, Any]]:
+        # FIXME: Remove? might use instead of using orders_report?
         fills = self.get_fills()
         df = pd.DataFrame([f for f in fills if f["side"] == "buy"])
 
@@ -162,6 +160,7 @@ class ArtifactsIO:
         return df
 
     def save_signals(self, signals):
+        # FIXME: Delete signals?
         dict_to_file(signals, self.directory / "signals.txt")
 
     def load_signals(self):

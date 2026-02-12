@@ -53,7 +53,7 @@ config_node = TradingNodeConfig(
         open_check_lookback_mins=10,  # TODO: Reduce this?
         open_check_threshold_ms=3000,
         graceful_shutdown_on_exception=True,
-        allow_overfills=True, # FIXME: Do we want this?
+        allow_overfills=True,  # FIXME: Do we want this?
     ),
     cache=CacheConfig(
         database=DatabaseConfig(),
@@ -113,6 +113,7 @@ node.add_exec_client_factory(ALPACA, AlpacaLiveExecClientFactory)
 
 def place_orders_for_testing(paper: bool = True):
     from custom.utils.alpaca_trader_http_client import AlpacaTraderHttpClient
+
     client = AlpacaTraderHttpClient(paper=paper)
     client.limit_order(side="buy", symbol=symbol, qty=1000, price=2.50)
     sleep(3)
