@@ -1343,36 +1343,31 @@ class LiveExecutionEngine(ExecutionEngine):
             LogColor.BLUE,
         )
 
-        client_id = self._cache.client_id(order.client_order_id)
-        if client_id is None:
-            self._log.warning(
-                f"No client_id found for {order.client_order_id!r}, skipping targeted query",
+        if len(self._clients) > 1:
+            raise RuntimeError("Cannot support multiple clients")
+        client = list(self._clients.values())[0]
+
+        try:
+            query_ts = self._clock.timestamp_ns()
+            command = GenerateOrderStatusReport(
+                instrument_id=order.instrument_id,
+                client_order_id=order.client_order_id,
+                venue_order_id=order.venue_order_id,
+                command_id=UUID4(),
+                ts_init=query_ts,
             )
-            # Skip targeted query but proceed with resolution
-        else:
-            client = self._clients.get(client_id)
 
-            try:
-                query_ts = self._clock.timestamp_ns()
-                command = GenerateOrderStatusReport(
-                    instrument_id=order.instrument_id,
-                    client_order_id=order.client_order_id,
-                    venue_order_id=order.venue_order_id,
-                    command_id=UUID4(),
-                    ts_init=query_ts,
+            self._ts_last_query[order.client_order_id] = query_ts
+            report = await client.generate_order_status_report(command)
+            if report is not None:
+                self._log.info(
+                    f"Found {order.client_order_id!r} via targeted query: {report.order_status}",
+                    LogColor.BLUE,
                 )
-
-                self._ts_last_query[order.client_order_id] = query_ts
-                report = await client.generate_order_status_report(command)
-                if report is not None:
-                    self._log.info(
-                        f"Found {order.client_order_id!r} via targeted query: {report.order_status}",
-                        LogColor.BLUE,
-                    )
-                    self._reconcile_order_report(report, trades=[])
-                    return  # Order found and reconciled, no need to mark as rejected
-            except Exception as e:
-                self._log.warning(f"Error during targeted query for {order.client_order_id!r}: {e}")
+                self._reconcile_order_report(report, trades=[])
+                return  # Order found and reconciled, no need to mark as rejected
+        except Exception as e:
+            self._log.warning(f"Error during targeted query for {order.client_order_id!r}: {e}")
 
         if not order.is_open:
             self._log.debug(
