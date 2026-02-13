@@ -51,6 +51,9 @@ class OpenOrder:
 
     @property
     def leaves_qty(self):
+        # Clamp to 0: fills can exceed pending modify qty due to race between modify and fill
+        if int(self.filled_qty) >= int(self.quantity):
+            return Quantity.from_int(0)
         return self.quantity - self.filled_qty
 
     @property
