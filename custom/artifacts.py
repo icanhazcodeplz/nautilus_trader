@@ -132,7 +132,64 @@ class ArtifactsIO:
 
     def load_alpaca_trade_updates(self):
         txt = load_txt_file_to_dict(self.directory / "alpaca_trade_updates.json")
-        return pd.DataFrame.from_dict(txt)
+        alpaca_updates_df = pd.DataFrame.from_dict(txt)
+        alpaca_updates_df = alpaca_updates_df[
+            [
+                "msg_received_dt",
+                "at",  # Time alpaca generated the message
+                "timestamp",  # Time event occurred at exchange
+                "filled_at",
+                "event",
+                "side",
+                "id",
+                "client_order_id",
+                "qty",
+                "filled_qty",
+                "status",
+                "price",
+                "limit_price",
+                "position_qty",
+                "replaced_by",
+                "replaces",
+            ]
+        ]
+        return alpaca_updates_df
+
+    def create_order_duration_df(self, time_as_ns_int: bool = False) -> pd.DataFrame:
+        alpaca_updates_df = self.load_alpaca_trade_updates()
+
+        def order_duration(order_df: pd.DataFrame) -> pd.Series:
+            side = order_df["side"].values[0]
+            price = order_df["limit_price"].values[0]
+            event_new = order_df[order_df["event"] == "new"]
+            start_time = event_new["timestamp"].values[0] if len(event_new) > 0 else None
+
+            # Fill the missing "start_time" cells with the "timestamp" of the "replaced" event of the previous id
+            if start_time is None:
+                replaces = order_df["replaces"].values[0]
+                replaced_df = alpaca_updates_df[alpaca_updates_df["id"] == replaces]
+                try:
+                    start_time = replaced_df[replaced_df["event"] == "replaced"]["timestamp"].values[0]
+                except IndexError as e:
+                    with pd.option_context("display.max_columns", None, "display.width", None):
+                        print(f"No start_time for order \n{order_df}\nSKIPPING")
+                    return None
+            end_time = order_df["timestamp"].max()
+            last_event_name = order_df["event"].values[-1]
+            if last_event_name not in ["replaced", "fill", "canceled"]:
+                raise ValueError(f"Unknown last order event: {last_event_name}")
+
+            return pd.Series(dict(side=side, price=price, start_time=start_time, end_time=end_time))
+
+        order_duration_df = alpaca_updates_df.groupby("id").apply(order_duration, include_groups=False)
+        # Drop rows that have any nans
+        order_duration_df = order_duration_df.dropna()
+
+        if time_as_ns_int:
+            # Convert "start_time" and "end_time" columns into ns since epoch
+            for col in ["start_time", "end_time"]:
+                order_duration_df[col] = pd.to_datetime(order_duration_df[col]).astype("int64")
+        return order_duration_df.sort_values("start_time")
 
     def save_orders_report(self, orders_report_df: pd.DataFrame):
         self._save_pickle(orders_report_df, "orders_report.pkl")
