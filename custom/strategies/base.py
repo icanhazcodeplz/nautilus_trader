@@ -1,3 +1,4 @@
+import asyncio
 from abc import abstractmethod
 from datetime import timedelta
 from pathlib import Path
@@ -80,6 +81,8 @@ class BaseStrategy(Strategy):
         self._total_buy_qty = 0
 
         self._stopping_out = None
+        self._exec_engine = None  # Set by run_utils after node.build()
+        self._force_reconcile_pending = False
 
     def initialize(self, artifacts_location: Optional[Path], trader_helper: Optional[AlpacaTraderHelper] = None):
         self._initialized = True
@@ -337,6 +340,21 @@ class BaseStrategy(Strategy):
         limit_price = self.position_avg_px if last_trade is None else last_trade.price
         self.sell_position_at_price(self.instrument.make_price(limit_price * 0.8))
 
+    def _trigger_force_reconciliation(self):
+        """Trigger an async force-reconciliation via the execution engine to re-sync cache with broker."""
+        if self._force_reconcile_pending:
+            return
+        if self._exec_engine is None:
+            self._log.warning("Cannot force-reconcile: no execution engine reference")
+            return
+        self._force_reconcile_pending = True
+        self._log.warning("Triggering force-reconciliation via execution engine")
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._exec_engine.reconcile_execution_state())
+        except RuntimeError:
+            self._log.error("Cannot force-reconcile: no running event loop")
+
     def _reconcile(self, event: TimeEvent = None):
         if self._trader_helper is not None:
             # Running live. Get position from broker
@@ -369,6 +387,7 @@ class BaseStrategy(Strategy):
                 self._log.error(
                     f"Position discrepancy detected. Cache Position: {self.position_qty}, Alpaca Position: {position_at_broker}"
                 )
+                self._trigger_force_reconciliation()
             elif (now_ns - self._position_discrepancy_start_ns) / 1e9 > self.position_discrepancy_allow_secs:
                 for open_order in self.open_orders:
                     self.log.warning(f"Strategy OpenOrder {open_order.order}")
@@ -380,6 +399,7 @@ class BaseStrategy(Strategy):
                 return
         else:
             self._position_discrepancy_start_ns = None
+            self._force_reconcile_pending = False
 
         # COMPARE OPEN ORDERS TO CACHED ORDERS
         self_open_orders = set(open_order.order for open_order in self.open_orders)

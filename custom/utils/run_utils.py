@@ -17,6 +17,7 @@ def run_strategy(strategy, node_or_engine, artifacts_location=None, run_config=N
         strategy.initialize(artifacts_location=artifacts_location, trader_helper=alpaca_helper)
         node_or_engine.trader.add_strategy(strategy=strategy)
         node_or_engine.build()
+        strategy._exec_engine = node_or_engine.kernel.exec_engine
     elif isinstance(node_or_engine, BacktestEngine):
         strategy.initialize(artifacts_location=artifacts_location, trader_helper=None)
         node_or_engine.add_strategy(strategy=strategy)
