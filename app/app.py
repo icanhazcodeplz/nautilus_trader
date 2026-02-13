@@ -53,6 +53,17 @@ def get_data():
     fills = artifacts_io.get_fills()
     fill_markers = CreateMarkers().create_fill_markers(fills)
     markers = sorted(trades_markers + fill_markers, key=lambda x: x["time"])
+    order_durations = artifacts_io.create_order_duration_df(time_as_ns_int=True)
+    order_durations_list = order_durations.reset_index(drop=True).to_dict(orient="records")
+
+    # Order durations may not have same time as a tick
+    for od in order_durations_list:
+        for time_key in ("start_time", "end_time"):
+            time_ = str(od[time_key])
+            if time_ not in ticks_dict:
+                ticks_dict[time_] = {}
+        od["start_time"] = str(od["start_time"])
+        od["end_time"] = str(od["end_time"])
 
     # Markers may not have same time as a tick
     for m in markers:
@@ -85,6 +96,7 @@ def get_data():
         macd=[],
         fill_markers=markers,
         signals=signals,
+        orderDurations=order_durations_list,
         TickChartLines=[
             dict(key="vwap_value", color="#45d14c", width=2, type=0),
             dict(key="vwap_low", color="red", width=1.5, type=0),
