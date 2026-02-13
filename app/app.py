@@ -50,20 +50,9 @@ def get_data():
 
     trades["desc"] = trades["buy_id"].astype(str)
     trades_markers = CreateMarkers().create_trades_markers(trades)
-    fills = artifacts_io.get_fills()
+    fills, positions = artifacts_io.get_fills_and_position()
     fill_markers = CreateMarkers().create_fill_markers(fills)
     markers = sorted(trades_markers + fill_markers, key=lambda x: x["time"])
-    order_durations = artifacts_io.create_order_duration_df(time_as_ns_int=True)
-    order_durations_list = order_durations.reset_index(drop=True).to_dict(orient="records")
-
-    # Order durations may not have same time as a tick
-    for od in order_durations_list:
-        for time_key in ("start_time", "end_time"):
-            time_ = str(od[time_key])
-            if time_ not in ticks_dict:
-                ticks_dict[time_] = {}
-        od["start_time"] = str(od["start_time"])
-        od["end_time"] = str(od["end_time"])
 
     # Markers may not have same time as a tick
     for m in markers:
@@ -76,6 +65,26 @@ def get_data():
             ticks_dict[time_] = {"fill": m["price"]}
         # Convert to string because of JS
         m["time"] = str(m["time"])
+
+    order_durations = artifacts_io.create_order_duration_df(time_as_ns_int=True)
+    order_durations_list = []
+    if not order_durations.empty:
+        order_durations_list = order_durations.reset_index(drop=True).to_dict(orient="records")
+
+        # Order durations may not have same time as a tick
+        for od in order_durations_list:
+            for time_key in ("start_time", "end_time"):
+                time_ = str(od[time_key])
+                if time_ not in ticks_dict:
+                    ticks_dict[time_] = {}
+            od["start_time"] = str(od["start_time"])
+            od["end_time"] = str(od["end_time"])
+
+    # For each item in positions, if the time exists as a key in ticks_dict, add the `position` field to that entry in the ticks_dict
+    for p in positions:
+        time_ = str(p["time"])
+        if time_ in ticks_dict:
+            ticks_dict[time_]["position"] = p["position"]
 
     # Flatten ticks into a list and sort by time
     ticks = [{"time": int(t), **vals} for t, vals in ticks_dict.items()]
@@ -100,14 +109,15 @@ def get_data():
         TickChartLines=[
             dict(key="vwap_value", color="#45d14c", width=2, type=0),
             dict(key="vwap_low", color="red", width=1.5, type=0),
-            dict(key="vwap_low_inner", color=baby_blue, width=1, type=0),
-            dict(key="vwap_low_outer", color=baby_blue, width=1, type=0),
+            # dict(key="vwap_low_inner", color=baby_blue, width=1, type=0),
+            # dict(key="vwap_low_outer", color=baby_blue, width=1, type=0),
             dict(key="vwap_high", color=baby_blue, width=1.5, type=0),
-            dict(key="vwap_high_inner", color="red", width=1, type=0),
-            dict(key="vwap_high_outer", color="red", width=1, type=0),
+            # dict(key="vwap_high_inner", color="red", width=1, type=0),
+            # dict(key="vwap_high_outer", color="red", width=1, type=0),
         ],
         SecondaryTickChartLines=[
-            dict(key="vwap_pressure", color="#e70f0f", color_negative=baby_blue, width=1, type=0),
+            # dict(key="vwap_pressure", color="#e70f0f", color_negative=baby_blue, width=1, type=0),
+            dict(key="position", color="#e70f0f", color_negative=baby_blue, width=1, type=1),
         ],
     )
     return jsonify(records)
