@@ -41,8 +41,8 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     upper_scalar_multiplier: float
     vwap_window: int
     variance_window: int
-    outer_band_multiplier:float=1.0
-    pressure_window: int=50
+    outer_band_multiplier: float = 1.0
+    pressure_window: int = 50
 
     only_buy_if_macd_positive: bool = False
     trailing_buy_order: bool = False

@@ -107,6 +107,18 @@ class ArtifactsIO:
         fill_events = sorted(fill_events, key=lambda e: e["ts_event"])
         return fill_events
 
+    def get_fills_and_position(self):
+        fill_events = self.get_fills()
+
+        # Use fill events to create a list of (time, position) dicts
+        position = 0
+        position_list = []
+        for fill in fill_events:
+            qty = fill["qty"] if fill["side"] == "buy" else -fill["qty"]
+            position += qty
+            position_list.append({"time": fill["ts_event"], "position": position})
+        return fill_events, position_list
+
     def save_backtest_fills_to_pkl(self, fills_list: list[OrderFilled]):
         self._save_pickle(fills_list, "fills.pkl")
 
@@ -156,6 +168,8 @@ class ArtifactsIO:
         return alpaca_updates_df
 
     def create_order_duration_df(self, time_as_ns_int: bool = False) -> pd.DataFrame:
+        if self._backtest:
+            return pd.DataFrame()
         alpaca_updates_df = self.load_alpaca_trade_updates()
 
         def order_duration(order_df: pd.DataFrame) -> pd.Series:
