@@ -201,6 +201,9 @@ class AlpacaExecutionClient(LiveExecutionClient):
         # (the "replaced" event only contains OLD order data, not the new replacement order's data)
         self._pending_modify_params: dict[ClientOrderId, tuple[Quantity | None, Price | None]] = {}
 
+        # Track processed execution IDs to deduplicate fills from websocket vs reconciliation
+        self._processed_execution_ids: set[str] = set()
+
     @property
     def instrument_provider(self):
         """
@@ -976,23 +979,44 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 #     until update has finished? Create a queue for this?
 
                 alpaca_event_id = msg["data"]["event_id"]  # This is a unique id for the trade event
-                currency = Currency.from_str("USD")
-                self.generate_order_filled(
-                    strategy_id=order.strategy_id,
-                    instrument_id=instrument_id,
-                    client_order_id=client_order_id,
-                    venue_order_id=venue_order_id,
-                    venue_position_id=None,
-                    trade_id=TradeId(alpaca_event_id),  # Use order ID as trade ID
-                    order_side=order.side,
-                    order_type=order.order_type,
-                    last_qty=Quantity.from_str(str(this_fill_qty)),
-                    last_px=Price.from_str(str(this_fill_price)),
-                    quote_currency=currency,
-                    commission=Money(0, currency),  # Commission is 0 for Alpaca
-                    liquidity_side=LiquiditySide.TAKER,
-                    ts_event=ts_event,
-                )
+
+                # Dedup: skip fill if this execution_id was already processed or reconciliation already covered it
+                skip_fill = False
+                alpaca_execution_id = msg["data"].get("execution_id", alpaca_event_id)
+
+                if alpaca_execution_id in self._processed_execution_ids:
+                    self._log.warning(f"Skipping duplicate execution_id: {alpaca_execution_id}")
+                    skip_fill = True
+                else:
+                    alpaca_filled_qty = int(order_data.get("filled_qty", 0))
+                    cache_filled_qty = int(order.filled_qty)
+                    if cache_filled_qty >= alpaca_filled_qty:
+                        self._log.warning(
+                            f"Skipping fill for {client_order_id}: "
+                            f"cache filled_qty ({cache_filled_qty}) >= Alpaca filled_qty ({alpaca_filled_qty}), "
+                            f"likely already reconciled",
+                        )
+                        skip_fill = True
+                    self._processed_execution_ids.add(alpaca_execution_id)
+
+                if not skip_fill:
+                    currency = Currency.from_str("USD")
+                    self.generate_order_filled(
+                        strategy_id=order.strategy_id,
+                        instrument_id=instrument_id,
+                        client_order_id=client_order_id,
+                        venue_order_id=venue_order_id,
+                        venue_position_id=None,
+                        trade_id=TradeId(alpaca_event_id),
+                        order_side=order.side,
+                        order_type=order.order_type,
+                        last_qty=Quantity.from_str(str(this_fill_qty)),
+                        last_px=Price.from_str(str(this_fill_price)),
+                        quote_currency=currency,
+                        commission=Money(0, currency),  # Commission is 0 for Alpaca
+                        liquidity_side=LiquiditySide.TAKER,
+                        ts_event=ts_event,
+                    )
 
             elif event == "canceled":
                 self.generate_order_canceled(
