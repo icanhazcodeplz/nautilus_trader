@@ -217,6 +217,7 @@ class VWAPBandsNew(Indicator):
 
         self.vwap = None
         self.mean_variance = 0.0
+        self.last_price = 0.0
         self.pressure = 0
 
         self.low_inner = 0.0
@@ -312,9 +313,11 @@ class VWAPBandsNew(Indicator):
         else:
             self._adjust_counter += 1
 
-        self._pressure_deque.append(np.sign(price - self.vwap))
-        self._update_pressure()
-        # self.pressure is between 1 and -1 for visualization purposes. Convert to value between 1 and zero
+        if price != self.last_price:
+            self._pressure_deque.append(np.sign(price - self.vwap))
+            self.pressure = sum(self._pressure_deque) / self.pressure_window
+
+        # `self.pressure` is between 1 and -1 for visualization purposes. Convert to value between 1 and zero
         pressure_ratio = (self.pressure + 1) / 2
 
         self.low_inner = self.vwap - self.mean_variance - self._lower_scalar
@@ -330,15 +333,7 @@ class VWAPBandsNew(Indicator):
         # reverse_pressure_ratio = 1 - pressure_ratio
         # inner_outer_diff = (self.high_outer - self.high_inner) * reverse_pressure_ratio
         # self.high = self.high_inner + inner_outer_diff
-
-    def _update_pressure(self):
-        # prices = np.array(self._prices_for_adj)[-self.pressure_window :]
-        # vwaps = np.array(self._vwaps_for_adj)[-self.pressure_window :]
-
-        # Do elementwise subtraction to get direction (1 or -1) of diff
-        # diffs = prices - vwaps
-        # diffs = np.sign(diffs)
-        self.pressure = sum(self._pressure_deque) / self.pressure_window
+        self.last_price = price
 
     def _reset(self):
         raise NotImplementedError

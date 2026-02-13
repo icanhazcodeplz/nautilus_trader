@@ -90,6 +90,7 @@ class MomoStrategy(BaseStrategy):
             rolling_window=self.config.vwap_window,
             variance_window=self.config.variance_window,
             outer_band_multiplier=self.config.outer_band_multiplier,
+            pressure_window=self.config.pressure_window,
         )
         # self.vwap_day = VolumeWeightedAveragePrice()
         self.macd = MACDHistogram(fast_period=12, slow_period=26, signal_period=9)
