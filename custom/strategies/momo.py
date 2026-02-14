@@ -287,15 +287,27 @@ class MomoStrategy(BaseStrategy):
         orders_to_be_modified = []
         existing_open_sell_qty = 0
         qty_taken_in_tiers = 0
-        for open_order in self.open_sells:
+        for i, open_order in enumerate(sorted(self.open_sells, key=lambda order: order.price)):
             existing_open_sell_qty += open_order.leaves_qty
             if existing_open_sell_qty > position_qty:
                 self.log.error(
-                    f"Existing open sell qty {existing_open_sell_qty} is greater than position qty {position_qty}. Canceling order and skipping adjusting tiers."
+                    f"Existing open sell qty {existing_open_sell_qty} is greater than position qty {position_qty}. "
+                    "Canceling order and skipping adjusting tiers."
                 )
                 self.cancel_open_order(open_order)
                 return
-            if tiers.take_price_if_available(open_order.price):
+
+            # If there is no open order at the lowest tier level, move the order from the highest tier to the lowest
+            # tier.
+            if (
+                len(tiers.prices) > 1  # At least two tiers
+                and (i + 1) == len(self.open_sells)  # Last open_sell in self.open_sells
+                and len(orders_to_be_modified) == 0  # No orders to be modified
+                and min(tiers.available_prices) == min(tiers.prices)  # Min tier price still available
+                and open_order.price != min(tiers.prices)  # This order is not at min
+            ):
+                orders_to_be_modified.append(open_order)
+            elif tiers.take_price_if_available(open_order.price):
                 qty_taken_in_tiers += open_order.leaves_qty
             else:
                 orders_to_be_modified.append(open_order)
@@ -305,7 +317,8 @@ class MomoStrategy(BaseStrategy):
         available_qty_increase = position_qty - existing_open_sell_qty
 
         while len(tiers.available_prices) > 0:
-            price = tiers.available_prices.pop()
+            price = min(tiers.available_prices)
+            tiers.available_prices.remove(price)
 
             # Only sell up to (position_qty - qty_taken_in_tiers) to limit "insufficient qty" error
             qty_to_sell = position_qty - qty_taken_in_tiers
