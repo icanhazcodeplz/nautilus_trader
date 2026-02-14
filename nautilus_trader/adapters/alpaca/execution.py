@@ -37,7 +37,7 @@ from nautilus_trader.model.objects import Price, Quantity
 from nautilus_trader.model.identifiers import TradeId
 
 from nautilus_trader.live.config import LiveExecClientConfig
-from nautilus_trader.model.enums import LiquiditySide, OrderSide
+from nautilus_trader.model.enums import LiquiditySide, OrderSide, PositionSide
 from nautilus_trader.common.providers import InstrumentProvider
 from nautilus_trader.execution.reports import FillReport
 from nautilus_trader.execution.reports import OrderStatusReport
@@ -466,11 +466,61 @@ class AlpacaExecutionClient(LiveExecutionClient):
         """
         self._log.debug("Generating PositionStatusReports...")
 
-        reports: list[PositionStatusReport] = []
+        from decimal import Decimal
+        from nautilus_trader.core.uuid import UUID4
 
-        # TODO: Query Alpaca API for positions
-        # TODO: Parse responses into PositionStatusReport objects
-        # TODO: Return the reports
+        reports: list[PositionStatusReport] = []
+        ts_init = self._clock.timestamp_ns()
+
+        try:
+            positions = await self._http_client.get_positions()
+        except Exception as e:
+            self._log.error(f"Failed to fetch positions from Alpaca: {e}")
+            return reports
+
+        found_instrument_ids: set[InstrumentId] = set()
+
+        for pos_data in positions:
+            symbol = pos_data.get("symbol", "")
+            instrument_id = InstrumentId.from_str(f"{symbol}.{ALPACA_VENUE}")
+            found_instrument_ids.add(instrument_id)
+            qty = int(pos_data.get("qty", 0))
+            side_str = pos_data.get("side", "long")
+            avg_entry_price = pos_data.get("avg_entry_price")
+
+            if qty == 0:
+                position_side = PositionSide.FLAT
+            elif side_str == "long":
+                position_side = PositionSide.LONG
+            else:
+                position_side = PositionSide.SHORT
+
+            report = PositionStatusReport(
+                account_id=self.account_id,
+                instrument_id=instrument_id,
+                position_side=position_side,
+                quantity=Quantity.from_int(abs(qty)),
+                report_id=UUID4(),
+                ts_last=ts_init,
+                ts_init=ts_init,
+                avg_px_open=Decimal(str(avg_entry_price)) if avg_entry_price else None,
+            )
+            self._log.debug(f"Generated {report}")
+            reports.append(report)
+
+        # If the command requests a specific instrument that Alpaca doesn't have a position for,
+        # generate a FLAT report so the exec engine can reconcile the cache position down to zero
+        if command.instrument_id is not None and command.instrument_id not in found_instrument_ids:
+            instrument = self._cache.instrument(command.instrument_id)
+            size_precision = instrument.size_precision if instrument else 0
+            flat_report = PositionStatusReport.create_flat(
+                account_id=self.account_id,
+                instrument_id=command.instrument_id,
+                size_precision=size_precision,
+                ts_init=ts_init,
+            )
+            self._log.debug(f"Generated FLAT report for {command.instrument_id} (no Alpaca position)")
+            reports.append(flat_report)
 
         return reports
 

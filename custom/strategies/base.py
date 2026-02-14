@@ -1,4 +1,3 @@
-import asyncio
 from abc import abstractmethod
 from datetime import timedelta
 from pathlib import Path
@@ -82,7 +81,8 @@ class BaseStrategy(Strategy):
 
         self._stopping_out = None
         self._exec_engine = None  # Set by run_utils after node.build()
-        self._force_reconcile_pending = False
+        self._force_reconcile_count = 0
+        self._last_force_reconcile_ns = 0
 
     def initialize(self, artifacts_location: Optional[Path], trader_helper: Optional[AlpacaTraderHelper] = None):
         self._initialized = True
@@ -340,20 +340,23 @@ class BaseStrategy(Strategy):
         limit_price = self.position_avg_px if last_trade is None else last_trade.price
         self.sell_position_at_price(self.instrument.make_price(limit_price * 0.8))
 
+    _RECONCILE_COOLDOWN_SECS = 3  # Minimum seconds between reconciliation attempts
+
     def _trigger_force_reconciliation(self):
         """Trigger an async force-reconciliation via the execution engine to re-sync cache with broker."""
-        if self._force_reconcile_pending:
-            return
         if self._exec_engine is None:
             self._log.warning("Cannot force-reconcile: no execution engine reference")
             return
-        self._force_reconcile_pending = True
-        self._log.warning("Triggering force-reconciliation via execution engine")
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(self._exec_engine.reconcile_execution_state())
-        except RuntimeError:
-            self._log.error("Cannot force-reconcile: no running event loop")
+        now_ns = self.clock.timestamp_ns()
+        secs_since_last = (now_ns - self._last_force_reconcile_ns) / 1e9
+        if secs_since_last < self._RECONCILE_COOLDOWN_SECS:
+            return
+        self._force_reconcile_count += 1
+        self._last_force_reconcile_ns = now_ns
+        self._log.warning(
+            f"Triggering force-reconciliation (attempt {self._force_reconcile_count}) via execution engine"
+        )
+        self._exec_engine._loop.create_task(self._exec_engine.reconcile_execution_state())
 
     def _reconcile(self, event: TimeEvent = None):
         if self._trader_helper is not None:
@@ -385,9 +388,8 @@ class BaseStrategy(Strategy):
             if self._position_discrepancy_start_ns is None:
                 self._position_discrepancy_start_ns = now_ns
                 self._log.error(
-                    f"Position discrepancy detected. Cache Position: {self.position_qty}, Alpaca Position: {position_at_broker}"
+                    f"Position discrepancy detected. Cache Position: {self.position_qty}, Alpaca Position: {position_at_broker}, Diff: {self.position_qty - position_at_broker}"
                 )
-                self._trigger_force_reconciliation()
             elif (now_ns - self._position_discrepancy_start_ns) / 1e9 > self.position_discrepancy_allow_secs:
                 for open_order in self.open_orders:
                     self.log.warning(f"Strategy OpenOrder {open_order.order}")
@@ -397,9 +399,11 @@ class BaseStrategy(Strategy):
                     f"Position discrepancy has existed for more than {self.position_discrepancy_allow_secs}. Raising."
                 )
                 return
+            # Trigger reconciliation on every check (cooldown enforced inside)
+            self._trigger_force_reconciliation()
         else:
             self._position_discrepancy_start_ns = None
-            self._force_reconcile_pending = False
+            self._force_reconcile_count = 0
 
         # COMPARE OPEN ORDERS TO CACHED ORDERS
         self_open_orders = set(open_order.order for open_order in self.open_orders)
