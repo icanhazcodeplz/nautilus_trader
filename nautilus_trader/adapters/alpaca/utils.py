@@ -20,7 +20,7 @@ def alpaca_date_str_to_nanos(alpaca_date_str: str) -> int:
     return dt_to_unix_nanos(timestamp_dt)
 
 
-def to_iso_8601(dt) -> str:
+def dt_to_iso_8601(dt: datetime) -> str:
     """Convert a datetime-like object to an ISO 8601 string via ensure_pydatetime_utc."""
     return ensure_pydatetime_utc(dt).isoformat()
 

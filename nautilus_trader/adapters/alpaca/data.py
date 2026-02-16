@@ -27,7 +27,7 @@ from nautilus_trader.adapters.alpaca.utils import alpaca_date_str_to_nanos
 from nautilus_trader.adapters.alpaca.websocket import AlpacaMarketDataWebSocketClient
 from nautilus_trader.common.config import PositiveInt
 from nautilus_trader.common.enums import LogColor
-from nautilus_trader.adapters.alpaca.utils import to_iso_8601
+from nautilus_trader.adapters.alpaca.utils import dt_to_iso_8601
 
 from nautilus_trader.live.config import LiveDataClientConfig
 from nautilus_trader.live.data_client import LiveMarketDataClient
@@ -469,8 +469,8 @@ class AlpacaDataClient(LiveMarketDataClient):
         else:
             request_limit = None
 
-        start_str = to_iso_8601(request.start) if request.start else None
-        end_str = to_iso_8601(request.end) if request.end else None
+        start_str = dt_to_iso_8601(request.start) if request.start else None
+        end_str = dt_to_iso_8601(request.end) if request.end else None
 
         # Request trades from Alpaca API
         # Tried to make this `sort` var more intelligent, for example, checking if start or end were None, but Start is

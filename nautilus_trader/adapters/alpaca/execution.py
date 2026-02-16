@@ -19,17 +19,16 @@ from __future__ import annotations
 
 import json
 from decimal import Decimal
-from typing import TYPE_CHECKING, Dict, Any
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
-from nautilus_trader.adapters.alpaca.utils import alpaca_date_str_to_nanos, ns_to_iso_8601
 from nautilus_trader.model.orders import StopLimitOrder
 
 from custom.utils.paths import run_artifacts_subdir
 from nautilus_trader.adapters.alpaca.http import AlpacaHttpClient
 from nautilus_trader.adapters.alpaca.constants import ALPACA_VENUE
-from nautilus_trader.adapters.alpaca.utils import to_iso_8601
+from nautilus_trader.adapters.alpaca.utils import alpaca_date_str_to_nanos, ns_to_iso_8601, dt_to_iso_8601
 from nautilus_trader.adapters.alpaca.enums import AlpacaOrderType, AlpacaTimeInForce
 from nautilus_trader.adapters.alpaca.parsing import AlpacaEnumParser, client_id_is_real
 from nautilus_trader.adapters.alpaca.websocket import AlpacaWebSocketClient
@@ -285,6 +284,88 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
     # -- EXECUTION REPORTS --------------------------------------------------------------------
 
+    def _parse_order_status_report(
+        self,
+        alpaca_order: dict[str, Any],
+        account_id: AccountId,
+        instrument_id: InstrumentId,
+        ts_init: int,
+    ) -> OrderStatusReport:
+        """
+        Parse an Alpaca order response into an OrderStatusReport.
+
+        Parameters
+        ----------
+        alpaca_order : dict[str, Any]
+            The Alpaca order response dictionary.
+        account_id : AccountId
+            The account ID.
+        instrument_id : InstrumentId
+            The instrument ID.
+        ts_init : int
+            The initialization timestamp (nanoseconds).
+
+        Returns
+        -------
+        OrderStatusReport
+
+        """
+
+        instrument_id = InstrumentId.from_str(f"{alpaca_order['symbol']}.{ALPACA_VENUE}")
+        venue_order_id = VenueOrderId(alpaca_order["id"])
+        client_order_id = ClientOrderId(alpaca_order.get("client_order_id", alpaca_order["id"]))
+
+        order_status = self._enum_parser.parse_alpaca_order_status(alpaca_order["status"])
+        order_side = self._enum_parser.parse_alpaca_order_side(alpaca_order["side"])
+        order_type = self._enum_parser.parse_alpaca_order_type(alpaca_order["order_type"])
+        time_in_force = self._enum_parser.parse_alpaca_time_in_force(alpaca_order["time_in_force"])
+
+        # Parse quantities
+        quantity = Quantity.from_str(str(alpaca_order["qty"]))
+        filled_qty = Quantity.from_str(str(alpaca_order.get("filled_qty", "0")))
+
+        # Parse price (if applicable)
+        price = None
+        if "limit_price" in alpaca_order and alpaca_order["limit_price"]:
+            price = Price.from_str(str(alpaca_order["limit_price"]))
+
+        # Parse stop price (if applicable)
+        trigger_price = None
+        if "stop_price" in alpaca_order and alpaca_order["stop_price"]:
+            trigger_price = Price.from_str(str(alpaca_order["stop_price"]))
+
+        # Parse average fill price
+        avg_px = None
+        if "filled_avg_price" in alpaca_order and alpaca_order["filled_avg_price"]:
+            avg_px = Decimal(alpaca_order["filled_avg_price"])
+
+        # Parse timestamps
+        submitted_at = alpaca_order["submitted_at"]
+        ts_accepted = alpaca_date_str_to_nanos(submitted_at)
+        ts_last = alpaca_date_str_to_nanos(alpaca_order["updated_at"])
+
+        return OrderStatusReport(
+            account_id=self.account_id,
+            instrument_id=instrument_id,
+            venue_order_id=venue_order_id,
+            client_order_id=client_order_id,
+            order_side=order_side,
+            order_type=order_type,
+            time_in_force=time_in_force,
+            order_status=order_status,
+            quantity=quantity,
+            filled_qty=filled_qty,
+            price=price,
+            trigger_price=trigger_price,
+            avg_px=avg_px,
+            post_only=False,
+            reduce_only=False,
+            report_id=UUID4(),
+            ts_accepted=ts_accepted,
+            ts_last=ts_last,
+            ts_init=ts_init,
+        )
+
     async def generate_order_status_report(self, command: GenerateOrderStatusReport) -> OrderStatusReport | None:
         """
         Generate an order status report for a specific order.
@@ -318,7 +399,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
             filtered_list = self.filter_replaced_and_incomplete_orders([alpaca_order])
             if filtered_list is not None and len(filtered_list) > 0:
                 alpaca_order = filtered_list[0]
-                report = parse_order_status_report(
+                report = self._parse_order_status_report(
                     alpaca_order=alpaca_order,
                     account_id=self.account_id,
                     instrument_id=command.instrument_id,
@@ -394,7 +475,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
             status = "open" if command.open_only else "all"
 
             # Query Alpaca API for orders
-            after = to_iso_8601(command.start) if command.start is not None else None
+            after = dt_to_iso_8601(command.start) if command.start is not None else None
             alpaca_orders = await self._http_client.get_orders(status=status, after=after)
             alpaca_orders = self.filter_replaced_and_incomplete_orders(alpaca_orders)
             # Parse responses into OrderStatusReport objects
@@ -1065,8 +1146,6 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 # Dedup: skip fill if this execution_id was already processed or reconciliation already covered it
 
                 skip_fill = False
-                alpaca_execution_id = msg["data"].get("execution_id", alpaca_event_id)
-
                 if alpaca_execution_id in self._processed_execution_ids:
                     self._log.warning(f"Skipping duplicate execution_id: {alpaca_execution_id}")
                     skip_fill = True
@@ -1125,8 +1204,8 @@ class AlpacaExecutionClient(LiveExecutionClient):
                     price = pending_price if pending_price is not None else order.price
                 else:
                     # External replacement or no pending params - fall back to old order data
-                    quantity = Quantity.from_str(msg["data"]["order"]["qty"])
-                    price = Price(float(msg["data"]["order"]["limit_price"]), precision=order.price.precision)
+                    quantity = Quantity.from_str(msg_data["order"]["qty"])
+                    price = Price(float(msg_data["order"]["limit_price"]), precision=order.price.precision)
                     raise RuntimeError("Should not fall here")
 
                 self.generate_order_updated(
