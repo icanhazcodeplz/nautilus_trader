@@ -18,23 +18,26 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 from typing import TYPE_CHECKING, Dict, Any
 
 import pandas as pd
+
+from nautilus_trader.adapters.alpaca.utils import alpaca_date_str_to_nanos, ns_to_iso_8601
 from nautilus_trader.model.orders import StopLimitOrder
 
 from custom.utils.paths import run_artifacts_subdir
 from nautilus_trader.adapters.alpaca.http import AlpacaHttpClient
 from nautilus_trader.adapters.alpaca.constants import ALPACA_VENUE
-from nautilus_trader.core.datetime import ensure_pydatetime_utc
+from nautilus_trader.adapters.alpaca.utils import to_iso_8601
 from nautilus_trader.adapters.alpaca.enums import AlpacaOrderType, AlpacaTimeInForce
 from nautilus_trader.adapters.alpaca.parsing import AlpacaEnumParser, client_id_is_real
-from nautilus_trader.adapters.alpaca.parsing import parse_order_status_report
 from nautilus_trader.adapters.alpaca.websocket import AlpacaWebSocketClient
 from nautilus_trader.common.config import PositiveInt
 from nautilus_trader.common.enums import LogColor
 from nautilus_trader.model.objects import Price, Quantity
 from nautilus_trader.model.identifiers import TradeId
+from nautilus_trader.core.uuid import UUID4
 
 from nautilus_trader.live.config import LiveExecClientConfig
 from nautilus_trader.model.enums import LiquiditySide, OrderSide, PositionSide
@@ -44,7 +47,7 @@ from nautilus_trader.execution.reports import OrderStatusReport
 from nautilus_trader.execution.reports import PositionStatusReport
 from nautilus_trader.live.execution_client import LiveExecutionClient
 from nautilus_trader.model.currencies import USD
-from nautilus_trader.model.enums import AccountType
+from nautilus_trader.model.enums import AccountType, OrderStatus
 from nautilus_trader.model.enums import OmsType
 from nautilus_trader.model.enums import OrderType
 from nautilus_trader.model.identifiers import AccountId
@@ -203,6 +206,10 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
         # Track processed execution IDs to deduplicate fills from websocket vs reconciliation
         self._processed_execution_ids: set[str] = set()
+
+        # Capture start time for querying fills during reconciliation
+        self._start_ns: int = self._clock.timestamp_ns()
+        self._last_fills_report_ns: int = self._clock.timestamp_ns()
 
     @property
     def instrument_provider(self):
@@ -378,6 +385,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
         list[OrderStatusReport]
             The order status reports.
 
+        NOTE: THIS GETS RUN DURING RECONCILIATION via `generate_mass_status`
         """
         reports: list[OrderStatusReport] = []
 
@@ -386,12 +394,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
             status = "open" if command.open_only else "all"
 
             # Query Alpaca API for orders
-            # Convert start time to RFC-3339 format if provided
-            after = None
-            if command.start is not None:
-                # TODO: This code is duplicated a few times. Refactor
-                start_dt = ensure_pydatetime_utc(command.start)
-                after = start_dt.isoformat()
+            after = to_iso_8601(command.start) if command.start is not None else None
             alpaca_orders = await self._http_client.get_orders(status=status, after=after)
             alpaca_orders = self.filter_replaced_and_incomplete_orders(alpaca_orders)
             # Parse responses into OrderStatusReport objects
@@ -400,7 +403,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
                     # Get instrument ID from symbol
                     symbol = alpaca_order["symbol"]
                     instrument_id = InstrumentId.from_str(f"{symbol}.{ALPACA_VENUE}")
-                    report = parse_order_status_report(
+                    report = self._parse_order_status_report(
                         alpaca_order=alpaca_order,
                         account_id=self.account_id,
                         instrument_id=instrument_id,
@@ -418,12 +421,60 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
         return reports
 
+    def _alpaca_fill_report_to_nt_report(self, alpaca_fill: dict) -> FillReport:
+        """
+        Parse an Alpaca fill activity into a FillReport.
+
+        Parameters
+        ----------
+        alpaca_fill : dict[str, Any]
+            The Alpaca fill activity response dictionary (from GET /v2/account/activities/FILL).
+
+        Returns
+        -------
+        FillReport
+
+        """
+        instrument_id = InstrumentId.from_str(f"{alpaca_fill['symbol']}.{ALPACA_VENUE}")
+        # Alpaca fill id format: "20260213040457999::b8b24055-bcb1-428d-8ba0-e28cd2c930bb"
+        # TradeId max length is 36, so extract the UUID portion after "::"
+        fill_id = alpaca_fill["id"]
+        trade_id = TradeId(fill_id.split("::")[-1])
+
+        venue_order_id = VenueOrderId(alpaca_fill["order_id"])
+        order_side = self._enum_parser.parse_alpaca_order_side(alpaca_fill["side"])
+        last_qty = Quantity.from_str(alpaca_fill["qty"])
+        last_px = Price.from_str(alpaca_fill["price"])
+        ts_event = alpaca_date_str_to_nanos(alpaca_fill["transaction_time"])
+
+        client_order_id = self._venue_id__client_id_map.get(venue_order_id)
+        if client_order_id is None:
+            # FIXME: test this
+            print("TEST THIS")
+        return FillReport(
+            account_id=self.account_id,
+            instrument_id=instrument_id,
+            venue_order_id=venue_order_id,
+            trade_id=trade_id,
+            order_side=order_side,
+            last_qty=last_qty,
+            last_px=last_px,
+            commission=Money(0, USD),
+            liquidity_side=LiquiditySide.TAKER,
+            report_id=UUID4(),
+            ts_event=ts_event,
+            ts_init=self._clock.timestamp_ns(),
+            client_order_id=client_order_id,
+        )
+
     async def generate_fill_reports(
         self,
         command: GenerateFillReports,
     ) -> list[FillReport]:
         """
         Generate fill reports.
+
+        NOTE: THIS GETS RUN DURING RECONCILIATION via `generate_mass_status`
 
         Parameters
         ----------
@@ -434,16 +485,26 @@ class AlpacaExecutionClient(LiveExecutionClient):
         -------
         list[FillReport]
             The fill reports.
-
         """
-        self._log.debug("Generating FillReports...")
+        self._log.debug("Generating Alpaca FillReports.")
+
+        request_sent_dt = self._clock.timestamp_ns()
+
+        # The GenerateFillReports command has a "start_time" in it, but I think it's better to keep
+        # track here within the client itself with self._last_fills_report_ns
+        after = ns_to_iso_8601(self._last_fills_report_ns)
+        fill_orders = await self._http_client.get_fills(after=after)
+        self._last_fills_report_ns = request_sent_dt
 
         reports: list[FillReport] = []
-
-        # TODO: Query Alpaca API for trade history
-        # TODO: Parse responses into FillReport objects
-        # TODO: Return the reports
-
+        for fill_order in fill_orders:
+            fill_report = self._alpaca_fill_report_to_nt_report(fill_order)
+            if fill_report.trade_id in self._processed_execution_ids:
+                # FIXME: Test this!
+                self._log.debug(f"Skipping report {fill_report.trade_id}, already processed")
+            else:
+                self._processed_execution_ids.add(fill_report.trade_id)
+                reports.append(fill_report)
         return reports
 
     async def generate_position_status_reports(
@@ -452,6 +513,8 @@ class AlpacaExecutionClient(LiveExecutionClient):
     ) -> list[PositionStatusReport]:
         """
         Generate position status reports.
+
+        NOTE: THIS GETS RUN DURING RECONCILIATION via `generate_mass_status`
 
         Parameters
         ----------
@@ -481,12 +544,12 @@ class AlpacaExecutionClient(LiveExecutionClient):
         found_instrument_ids: set[InstrumentId] = set()
 
         for pos_data in positions:
-            symbol = pos_data.get("symbol", "")
+            symbol = pos_data["symbol"]
             instrument_id = InstrumentId.from_str(f"{symbol}.{ALPACA_VENUE}")
             found_instrument_ids.add(instrument_id)
-            qty = int(pos_data.get("qty", 0))
-            side_str = pos_data.get("side", "long")
-            avg_entry_price = pos_data.get("avg_entry_price")
+            qty = int(pos_data["qty"])
+            side_str = pos_data["side"]
+            avg_entry_price = pos_data["avg_entry_price"]
 
             if qty == 0:
                 position_side = PositionSide.FLAT
@@ -943,8 +1006,9 @@ class AlpacaExecutionClient(LiveExecutionClient):
         try:
             # Extract event type and order data
             msg_received_dt = pd.Timestamp.utcnow()
-            event = msg["data"].get("event")
-            order_data = msg["data"].get("order", {})
+            msg_data = msg["data"]
+            event = msg_data.get("event")
+            order_data = msg_data.get("order", {})
 
             if not event or not order_data:
                 self._log.warning(f"Invalid trade update message: {msg}")
@@ -958,7 +1022,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
             client_order_id = ClientOrderId(client_order_id_str) if client_order_id_str else None
 
             # Try to get client_order_id from cache if not in message
-            if not client_order_id or len(client_order_id_str) > 30:
+            if not client_order_id or not client_id_is_real(client_order_id_str):
                 client_order_id = self._cache.client_order_id(venue_order_id)
 
             if not client_order_id:
@@ -971,15 +1035,14 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 self._log.warning(f"Order {client_order_id} not found in cache")
                 return
 
-            # Get instrument ID
             instrument_id = order.instrument_id
+            ts_event = msg_data["timestamp"]
 
             # Handle different event types
-            ts_event = self._clock.timestamp_ns()
-
             if event == "new":
-                # Order accepted
-                # FIXME: Check if order already exists. This should raise a duplicate status update warning
+                if order.status == OrderStatus.ACCEPTED:
+                    self._log.debug(f"Order {client_order_id} already accepted, skipping duplicate")
+                    return
                 self.generate_order_accepted(
                     strategy_id=order.strategy_id,
                     instrument_id=instrument_id,
@@ -994,43 +1057,13 @@ class AlpacaExecutionClient(LiveExecutionClient):
                         f"fill event for asset_class {order_data['asset_class']} not yet implemented"
                     )
 
-                # filled_qty = int(order_data.get("filled_qty"))
-                # filled_avg_price = float(order_data.get("filled_avg_price"))
-
-                # previous_qty, previous_value = self.order_previous_qty_and_value.get(client_order_id, (0, 0.0))
-
-                this_fill_qty = int(msg["data"]["qty"])
-                this_fill_price = float(msg["data"]["price"])
-                # current_total_value = round(filled_qty * filled_avg_price, 4)
-                # this_fill_value = current_total_value - previous_value
-                # this_fill_px = round(this_fill_value / this_fill_qty, 4)
-                #
-                # self.order_previous_qty_and_value[client_order_id] = (filled_qty, current_total_value)
-
-                # In an effort to prevent an order qty mismatch, adjust order qty and create OrderUpdated event
-                # alpaca_order_qty = order_data["qty"]
-                # limit_price = order_data["limit_price"]
-                # if int(alpaca_order_qty) != int(order.quantity):
-                #     self._log.error(
-                #         f"Order qty mismatch {client_order_id} | {venue_order_id}: Alpaca {alpaca_order_qty} != NT {order.quantity}. Sending `generate_order_updated` with new qty {alpaca_order_qty}"
-                #     )
-                #     self.generate_order_updated(
-                #         strategy_id=order.strategy_id,
-                #         instrument_id=instrument_id,
-                #         client_order_id=client_order_id,
-                #         venue_order_id=venue_order_id,
-                #         quantity=Quantity.from_str(alpaca_order_qty),
-                #         price=Price(float(limit_price), precision=order.price.precision),
-                #         trigger_price=order.trigger_price if order.has_trigger_price else None,
-                #         ts_event=ts_event,
-                #         venue_order_id_modified=False,
-                #     )
-                # FIXME: BRENT is this where the rust failure is happening? Need to delay sending order filled
-                #     until update has finished? Create a queue for this?
-
-                alpaca_event_id = msg["data"]["event_id"]  # This is a unique id for the trade event
+                this_fill_qty = int(msg_data["qty"])
+                this_fill_price = float(msg_data["price"])
+                # "execution_id" is what we want, it's the id for the action taken at the exchange.
+                alpaca_execution_id = msg_data["execution_id"]
 
                 # Dedup: skip fill if this execution_id was already processed or reconciliation already covered it
+
                 skip_fill = False
                 alpaca_execution_id = msg["data"].get("execution_id", alpaca_event_id)
 
@@ -1038,10 +1071,10 @@ class AlpacaExecutionClient(LiveExecutionClient):
                     self._log.warning(f"Skipping duplicate execution_id: {alpaca_execution_id}")
                     skip_fill = True
                 else:
-                    alpaca_filled_qty = int(order_data.get("filled_qty", 0))
+                    alpaca_filled_qty = int(order_data["filled_qty"])
                     cache_filled_qty = int(order.filled_qty)
                     if cache_filled_qty >= alpaca_filled_qty:
-                        self._log.warning(
+                        self._log.error(
                             f"Skipping fill for {client_order_id}: "
                             f"cache filled_qty ({cache_filled_qty}) >= Alpaca filled_qty ({alpaca_filled_qty}), "
                             f"likely already reconciled",
@@ -1057,7 +1090,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
                         client_order_id=client_order_id,
                         venue_order_id=venue_order_id,
                         venue_position_id=None,
-                        trade_id=TradeId(alpaca_event_id),
+                        trade_id=TradeId(alpaca_execution_id),
                         order_side=order.side,
                         order_type=order.order_type,
                         last_qty=Quantity.from_str(str(this_fill_qty)),
@@ -1077,20 +1110,10 @@ class AlpacaExecutionClient(LiveExecutionClient):
                     ts_event=ts_event,
                 )
 
-            elif event == "rejected":
-                reason = order_data.get("reject_reason", "Unknown")
-                self.generate_order_rejected(
-                    strategy_id=order.strategy_id,
-                    instrument_id=instrument_id,
-                    client_order_id=client_order_id,
-                    reason=reason,
-                    ts_event=ts_event,
-                )
-
             elif event == "replaced":  # AKA modified
                 self._log.debug(f"Order {client_order_id} replaced")
 
-                replaced_by = msg["data"]["order"]["replaced_by"]
+                replaced_by = msg_data["order"]["replaced_by"]
 
                 # Use pending modify params if available (from our _modify_order call).
                 # The "replaced" event's order data contains the OLD order's qty/price,
@@ -1116,6 +1139,17 @@ class AlpacaExecutionClient(LiveExecutionClient):
                     trigger_price=order.trigger_price if order.has_trigger_price else None,
                     ts_event=ts_event,
                     venue_order_id_modified=True,
+                )
+
+            elif event == "rejected":
+                # FIXME: This is dead code on paper trading, remove?
+                reason = "Unknown"
+                self.generate_order_rejected(
+                    strategy_id=order.strategy_id,
+                    instrument_id=instrument_id,
+                    client_order_id=client_order_id,
+                    reason=reason,
+                    ts_event=ts_event,
                 )
 
             elif event in ["pending_new", "accepted", "held"]:

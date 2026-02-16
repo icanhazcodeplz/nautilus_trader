@@ -149,6 +149,9 @@ class AlpacaHttpClient:
                 self._log.debug(f"HTTP {response.status}: {text}")
                 raise Exception(f"HTTP {response.status}: {text}")
 
+            if response.status == 204:
+                return {}
+
             return await response.json()
 
     # Account API
@@ -222,36 +225,85 @@ class AlpacaHttpClient:
 
     # Orders API
 
+    async def _get_orders(
+        self,
+        status: str | None = None,
+        limit: int = 500,
+        after: str | None = None,
+        until: str | None = None,
+        direction: str | None = None,
+        nested: bool | None = None,
+        symbols: str | None = None,
+        side: str | None = None,
+    ) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {"limit": limit}
+        if status:
+            params["status"] = status
+        if after:
+            params["after"] = after
+        if until:
+            params["until"] = until
+        if direction:
+            params["direction"] = direction
+        if nested is not None:
+            params["nested"] = nested
+        if symbols:
+            params["symbols"] = symbols
+        if side:
+            params["side"] = side
+        return await self._request("GET", "/v2/orders", params=params)  # type: ignore
+
     async def get_orders(
         self,
         status: str | None = None,
-        limit: int | None = None,
         after: str | None = None,
+        until: str | None = None,
+        direction: str | None = None,
+        nested: bool | None = None,
         symbols: str | None = None,
+        side: str | None = None,
     ) -> list[dict[str, Any]]:
         """
-        Get orders.
+        Get orders with automatic pagination.
 
         Parameters
         ----------
         status : str, optional
             Filter by order status (open, closed, all).
-        limit : int, optional
-            Maximum number of orders to return.
+        after : str, optional
+            Filter: orders created after this timestamp (RFC-3339).
+        until : str, optional
+            Filter: orders created before this timestamp (RFC-3339).
+        direction : str, optional
+            Sort order: "asc" or "desc" (default "desc").
+        nested : bool, optional
+            If true, include nested multi-leg orders.
         symbols : str, optional
             Comma-separated list of symbols to filter.
+        side : str, optional
+            Filter by order side: "buy" or "sell".
         """
-        params = {}
-        if status:
-            params["status"] = status
-        if limit:
-            params["limit"] = limit
-        if after:
-            params["after"] = after
-        if symbols:
-            params["symbols"] = symbols
-
-        return await self._request("GET", "/v2/orders", params=params)  # type: ignore
+        page_size = 500
+        all_orders: list[dict[str, Any]] = []
+        page_after = after
+        while True:
+            page = await self._get_orders(
+                status=status,
+                limit=page_size,
+                after=page_after,
+                until=until,
+                direction=direction,
+                nested=nested,
+                symbols=symbols,
+                side=side,
+            )
+            if not page:
+                break
+            all_orders.extend(page)
+            if len(page) < page_size:
+                break
+            page_after = page[-1]["created_at"]
+        return all_orders
 
     async def get_order(self, order_id: str) -> dict[str, Any]:
         return await self._request("GET", f"/v2/orders/{order_id}")  # type: ignore
@@ -336,6 +388,38 @@ class AlpacaHttpClient:
 
     async def close_all_positions(self) -> list[dict[str, Any]]:
         return await self._request("DELETE", "/v2/positions")  # type: ignore
+
+    # Activities API
+
+    async def _get_fills(
+        self,
+        after: str,
+        until: str = None,
+        direction: str = "desc",
+        page_size: int = 100,
+        page_token: str | None = None,
+    ):
+        params: dict[str, Any] = {"after": after, "direction": direction, "page_size": page_size}
+        if until is not None:
+            params["until"] = until
+        if page_token is not None:
+            params["page_token"] = page_token
+        return await self._request("GET", "/v2/account/activities/FILL", params=params)
+
+    async def get_fills(self, after: str, until: str = None, direction: str = "asc") -> list[dict[str, Any]]:
+        all_fills: list[dict[str, Any]] = []
+        page_token = None
+        while True:
+            page = await self._get_fills(
+                after=after, until=until, direction=direction, page_token=page_token, page_size=100
+            )
+            if not page:
+                break
+            all_fills.extend(page)
+            if len(page) < 100:
+                break
+            page_token = page[-1]["id"]
+        return all_fills
 
     # Market Data API
 
