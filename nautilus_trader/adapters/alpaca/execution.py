@@ -284,13 +284,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
     # -- EXECUTION REPORTS --------------------------------------------------------------------
 
-    def _parse_order_status_report(
-        self,
-        alpaca_order: dict[str, Any],
-        account_id: AccountId,
-        instrument_id: InstrumentId,
-        ts_init: int,
-    ) -> OrderStatusReport:
+    def _parse_order_status_report(self, alpaca_order: dict[str, Any], ts_init: int) -> OrderStatusReport:
         """
         Parse an Alpaca order response into an OrderStatusReport.
 
@@ -528,7 +522,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
         last_px = Price.from_str(alpaca_fill["price"])
         ts_event = alpaca_date_str_to_nanos(alpaca_fill["transaction_time"])
 
-        client_order_id = self._venue_id__client_id_map.get(venue_order_id)
+        client_order_id = self._venue_id__client_id_map.get(alpaca_fill["order_id"])
         if client_order_id is None:
             # FIXME: test this
             print("TEST THIS")
@@ -579,12 +573,12 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
         reports: list[FillReport] = []
         for fill_order in fill_orders:
+            # Need to parse report first because "trade_id" has a datetime prefix from alpaca
             fill_report = self._alpaca_fill_report_to_nt_report(fill_order)
-            if fill_report.trade_id in self._processed_execution_ids:
-                # FIXME: Test this!
+            if fill_report.trade_id.value in self._processed_execution_ids:
                 self._log.debug(f"Skipping report {fill_report.trade_id}, already processed")
             else:
-                self._processed_execution_ids.add(fill_report.trade_id)
+                self._processed_execution_ids.add(fill_report.trade_id.value)
                 reports.append(fill_report)
         return reports
 
@@ -1117,7 +1111,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 return
 
             instrument_id = order.instrument_id
-            ts_event = msg_data["timestamp"]
+            ts_event = alpaca_date_str_to_nanos(msg_data["timestamp"])
 
             # Handle different event types
             if event == "new":
@@ -1138,8 +1132,8 @@ class AlpacaExecutionClient(LiveExecutionClient):
                         f"fill event for asset_class {order_data['asset_class']} not yet implemented"
                     )
 
-                this_fill_qty = int(msg_data["qty"])
-                this_fill_price = float(msg_data["price"])
+                this_fill_qty = msg_data["qty"]
+                this_fill_price = msg_data["price"]
                 # "execution_id" is what we want, it's the id for the action taken at the exchange.
                 alpaca_execution_id = msg_data["execution_id"]
 
@@ -1172,8 +1166,8 @@ class AlpacaExecutionClient(LiveExecutionClient):
                         trade_id=TradeId(alpaca_execution_id),
                         order_side=order.side,
                         order_type=order.order_type,
-                        last_qty=Quantity.from_str(str(this_fill_qty)),
-                        last_px=Price.from_str(str(this_fill_price)),
+                        last_qty=Quantity.from_str(this_fill_qty),
+                        last_px=Price.from_str(this_fill_price),
                         quote_currency=currency,
                         commission=Money(0, currency),  # Commission is 0 for Alpaca
                         liquidity_side=LiquiditySide.TAKER,
@@ -1220,6 +1214,17 @@ class AlpacaExecutionClient(LiveExecutionClient):
                     venue_order_id_modified=True,
                 )
 
+            elif event == "order_replace_rejected":
+                reason = msg_data.get("order", {}).get("reject_reason", "Unknown")
+                self._pending_modify_params.pop(client_order_id, None)
+                self.generate_order_modify_rejected(
+                    strategy_id=order.strategy_id,
+                    instrument_id=instrument_id,
+                    client_order_id=client_order_id,
+                    venue_order_id=venue_order_id,
+                    reason=reason,
+                    ts_event=ts_event,
+                )
             elif event == "rejected":
                 # FIXME: This is dead code on paper trading, remove?
                 reason = "Unknown"
