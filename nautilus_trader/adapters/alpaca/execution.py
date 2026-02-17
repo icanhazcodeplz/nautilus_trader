@@ -393,12 +393,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
             filtered_list = self.filter_replaced_and_incomplete_orders([alpaca_order])
             if filtered_list is not None and len(filtered_list) > 0:
                 alpaca_order = filtered_list[0]
-                report = self._parse_order_status_report(
-                    alpaca_order=alpaca_order,
-                    account_id=self.account_id,
-                    instrument_id=command.instrument_id,
-                    ts_init=self._clock.timestamp_ns(),
-                )
+                report = self._parse_order_status_report(alpaca_order=alpaca_order, ts_init=self._clock.timestamp_ns())
                 self._log.debug(f"Generated single order report {report}")
                 return report
             self._log.error(f"Single order report {alpaca_order} filtered out")
@@ -475,16 +470,9 @@ class AlpacaExecutionClient(LiveExecutionClient):
             # Parse responses into OrderStatusReport objects
             for alpaca_order in alpaca_orders:
                 try:
-                    # Get instrument ID from symbol
-                    symbol = alpaca_order["symbol"]
-                    instrument_id = InstrumentId.from_str(f"{symbol}.{ALPACA_VENUE}")
                     report = self._parse_order_status_report(
-                        alpaca_order=alpaca_order,
-                        account_id=self.account_id,
-                        instrument_id=instrument_id,
-                        ts_init=self._clock.timestamp_ns(),
+                        alpaca_order=alpaca_order, ts_init=self._clock.timestamp_ns()
                     )
-
                     reports.append(report)
                     self._log.debug(f"Generated {report}")
 
