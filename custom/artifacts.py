@@ -167,7 +167,7 @@ class ArtifactsIO:
         ]
         return alpaca_updates_df
 
-    def create_order_duration_df(self, time_as_ns_int: bool = False) -> pd.DataFrame:
+    def create_order_duration_df(self, time_as_ns_int: bool = False, as_list=False) -> pd.DataFrame:
         if self._backtest:
             return pd.DataFrame()
         alpaca_updates_df = self.load_alpaca_trade_updates()
@@ -203,6 +203,8 @@ class ArtifactsIO:
             # Convert "start_time" and "end_time" columns into ns since epoch
             for col in ["start_time", "end_time"]:
                 order_duration_df[col] = pd.to_datetime(order_duration_df[col]).astype("int64")
+        if as_list:
+            return order_duration_df.reset_index(drop=True).to_dict(orient="records")
         return order_duration_df.sort_values("start_time")
 
     def save_orders_report(self, orders_report_df: pd.DataFrame):
@@ -278,6 +280,11 @@ class CreateMarkers:
             shape="arrowUp",
         )
 
+    def _text_above(self, dt: int, price: float, color: Colors, text: str) -> dict:
+        return dict(
+            time=dt, position="aboveBar", color=color, shape="circle", text=text, price=market_round(price), size=0.0
+        )
+
     def create_trades_markers(self, trades, sell_legs=None):
         if trades.empty:
             print("No trades to create markers for")
@@ -324,6 +331,20 @@ class CreateMarkers:
                     price=fill["price"],
                     color=color,
                     text=str(fill["qty"]),
+                ),
+            )
+        return markers
+
+    def create_order_markers(self, orders_list):
+        markers = []
+        for order in orders_list:
+            color = Colors.YELLOW if order["side"] == "buy" else Colors.ORANGE
+            markers.append(
+                self._text_above(
+                    dt=order["start_time"],
+                    price=order["price"],
+                    color=color,
+                    text=str(order["qty"]),
                 ),
             )
         return markers

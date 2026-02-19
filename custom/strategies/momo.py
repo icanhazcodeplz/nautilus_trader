@@ -11,6 +11,7 @@ from custom.strategies._tiers import Tiers
 from nautilus_trader.indicators.trend import MACDHistogram
 from nautilus_trader.model.data import Bar
 from nautilus_trader.model.data import TradeTick
+from nautilus_trader.model.enums import OrderStatus
 from nautilus_trader.model.identifiers import InstrumentId
 
 
@@ -70,7 +71,7 @@ def is_market_open(now_utc: pd.Timestamp) -> bool:
 
 
 class MomoStrategy(BaseStrategy):
-    adjust_tiers_only_every_ms = 100
+    adjust_tiers_only_every_ms = 80
     attempt_stop_out_every_ms = 60  # TODO: Move stopout logic into BaseStrategy?
 
     def __init__(self, config: MomoStrategyConfig) -> None:
@@ -345,6 +346,13 @@ class MomoStrategy(BaseStrategy):
                         self.log.error(
                             f"Requesting new_order_qty of {new_order_qty}. Skipping modification. position_qty: {position_qty}."
                         )
+                elif any(o.order.status == OrderStatus.PENDING_UPDATE for o in self.open_sells):
+                    # Don't create new sell orders while existing sells are mid-modification,
+                    # since the venue still holds the old (larger) qty until the replace confirms.
+                    # This check is inside the loop (not before it) because a modify earlier in
+                    # this same loop iteration can put an order into PENDING_UPDATE.
+                    self.log.debug("Skipping new sell: existing sell order is PENDING_UPDATE")
+                    break
                 else:
                     self.sell(qty_to_sell, price, cancel_after_secs=None, tag=f"{self.buy_orders_count}")
                     qty_change = qty_to_sell
@@ -353,8 +361,7 @@ class MomoStrategy(BaseStrategy):
                     # Only reduce if qty_change is positive
                     available_qty_increase -= qty_change
 
-        open_sells_after = self.open_sells
-        if len(open_sells_after) > len(tiers.prices):
+        if len(self.open_sells) > len(tiers.prices):
             self.log.error(
                 f"Number of open sell orders {len(copy(self.open_sells))} is greater than number of tiers {len(tiers.prices)}"
             )

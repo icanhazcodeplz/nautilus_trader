@@ -51,8 +51,10 @@ def get_data():
     trades["desc"] = trades["buy_id"].astype(str)
     trades_markers = CreateMarkers().create_trades_markers(trades)
     fills, positions = artifacts_io.get_fills_and_position()
+    order_durations_list = artifacts_io.create_order_duration_df(time_as_ns_int=True, as_list=True)
+    order_markers = CreateMarkers().create_order_markers(order_durations_list)
     fill_markers = CreateMarkers().create_fill_markers(fills)
-    markers = sorted(trades_markers + fill_markers, key=lambda x: x["time"])
+    markers = sorted(trades_markers + fill_markers + order_markers, key=lambda x: x["time"])
 
     # Markers may not have same time as a tick
     for m in markers:
@@ -66,11 +68,7 @@ def get_data():
         # Convert to string because of JS
         m["time"] = str(m["time"])
 
-    order_durations = artifacts_io.create_order_duration_df(time_as_ns_int=True)
-    order_durations_list = []
-    if not order_durations.empty:
-        order_durations_list = order_durations.reset_index(drop=True).to_dict(orient="records")
-
+    if len(order_durations_list) > 0:
         # Order durations may not have same time as a tick
         for od in order_durations_list:
             for time_key in ("start_time", "end_time"):

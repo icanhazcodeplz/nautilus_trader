@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import sys
 from time import sleep
 
 from custom.strategies.momo import MomoStrategy
@@ -20,7 +21,7 @@ from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.identifiers import TraderId
 
 
-symbol = "pets".upper()
+symbol = sys.argv[1].upper() if len(sys.argv) > 1 else "rxt".upper()
 instrument_id = InstrumentId.from_str(f"{symbol}.{ALPACA}")
 paper = True
 
