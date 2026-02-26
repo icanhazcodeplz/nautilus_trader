@@ -123,6 +123,7 @@ class MomoStrategy(BaseStrategy):
         self.last_take_ts = None
         self._stopping_out = False
         self._last_stop_out_attempt = 0
+        self._sell_diff_start_ns: int | None = None
         self._last_tier_adjustment_ns = None
 
     def stop_out_if_needed(self, tick: TradeTick):
@@ -168,11 +169,11 @@ class MomoStrategy(BaseStrategy):
 
         buy_orders = self.open_buys
         position_qty = self.position_qty
-        if self.config.random_buy:
+        if self.config.random_buy and not self._stopping_out:
             if (
                 len(buy_orders) == 0
                 and (self.clock.utc_now() - self.last_buy_dt).total_seconds() > 20
-                and position_qty == 0
+                and position_qty < self.max_position_allowed
                 and random.random() < 0.3
             ):
                 # Only send buy command if it has been at least 10 seconds of flat
@@ -298,18 +299,20 @@ class MomoStrategy(BaseStrategy):
                 self.cancel_open_order(open_order)
                 return
 
-            # If there is no open order at the lowest tier level, move the order from the highest tier to the lowest
-            # tier.
+            # If there is no open order at the lowest tier level, add this order to modified list, even if it's in
+            # an available tier
             if (
                 len(tiers.prices) > 1  # At least two tiers
                 and (i + 1) == len(self.open_sells)  # Last open_sell in self.open_sells
                 and len(orders_to_be_modified) == 0  # No orders to be modified
+                and len(tiers.available_prices) > 0  # At least one available tier
                 and min(tiers.available_prices) == min(tiers.prices)  # Min tier price still available
                 and open_order.price != min(tiers.prices)  # This order is not at min
             ):
                 orders_to_be_modified.append(open_order)
-            elif tiers.take_price_if_available(open_order.price):
+            elif open_order.price in tiers.prices:
                 qty_taken_in_tiers += open_order.leaves_qty
+                tiers.available_prices.discard(open_order.price)
             else:
                 orders_to_be_modified.append(open_order)
 

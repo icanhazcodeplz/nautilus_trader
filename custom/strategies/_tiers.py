@@ -23,13 +23,6 @@ class Tiers:
         self.prices = set(target_prices)
         self.available_prices = copy(self.prices)
 
-    def take_price_if_available(self, price):
-        try:
-            self.available_prices.remove(price)
-            return True
-        except KeyError:
-            return False
-
     @staticmethod
     def _get_step_size(price: float, mean_variance: float) -> float:
         # TODO: Make this more intelligent

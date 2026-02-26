@@ -27,6 +27,10 @@ class OpenOrder:
         self._last_modify_price = None
         self._first_partial_fill_ns = None
 
+    def reset_last_modify_vals(self):
+        self._last_modify_qty = None
+        self._last_modify_price = None
+
     @property
     def is_open(self):
         return self.order.status not in CLOSED_STATUS_LIST

@@ -1,3 +1,4 @@
+import asyncio
 from abc import abstractmethod
 from datetime import timedelta
 from pathlib import Path
@@ -24,7 +25,7 @@ from nautilus_trader.model.data import TradeTick
 from nautilus_trader.model.enums import OrderSide, OrderStatus
 from nautilus_trader.model.enums import TimeInForce
 from nautilus_trader.model.identifiers import InstrumentId
-from nautilus_trader.model.events import OrderRejected
+from nautilus_trader.model.events import OrderRejected, OrderModifyRejected
 from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.model.orders import LimitOrder, Order
 from nautilus_trader.model.orders.list import OrderList
@@ -72,8 +73,8 @@ class BaseStrategy(Strategy):
         self.save_artifacts = False
         self._trader_helper = None
 
-        self._open_buys = set()
-        self._open_sells = set()
+        self._open_buys: set[OpenOrder] = set()
+        self._open_sells: set[OpenOrder] = set()
         self._position_discrepancy_start_ns = None
         self._raise_msg = None
         self._last_tick = None
@@ -83,6 +84,7 @@ class BaseStrategy(Strategy):
         self._exec_engine = None  # Set by run_utils after node.build()
         self._force_reconcile_count = 0
         self._last_force_reconcile_ns = 0
+        self._reconciliation_task: asyncio.Task | None = None
 
     def initialize(self, artifacts_location: Optional[Path], trader_helper: Optional[AlpacaTraderHelper] = None):
         self._initialized = True
@@ -104,6 +106,10 @@ class BaseStrategy(Strategy):
     def open_sells(self) -> set[OpenOrder]:
         self._open_sells = {open_order for open_order in self._open_sells if open_order.is_open}
         return self._open_sells
+
+    @property
+    def open_sells_qty(self) -> int:
+        return int(sum(o.leaves_qty for o in self.open_sells))
 
     @property
     def open_orders(self) -> set[OpenOrder]:
@@ -146,7 +152,7 @@ class BaseStrategy(Strategy):
 
     def cancel_open_order(self, open_order, client_id=None, params=None):
         if open_order in self.open_orders:
-            # TODO: Perhaps use order status instead of the existance of venue_order_id?
+            # TODO: Perhaps use order status instead of the existence of venue_order_id?
             if open_order.venue_order_id is not None:
                 self._remove_open_order(open_order)
                 self.cancel_order(order=open_order.order, client_id=client_id, params=params)
@@ -347,6 +353,9 @@ class BaseStrategy(Strategy):
         if self._exec_engine is None:
             self._log.warning("Cannot force-reconcile: no execution engine reference")
             return
+        # Skip if a reconciliation is already in-flight
+        if self._reconciliation_task is not None and not self._reconciliation_task.done():
+            return
         now_ns = self.clock.timestamp_ns()
         secs_since_last = (now_ns - self._last_force_reconcile_ns) / 1e9
         if secs_since_last < self._RECONCILE_COOLDOWN_SECS:
@@ -356,7 +365,9 @@ class BaseStrategy(Strategy):
         self._log.warning(
             f"Triggering force-reconciliation (attempt {self._force_reconcile_count}) via execution engine"
         )
-        self._exec_engine._loop.create_task(self._exec_engine.reconcile_execution_state())
+        self._reconciliation_task = self._exec_engine._loop.create_task(
+            self._exec_engine.reconcile_execution_state()
+        )
 
     def _reconcile(self, event: TimeEvent = None):
         if self._trader_helper is not None:
