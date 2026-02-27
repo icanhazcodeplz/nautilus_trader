@@ -149,6 +149,7 @@ class LiveExecutionEngine(ExecutionEngine):
         self._recent_fills_cache: dict[TradeId, int] = {}  # TradeId -> timestamp_ns (TTL cache)
         self._inferred_fill_ts: dict[ClientOrderId, int] = {}
         self._fill_application_audit: dict[ClientOrderId, list[tuple[TradeId, str, int]]] = {}
+        self._reconciled_fill_mismatch_ids: set[ClientOrderId] = set()
         self._startup_reconciliation_event: asyncio.Event = asyncio.Event()
         self._filtered_external_orders_count: int = 0
 
@@ -2959,6 +2960,20 @@ class LiveExecutionEngine(ExecutionEngine):
         client_order_id: ClientOrderId,
     ) -> bool:
         if report.filled_qty < order.filled_qty:
+            # If both venue and cache agree the order is FILLED, accept the mismatch.
+            # This happens with Alpaca replacements where the replacement order's
+            # filled_qty only reflects fills on the new venue order, while the cache
+            # accumulated fills across the entire replacement chain.
+            if report.order_status == OrderStatus.FILLED and order.is_closed:
+                if client_order_id not in self._reconciled_fill_mismatch_ids:
+                    self._reconciled_fill_mismatch_ids.add(client_order_id)
+                    self._log.debug(
+                        f"Accepting filled_qty mismatch for closed order {order.client_order_id}: "
+                        f"venue={report.filled_qty}, cache={order.filled_qty} "
+                        f"(likely due to Alpaca replacement fill accounting, suppressing future logs)",
+                    )
+                return True  # Already reconciled on a prior cycle
+
             # Gather diagnostic information
             fill_history = [
                 (event.trade_id, event.last_qty, event.ts_event)
@@ -2979,6 +2994,27 @@ class LiveExecutionEngine(ExecutionEngine):
             # Log each fill for forensics
             for trade_id, qty, ts in fill_history:
                 self._log.error(f"  Fill: {trade_id}, qty={qty}, ts={ts}")
+
+            # If venue reports the order as FILLED, trust the venue status and update the order quantity to match fills
+            # already applied. This handles the Alpaca race condition where fills on a predecessor order during
+            # replacement are reported via WebSocket but not fully carried into the replacement order's cumulative
+            # filled_qty.
+            if (
+                report.order_status == OrderStatus.FILLED
+                and order.is_open
+            ):
+                self._log.warning(
+                    f"Venue reports order {order.client_order_id} as FILLED despite fill count "
+                    f"mismatch. Updating order quantity from {order.quantity} to {order.filled_qty}"
+                    " to force FILLED status.",
+                )
+                # Set report quantity to match cached filled_qty so the OrderUpdated event triggers
+                # a FILLED transition (leaves_qty becomes 0 when quantity == filled_qty)
+                original_qty = report.quantity
+                report.quantity = order.filled_qty
+                self._generate_order_updated(order, report)
+                report.quantity = original_qty
+                return True  # Reconciled
 
             return False  # Failed
 
