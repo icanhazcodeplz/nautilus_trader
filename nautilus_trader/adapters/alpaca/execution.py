@@ -206,6 +206,22 @@ class AlpacaExecutionClient(LiveExecutionClient):
         # Track processed execution IDs to deduplicate fills from websocket vs reconciliation
         self._processed_execution_ids: set[str] = set()
 
+        # Track the latest WS-reported filled_qty per venue order ID (string -> string).
+        # Used to correct REST API eventual consistency lag in order status reports.
+        self._ws_filled_qty: dict[str, str] = {}
+
+        # Track accumulated fills from previous venue orders per client_order_id.
+        # Alpaca's replacement model creates a NEW venue order with fresh fill history,
+        # but NT's cache accumulates fills across all venue orders. The OrderStatusReport
+        # from REST only reflects the CURRENT venue order's fills, so we must add back
+        # the fills from previous venue orders to match the cache.
+        self._pre_replace_filled_qty: dict[str, int] = {}
+
+        # Track ghost replacement order IDs that we've already attempted to cancel
+        # and failed with a terminal-state error (rejected/filled/canceled).
+        # Prevents infinite retry loops when Alpaca returns these in open orders queries.
+        self._handled_ghost_ids: set[str] = set()
+
         # Capture start time for querying fills during reconciliation
         self._start_ns: int = self._clock.timestamp_ns()
         self._last_fills_report_ns: int = self._clock.timestamp_ns()
@@ -315,8 +331,31 @@ class AlpacaExecutionClient(LiveExecutionClient):
         time_in_force = self._enum_parser.parse_alpaca_time_in_force(alpaca_order["time_in_force"])
 
         # Parse quantities
-        quantity = Quantity.from_str(str(alpaca_order["qty"]))
-        filled_qty = Quantity.from_str(str(alpaca_order.get("filled_qty", "0")))
+        quantity = Quantity.from_str(alpaca_order["qty"])
+        rest_filled_str = alpaca_order["filled_qty"]
+        # Correct for REST API eventual consistency lag: use the higher of
+        # REST-reported filled_qty and WS-tracked filled_qty
+        ws_filled_str = self._ws_filled_qty.get(alpaca_order["id"])
+        if ws_filled_str and int(ws_filled_str) > int(rest_filled_str):
+            self._log.debug(
+                f"REST filled_qty ({rest_filled_str}) < WS filled_qty ({ws_filled_str}) for {alpaca_order['id']}, "
+                "using WS value"
+            )
+            filled_qty_int = int(ws_filled_str)
+        else:
+            filled_qty_int = int(rest_filled_str)
+
+        # NOTE: Alpaca's REST API only reports fills for the CURRENT venue order,
+        # but NT's cache accumulates fills across all venue orders in a replacement
+        # chain. This means report.filled_qty < cache.filled_qty for replaced orders.
+        # We intentionally do NOT inflate the report here because during the transient
+        # window after a replace, REST can be ahead of WS for the new venue order's
+        # fills, causing spurious inferred fills that corrupt the position.
+        # The reconciliation engine handles the mismatch: on first encounter it
+        # force-closes the order (if venue says FILLED), and on subsequent cycles
+        # it silently accepts the mismatch for already-closed orders.
+
+        filled_qty = Quantity(filled_qty_int, precision=0)
 
         # Parse price (if applicable)
         price = None
