@@ -441,8 +441,11 @@ class AlpacaExecutionClient(LiveExecutionClient):
             self._log.error(f"Failed to generate OrderStatusReport: {e}")
             return None
 
-    def filter_replaced_and_incomplete_orders(self, orders_list):
+    def filter_replaced_and_incomplete_orders(self, orders_list: list[dict[str, str]]) -> list[dict[str, str]]:
         filtered_and_modified_orders_list = []
+
+        # Build a lookup from venue order ID to order data for chain walking
+        orders_by_venue_id = {order["id"]: order for order in orders_list}
 
         for order in reversed(orders_list):
             client_order_id = order["client_order_id"]
@@ -451,6 +454,20 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 self._venue_id__client_id_map[alpaca_venue_order_id] = client_order_id
             elif order["replaces"] in self._venue_id__client_id_map.keys():
                 self._venue_id__client_id_map[alpaca_venue_order_id] = self._venue_id__client_id_map[order["replaces"]]
+
+            # Walk the replaces chain backward and map all intermediate venue
+            # order IDs to the same client_order_id. This ensures FillReports
+            # referencing predecessor orders can be resolved.
+            if alpaca_venue_order_id in self._venue_id__client_id_map:
+                resolved_client_id = self._venue_id__client_id_map[alpaca_venue_order_id]
+                predecessor_id = order["replaces"]
+                while predecessor_id and predecessor_id not in self._venue_id__client_id_map:
+                    self._venue_id__client_id_map[predecessor_id] = resolved_client_id
+                    predecessor_order = orders_by_venue_id.get(predecessor_id)
+                    if predecessor_order:
+                        predecessor_id = predecessor_order["replaces"]
+                    else:
+                        break
 
             if order["replaced_by"] is None:
                 if client_id_is_real(client_order_id):
@@ -972,6 +989,10 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 if msg == "order already replaced":
                     self._log.info(f"Order {command.client_order_id} is already pending replacement, skipping")
                     new_order = await self._http_client.get_order(venue_order_id.value)
+                    # Register the replacement's venue order ID if available
+                    replaced_by_id = new_order.get("replaced_by")
+                    if replaced_by_id:
+                        self._venue_id__client_id_map[replaced_by_id] = str(command.client_order_id)
                     if float(new_order["limit_price"]) != float(limit_price):
                         self._log.warning(f"Order already replaced, but limit price has changed. {venue_order_id}")
                 elif msg == "order parameters are not changed":
