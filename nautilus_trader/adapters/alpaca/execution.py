@@ -1234,9 +1234,25 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
                 replaced_by = msg_data["order"]["replaced_by"]
 
-                # Use pending modify params if available (from our _modify_order call).
-                # The "replaced" event's order data contains the OLD order's qty/price,
-                # not the new replacement order's values.
+                # Register the new replacement venue order ID in the mapping so that fill lookups during reconciliation
+                # can resolve it
+                self._venue_id__client_id_map[replaced_by] = str(client_order_id)
+
+                # If the order filled during the modify round-trip, the "replaced" event is stale. Cancel the ghost
+                # replacement order on Alpaca.
+                if order.is_closed:
+                    self._log.warning(
+                        f"Order {client_order_id} already {order.status_string()}, skipping 'replaced' event and canceling ghost {replaced_by}",
+                    )
+                    self._pending_modify_params.pop(client_order_id, None)
+                    try:
+                        self._loop.create_task(self._http_client.cancel_order(replaced_by))
+                    except Exception as e:
+                        self._log.error(f"Failed to cancel ghost replacement {replaced_by}: {e}")
+                    return
+
+                # Use pending modify params if available (from our _modify_order call). The "replaced" event's order
+                # data contains the OLD order's qty/price, not the new replacement order's values.
                 pending = self._pending_modify_params.pop(client_order_id, None)
                 if pending:
                     pending_qty, pending_price = pending
