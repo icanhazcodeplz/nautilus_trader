@@ -985,6 +985,26 @@ class AlpacaExecutionClient(LiveExecutionClient):
                     limit_price=limit_price,
                     stop_price=stop_price,
                 )
+
+                # Register the new replacement venue order ID immediately so that
+                # fill lookups during reconciliation can resolve it (the WebSocket
+                # "replaced" event may arrive later than REST fill queries)
+                self._venue_id__client_id_map[response["id"]] = str(command.client_order_id)
+
+                # Check if the order filled during the PATCH round-trip.
+                # If so, Alpaca still created a ghost replacement order that we must cancel.
+                order = self._cache.order(command.client_order_id)
+                if order and order.is_closed:
+                    ghost_order_id = response["id"]
+                    self._log.warning(
+                        f"Order {command.client_order_id} filled during modify, canceling ghost replacement {ghost_order_id}",
+                    )
+                    self._pending_modify_params.pop(command.client_order_id, None)
+                    try:
+                        await self._http_client.cancel_order(ghost_order_id)
+                    except Exception as cancel_err:
+                        self._log.error(f"Failed to cancel ghost replacement {ghost_order_id}: {cancel_err}")
+
             except Exception as e:
                 string = e.args[0]
                 start = string.find("{")
