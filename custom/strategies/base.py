@@ -31,8 +31,6 @@ from nautilus_trader.model.orders import LimitOrder, Order
 from nautilus_trader.model.orders.list import OrderList
 from nautilus_trader.trading.strategy import Strategy
 
-CANCEL_PARTIAL_FILLS_AFTER_SECS = 3
-
 
 class BaseStrategyConfig(StrategyConfig, frozen=True):
     instrument_id: InstrumentId
@@ -45,7 +43,9 @@ class BaseStrategyConfig(StrategyConfig, frozen=True):
 
 class BaseStrategy(Strategy):
     buy_signal_delay_secs: int = 1
-    position_discrepancy_allow_secs = 10
+    _POSITION_DISCREPANCY_ALLOW_SECS = 10  # Raise if alpaca vs nt discrepancy lasts for longer than this
+    _MODIFY_REJECT_COOLDOWN_SECS = 3  # Seconds to block retries after a ModifyRejected
+    _RECONCILE_COOLDOWN_SECS = 3  # Minimum seconds between reconciliation attempts
 
     def __init__(self, config: BaseStrategyConfig) -> None:
         super().__init__(config)
@@ -346,10 +346,9 @@ class BaseStrategy(Strategy):
         limit_price = self.position_avg_px if last_trade is None else last_trade.price
         self.sell_position_at_price(self.instrument.make_price(limit_price * 0.8))
 
-    _RECONCILE_COOLDOWN_SECS = 3  # Minimum seconds between reconciliation attempts
-
     def _trigger_force_reconciliation(self):
         """Trigger an async force-reconciliation via the execution engine to re-sync cache with broker."""
+        # TODO: Remove overlap with _reconcile method
         if self._exec_engine is None:
             self._log.warning("Cannot force-reconcile: no execution engine reference")
             return
@@ -365,11 +364,10 @@ class BaseStrategy(Strategy):
         self._log.warning(
             f"Triggering force-reconciliation (attempt {self._force_reconcile_count}) via execution engine"
         )
-        self._reconciliation_task = self._exec_engine._loop.create_task(
-            self._exec_engine.reconcile_execution_state()
-        )
+        self._reconciliation_task = self._exec_engine._loop.create_task(self._exec_engine.reconcile_execution_state())
 
     def _reconcile(self, event: TimeEvent = None):
+        # TODO: Remove overlap with _trigger_force_reconciliation
         if self._trader_helper is not None:
             # Running live. Get position from broker
             position_at_broker = self._trader_helper.get_position_obj()
@@ -401,13 +399,21 @@ class BaseStrategy(Strategy):
                 self._log.error(
                     f"Position discrepancy detected. Cache Position: {self.position_qty}, Alpaca Position: {position_at_broker}, Diff: {self.position_qty - position_at_broker}"
                 )
-            elif (now_ns - self._position_discrepancy_start_ns) / 1e9 > self.position_discrepancy_allow_secs:
+            elif (now_ns - self._position_discrepancy_start_ns) / 1e9 > self._POSITION_DISCREPANCY_ALLOW_SECS:
+                # If reconciliation is in-flight, give it more time instead of raising
+                if self._reconciliation_task is not None and not self._reconciliation_task.done():
+                    self._log.warning(
+                        f"Position discrepancy exceeded {self._POSITION_DISCREPANCY_ALLOW_SECS}s "
+                        f"but reconciliation is in-flight. Resetting timer."
+                    )
+                    self._position_discrepancy_start_ns = now_ns
+                    return
                 for open_order in self.open_orders:
                     self.log.warning(f"Strategy OpenOrder {open_order.order}")
                 for order in set(self.cache.orders_open() + self.cache.orders_inflight()):
                     self.log.warning(f"Cache order {order}")
                 self._raise_msg = (
-                    f"Position discrepancy has existed for more than {self.position_discrepancy_allow_secs}. Raising."
+                    f"Position discrepancy has existed for more than {self._POSITION_DISCREPANCY_ALLOW_SECS}. Raising."
                 )
                 return
             # Trigger reconciliation on every check (cooldown enforced inside)
