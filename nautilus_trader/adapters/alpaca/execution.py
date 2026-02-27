@@ -540,7 +540,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
         return reports
 
-    def _alpaca_fill_report_to_nt_report(self, alpaca_fill: dict) -> FillReport:
+    def _alpaca_fill_report_to_nt_report(self, alpaca_fill: dict) -> FillReport | None:
         """
         Parse an Alpaca fill activity into a FillReport.
 
@@ -568,8 +568,11 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
         client_order_id = self._venue_id__client_id_map.get(alpaca_fill["order_id"])
         if client_order_id is None:
-            # FIXME: test this
-            print("TEST THIS")
+            self._log.warning(
+                f"Venue order id {alpaca_fill['order_id']} not found in _venue_id__client_id_map, "
+                f"skipping fill report (trade_id={trade_id})"
+            )
+            return None
         return FillReport(
             account_id=self.account_id,
             instrument_id=instrument_id,
@@ -619,6 +622,8 @@ class AlpacaExecutionClient(LiveExecutionClient):
         for fill_order in fill_orders:
             # Need to parse report first because "trade_id" has a datetime prefix from alpaca
             fill_report = self._alpaca_fill_report_to_nt_report(fill_order)
+            if fill_report is None:
+                continue
             if fill_report.trade_id.value in self._processed_execution_ids:
                 self._log.debug(f"Skipping report {fill_report.trade_id}, already processed")
             else:
@@ -1001,7 +1006,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
                     # FIXME: TEST THIS
                     self._log.error(f"Order not submitted. Msg: {msg}")
                 else:
-                    raise Exception from e
+                    raise Exception(json_text) from e
 
         except Exception as e:
             self.generate_order_modify_rejected(
@@ -1185,25 +1190,18 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 # "execution_id" is what we want, it's the id for the action taken at the exchange.
                 alpaca_execution_id = msg_data["execution_id"]
 
-                # Dedup: skip fill if this execution_id was already processed or reconciliation already covered it
+                # Track WS-reported filled_qty to correct REST API lag in order status reports
+                self._ws_filled_qty[venue_order_id_str] = order_data["filled_qty"]
 
-                skip_fill = False
+                # Dedup: skip fill if this execution_id was already processed.
+                # NOTE: We rely solely on execution_id for dedup, NOT on filled_qty comparison.
+                # Alpaca's replacement model creates fresh fill histories on the new order,
+                # so the new order's filled_qty starts from 0 even though the cache already
+                # has fills from the old (replaced) order.
                 if alpaca_execution_id in self._processed_execution_ids:
                     self._log.warning(f"Skipping duplicate execution_id: {alpaca_execution_id}")
-                    skip_fill = True
                 else:
-                    alpaca_filled_qty = int(order_data["filled_qty"])
-                    cache_filled_qty = int(order.filled_qty)
-                    if cache_filled_qty >= alpaca_filled_qty:
-                        self._log.error(
-                            f"Skipping fill for {client_order_id}: "
-                            f"cache filled_qty ({cache_filled_qty}) >= Alpaca filled_qty ({alpaca_filled_qty}), "
-                            f"likely already reconciled",
-                        )
-                        skip_fill = True
                     self._processed_execution_ids.add(alpaca_execution_id)
-
-                if not skip_fill:
                     currency = Currency.from_str("USD")
                     self.generate_order_filled(
                         strategy_id=order.strategy_id,
