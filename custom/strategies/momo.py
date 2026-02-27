@@ -8,6 +8,7 @@ import pandas as pd
 from custom.nt_extensions.indicators import VWAPBands, VWAPBandsNew
 from custom.strategies.base import BaseStrategy, BaseStrategyConfig
 from custom.strategies._tiers import Tiers
+from custom.utils.market_utils import market_round
 from nautilus_trader.indicators.trend import MACDHistogram
 from nautilus_trader.model.data import Bar
 from nautilus_trader.model.data import TradeTick
@@ -71,8 +72,9 @@ def is_market_open(now_utc: pd.Timestamp) -> bool:
 
 
 class MomoStrategy(BaseStrategy):
-    adjust_tiers_only_every_ms = 80
-    attempt_stop_out_every_ms = 60  # TODO: Move stopout logic into BaseStrategy?
+    _ADJUST_TIERS_ONLY_EVERY_MS = 80
+    _ATTEMPT_STOP_OUT_EVERY_MS = 60  # TODO: Move stopout logic into BaseStrategy?
+    _MAX_ALLOWED_SELL_DIFF_SECS = 5
 
     def __init__(self, config: MomoStrategyConfig) -> None:
         super().__init__(config)
@@ -132,10 +134,10 @@ class MomoStrategy(BaseStrategy):
             self._stopping_out = False
             return
 
-        if self.clock.timestamp_ns() - self._last_stop_out_attempt < self.attempt_stop_out_every_ms * 1e6:
+        if self.clock.timestamp_ns() - self._last_stop_out_attempt < self._ATTEMPT_STOP_OUT_EVERY_MS * 1e6:
             time_since = (self.clock.timestamp_ns() - self._last_stop_out_attempt) / 1e6
             self.log.debug(
-                f"Skipping stop out attempt because last attempt {time_since} ms ago. Limit {self.attempt_stop_out_every_ms}"
+                f"Skipping stop out attempt because last attempt {time_since} ms ago. Limit {self._ATTEMPT_STOP_OUT_EVERY_MS}"
             )
             return
 
@@ -146,17 +148,14 @@ class MomoStrategy(BaseStrategy):
         if self.stop_price is not None and tick.price <= self.stop_price:
             self._last_stop_out_attempt = self.clock.timestamp_ns()
             self._stopping_out = True
-            # TODO: HARDCODED to set stop price to 0.01 below current price
-            new_limit_price = self.instrument.make_price(tick.price - 0.25)
+            # TODO: HARDCODED to set stop price to 90% below current price
+            new_limit_price = self.instrument.make_price(float(tick.price) * 0.9)
             self.log.info(f"Stop price {self.stop_price} reached, selling at {new_limit_price}")
 
             # FIXME: this is not a great solution. The fills for selling are more accurate during backtesting
-            # if you use a single order, but during live running it is less buggy to modify existing orders because
-            # trying to cancel existing orders runs async.
+            #  if you use a single order, but during live running it is less buggy to modify existing orders because
+            #  trying to cancel existing orders runs async.
             self.sell_position_at_price(new_limit_price)
-            # FIXME: cancelling all orders sometimes also cancels the subsequent sell order because of the async calls
-            # self.cancel_all_orders(self.config.instrument_id)
-            # self.sell(quantity=self.position_qty, limit_price=new_limit_price, tag="s")
 
     def _on_trade_tick(self, tick: TradeTick) -> None:
         self.stop_out_if_needed(tick)
@@ -233,7 +232,7 @@ class MomoStrategy(BaseStrategy):
             if (
                 self._last_tier_adjustment_ns is None
                 or (self.clock.timestamp_ns() - self._last_tier_adjustment_ns) / 1e9
-                > self.adjust_tiers_only_every_ms / 1000
+                > self._ADJUST_TIERS_ONLY_EVERY_MS / 1000
             ):
                 self._rolling_tiered_take()
 
@@ -364,10 +363,22 @@ class MomoStrategy(BaseStrategy):
                     # Only reduce if qty_change is positive
                     available_qty_increase -= qty_change
 
-        if len(self.open_sells) > len(tiers.prices):
-            self.log.error(
-                f"Number of open sell orders {len(copy(self.open_sells))} is greater than number of tiers {len(tiers.prices)}"
+        for order in orders_to_be_modified:
+            self.log.error(f"Canceling left over order_to_be_modified: {order}")
+            self.cancel_open_order(order)
+
+        # If (position - sells) is non_zero for more than _MAX_ALLOWED_SELL_DIFF_SECS, sell diff at lowest tier
+        # in a new order.
+        sell_diff = self.position_qty - self.open_sells_qty
+        if sell_diff == 0:
+            self._sell_diff_start_ns = None
+        elif self._sell_diff_start_ns is None:
+            self._sell_diff_start_ns = self.clock.timestamp_ns()
+        elif (self.clock.timestamp_ns() - self._sell_diff_start_ns) / 1e9 > self._MAX_ALLOWED_SELL_DIFF_SECS:
+            self.log.info(
+                f"Adding sell order for {sell_diff} at lowest tier because sell_diff existed for more than {self._MAX_ALLOWED_SELL_DIFF_SECS} secs."
             )
+            self.sell(sell_diff, min(tiers.prices), cancel_after_secs=None, tag=f"{self.buy_orders_count}")
 
     def _print_update(self):
         def open_for_secs(open_order):
@@ -376,7 +387,10 @@ class MomoStrategy(BaseStrategy):
         if self.config.trailing_take:
             if len(self.open_sells) > 0:
                 ordered_sells = sorted(self.open_sells, key=lambda x: x.price)
-                sells_str = "\n".join(f"{o.leaves_qty} @ {o.price}  OpenSecs {open_for_secs(o)}" for o in ordered_sells)
+                sells_str = "\n".join(
+                    f"{o.leaves_qty} @ {o.price}\t OpenSecs {open_for_secs(o)}\t {o.order.venue_order_id}\t {o.order.client_order_id}"
+                    for o in ordered_sells
+                )
                 msg = f"{round(self.vwap.mean_variance, 2)} {round(self.vwap.high, 3)}\n{sells_str}\n"
                 return msg
         return ""
