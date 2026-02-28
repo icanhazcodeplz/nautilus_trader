@@ -123,7 +123,6 @@ class MomoStrategy(BaseStrategy):
         self.metrics = []
 
         self.last_take_ts = None
-        self._stopping_out = False
         self._last_stop_out_attempt = 0
         self._sell_diff_start_ns: int | None = None
         self._last_tier_adjustment_ns = None
@@ -146,6 +145,10 @@ class MomoStrategy(BaseStrategy):
             self.log.info(f"Setting stop price to {self.stop_price}")
 
         if self.stop_price is not None and tick.price <= self.stop_price:
+            # First cancel any open buys
+            for order in self.open_buys:
+                self.cancel_open_order(order)
+
             self._last_stop_out_attempt = self.clock.timestamp_ns()
             self._stopping_out = True
             # TODO: HARDCODED to set stop price to 90% below current price
