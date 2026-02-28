@@ -212,11 +212,6 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
         # Track accumulated fills from previous venue orders per client_order_id.
         # Alpaca's replacement model creates a NEW venue order with fresh fill history,
-        # but NT's cache accumulates fills across all venue orders. The OrderStatusReport
-        # from REST only reflects the CURRENT venue order's fills, so we must add back
-        # the fills from previous venue orders to match the cache.
-        self._pre_replace_filled_qty: dict[str, int] = {}
-
         # Track ghost replacement order IDs that we've already attempted to cancel
         # and failed with a terminal-state error (rejected/filled/canceled).
         # Prevents infinite retry loops when Alpaca returns these in open orders queries.
@@ -526,6 +521,42 @@ class AlpacaExecutionClient(LiveExecutionClient):
             # Parse responses into OrderStatusReport objects
             for alpaca_order in alpaca_orders:
                 try:
+                    # NOTE: This ghost order accounting is actually run in paper mode
+                    # Detect ghost replacement orders from modify-fill races.
+                    # If the cached order is already closed with a DIFFERENT venue_order_id,
+                    # this Alpaca order is a ghost that should be canceled, not reconciled.
+                    alpaca_order_id = alpaca_order["id"]
+                    alpaca_client_order_id_str = alpaca_order["client_order_id"]
+                    cached_order = None
+                    cached_order = self._cache.order(ClientOrderId(alpaca_client_order_id_str))
+                    if cached_order and cached_order.is_closed:
+                        cached_venue_id = cached_order.venue_order_id.value if cached_order.venue_order_id else None
+                        if cached_venue_id and cached_venue_id != alpaca_order_id:
+                            if alpaca_order_id in self._handled_ghost_ids:
+                                self._log.debug(f"Skipping already-handled ghost {alpaca_order_id}")
+                                continue
+                            self._log.warning(
+                                f"Ghost replacement detected: Alpaca order {alpaca_order_id} is open "
+                                f"but cached order {alpaca_client_order_id_str} is {cached_order.status_string()} "
+                                f"with venue_order_id {cached_venue_id}. Canceling ghost.",
+                            )
+                            try:
+                                await self._http_client.cancel_order(alpaca_order_id)
+                            except Exception as cancel_err:
+                                err_str = str(cancel_err)
+                                # If Alpaca says the order is already in a terminal state,
+                                # mark it as handled so we don't retry on every reconciliation cycle
+                                if "already in" in err_str and any(
+                                    state in err_str for state in ("rejected", "filled", "canceled", "expired")
+                                ):
+                                    self._handled_ghost_ids.add(alpaca_order_id)
+                                    self._log.warning(
+                                        f"Ghost {alpaca_order_id} is in terminal state at Alpaca, suppressing future cancel retries",
+                                    )
+                                else:
+                                    self._log.error(f"Failed to cancel ghost {alpaca_order_id}: {cancel_err}")
+                            continue
+
                     report = self._parse_order_status_report(
                         alpaca_order=alpaca_order, ts_init=self._clock.timestamp_ns()
                     )
