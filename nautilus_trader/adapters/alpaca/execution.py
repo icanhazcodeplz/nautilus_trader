@@ -1009,14 +1009,13 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
             # Modify order via HTTP API (Alpaca uses PATCH for replace)
             try:
-                await self._http_client.replace_order(
+                response = await self._http_client.replace_order(
                     order_id=venue_order_id.value,
                     # client_order_id=command.client_order_id.value,
                     qty=qty,
                     limit_price=limit_price,
                     stop_price=stop_price,
                 )
-
                 # Register the new replacement venue order ID immediately so that
                 # fill lookups during reconciliation can resolve it (the WebSocket
                 # "replaced" event may arrive later than REST fill queries)
