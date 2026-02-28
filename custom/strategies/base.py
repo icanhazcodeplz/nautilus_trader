@@ -80,7 +80,7 @@ class BaseStrategy(Strategy):
         self._last_tick = None
         self._total_buy_qty = 0
 
-        self._stopping_out = None
+        self._stopping_out = False
         self._exec_engine = None  # Set by run_utils after node.build()
         self._force_reconcile_count = 0
         self._last_force_reconcile_ns = 0
@@ -315,6 +315,9 @@ class BaseStrategy(Strategy):
         self._submit_orders_if_allowed(order, expire_time=expire_time)
 
     def buy(self, quantity, limit_price, tag, cancel_after_secs=None) -> None:
+        if self._stopping_out:
+            self.log.info(f"Ignoring buy request because self._stopping_out is True")
+            return
         allowed_qty = min(quantity, self._max_buy_qty_allowed())
         if allowed_qty != quantity:
             self.log.debug(
@@ -343,9 +346,9 @@ class BaseStrategy(Strategy):
     def _on_trade_tick(self, tick: TradeTick) -> None:
         pass
 
-    def on_order_event(self, order) -> None:
-        if isinstance(order, OrderRejected):
-            cache_order = self.cache.order(order.client_order_id)
+    def on_order_event(self, order_event) -> None:
+        if isinstance(order_event, OrderRejected):
+            cache_order = self.cache.order(order_event.client_order_id)
             # self._remove_open_order(order)
             if cache_order.side == OrderSide.BUY:
                 if "insufficient qty available" in cache_order.last_event.reason:
