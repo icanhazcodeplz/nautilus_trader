@@ -115,6 +115,19 @@ class BaseStrategy(Strategy):
     def open_orders(self) -> set[OpenOrder]:
         return self.open_buys.union(self.open_sells)
 
+    def clear_open_order_modify_params(self, order_event):
+        # Find the OpenOrder based on the nt cache `order` and reset last_modify vals
+        order_found = False
+        for open_order in self.open_orders:
+            if open_order.client_order_id == order_event.client_order_id:
+                order_found = True
+                self.log.debug(f"Clearing open order modify params for {order_event}")
+                open_order.reset_last_modify_vals()
+        if not order_found:
+            self.log.debug(
+                f"Order not found in self.open_orders while attempting to reset modify params, order event {order_event}"
+            )
+
     def _remove_open_order(self, order):
         self._open_buys.discard(order)
         self._open_sells.discard(order)
