@@ -610,11 +610,24 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
         client_order_id = self._venue_id__client_id_map.get(alpaca_fill["order_id"])
         if client_order_id is None:
-            self._log.warning(
-                f"Venue order id {alpaca_fill['order_id']} not found in _venue_id__client_id_map, "
-                f"skipping fill report (trade_id={trade_id})"
-            )
-            return None
+            # FIXME: This code has never been run or tested!
+            # Fallback: try to resolve from cache (handles orders submitted but not yet
+            # in _venue_id__client_id_map, e.g. if order status reports haven't been processed yet)
+            cached_client_order_id = self._cache.client_order_id(venue_order_id)
+            if cached_client_order_id:
+                client_order_id = str(cached_client_order_id)
+                self._venue_id__client_id_map[alpaca_fill["order_id"]] = client_order_id
+                self._log.debug(
+                    f"Resolved venue order id {alpaca_fill['order_id']} from cache "
+                    f"(client_order_id={client_order_id})"
+                )
+            else:
+                self._log.warning(
+                    f"Venue order id {alpaca_fill['order_id']} not found in _venue_id__client_id_map "
+                    f"or cache, skipping fill report (trade_id={trade_id})"
+                )
+                return None
+
         return FillReport(
             account_id=self.account_id,
             instrument_id=instrument_id,
