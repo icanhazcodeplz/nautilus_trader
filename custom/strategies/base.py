@@ -356,6 +356,34 @@ class BaseStrategy(Strategy):
                         f"Buy order rejected for insufficient quantity. Accidental shorting is likely. Running reconciliation."
                     )
                     self._reconcile()
+        elif isinstance(order_event, OrderModifyRejected):
+            self.clear_open_order_modify_params(order_event)
+
+            # Only apply cooldown for errors where retrying quickly won't help
+            _COOLDOWN_REASONS = (
+                "order is not open",
+                "qty must be",  # qty must be > filled_qty
+                "cannot replace order in pending_new status",
+                "order is already in",  # filled/replaced/rejected state
+                "cannot be sold short",
+            )
+            _SKIP_COOLDOWN_REASONS = (
+                "potential wash trade detected",  # This should only arise in testing when we have high buy orders
+            )
+            reason = order_event.reason or ""
+            if any(r in reason for r in _COOLDOWN_REASONS):
+                self.log.info(f"Applying {self._MODIFY_REJECT_COOLDOWN_SECS}s cooldown for: {reason}")
+                for open_order in self.open_orders:
+                    if open_order.client_order_id == order_event.client_order_id:
+                        open_order._last_modify_ns = self.clock.timestamp_ns() + int(
+                            self._MODIFY_REJECT_COOLDOWN_SECS * 1e9
+                        )
+                        break
+            elif any(r in reason for r in _SKIP_COOLDOWN_REASONS):
+                self.log.info(f"Skipping cooldown for: {reason}")
+            else:
+                self.log.error(f"Unknown OrderModifyRejected reason: {reason}\n Order_event: {order_event}")
+            self._trigger_force_reconciliation()
 
     def close_position_limit_order(self):
         last_trade = self.cache.trade_tick(self.config.instrument_id)
