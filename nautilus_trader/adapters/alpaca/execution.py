@@ -1358,7 +1358,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 )
 
             elif event == "order_replace_rejected":
-                reason = msg_data.get("order", {}).get("reject_reason", "Unknown")
+                reason = msg_data["reason"]
                 self._pending_modify_params.pop(client_order_id, None)
                 self.generate_order_modify_rejected(
                     strategy_id=order.strategy_id,
