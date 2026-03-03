@@ -1038,6 +1038,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 # If so, Alpaca still created a ghost replacement order that we must cancel.
                 order = self._cache.order(command.client_order_id)
                 if order and order.is_closed:
+                    # FIXME: This code has never been hit or tested!
                     ghost_order_id = response["id"]
                     self._log.warning(
                         f"Order {command.client_order_id} filled during modify, canceling ghost replacement {ghost_order_id}",
