@@ -886,6 +886,8 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
             # Submit order via HTTP API
             alpaca_order = await self._http_client.submit_order(order_request)
+            # Register venue_id mapping so reconciliation fill reports can resolve it
+            self._venue_id__client_id_map[alpaca_order["id"]] = str(order.client_order_id)
             self.generate_order_accepted(
                 strategy_id=order.strategy_id,
                 instrument_id=order.instrument_id,
