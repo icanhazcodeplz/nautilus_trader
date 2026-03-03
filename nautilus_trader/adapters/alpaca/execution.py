@@ -1231,6 +1231,13 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
             # Handle different event types
             if event == "new":
+                if order.is_closed:
+                    # FIXME: This code has not been hit yet. It is VERY unlikely to occur. Would have
+                    #  to be closed and then resolved in reconciliation before the websocket msg
+                    self._log.warning(
+                        f"Order {client_order_id} already {order.status_string()}, skipping late 'new' event (likely ghost replacement from modify-fill race)",
+                    )
+                    return
                 if order.status == OrderStatus.ACCEPTED:
                     self._log.debug(f"Order {client_order_id} already accepted, skipping duplicate")
                     return
