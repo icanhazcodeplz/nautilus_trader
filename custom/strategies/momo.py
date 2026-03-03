@@ -134,10 +134,6 @@ class MomoStrategy(BaseStrategy):
             return
 
         if self.clock.timestamp_ns() - self._last_stop_out_attempt < self._ATTEMPT_STOP_OUT_EVERY_MS * 1e6:
-            time_since = (self.clock.timestamp_ns() - self._last_stop_out_attempt) / 1e6
-            self.log.debug(
-                f"Skipping stop out attempt because last attempt {time_since} ms ago. Limit {self._ATTEMPT_STOP_OUT_EVERY_MS}"
-            )
             return
 
         if self.position_qty > 0 and self.stop_price is None:
@@ -294,7 +290,7 @@ class MomoStrategy(BaseStrategy):
         for i, open_order in enumerate(sorted(self.open_sells, key=lambda order: order.price)):
             existing_open_sell_qty += open_order.leaves_qty
             if existing_open_sell_qty > position_qty:
-                self.log.error(
+                self.log.info(
                     f"Existing open sell qty {existing_open_sell_qty} is greater than position qty {position_qty}. "
                     "Canceling order and skipping adjusting tiers."
                 )
@@ -367,7 +363,7 @@ class MomoStrategy(BaseStrategy):
                     available_qty_increase -= qty_change
 
         for order in orders_to_be_modified:
-            self.log.error(f"Canceling left over order_to_be_modified: {order}")
+            self.log.info(f"Canceling left over order_to_be_modified: {order}")
             self.cancel_open_order(order)
 
         # If (position - sells) is non_zero for more than _MAX_ALLOWED_SELL_DIFF_SECS, sell diff at lowest tier
