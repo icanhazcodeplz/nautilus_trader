@@ -420,8 +420,19 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 self._log.warning(f"Cannot find venue_order_id for {command.client_order_id}")
                 return None
 
-            # Query Alpaca API for order status
+            # Query Alpaca API for order status, following the replacement chain if the order has been replaced
             alpaca_order = await self._http_client.get_order(venue_order_id.value)
+            while alpaca_order.get("replaced_by"):
+                replaced_by = alpaca_order["replaced_by"]
+                self._log.debug(
+                    f"Order {venue_order_id.value} was replaced by {replaced_by}, following chain"
+                )
+                # Register the old venue_id mapping before following the chain
+                old_id = alpaca_order["id"]
+                client_order_id_str = alpaca_order.get("client_order_id")
+                if client_order_id_str and client_id_is_real(client_order_id_str):
+                    self._venue_id__client_id_map[old_id] = client_order_id_str
+                alpaca_order = await self._http_client.get_order(replaced_by)
 
             # Parse response into OrderStatusReport
             filtered_list = self.filter_replaced_and_incomplete_orders([alpaca_order])
