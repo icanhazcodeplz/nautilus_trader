@@ -1080,11 +1080,20 @@ class AlpacaExecutionClient(LiveExecutionClient):
                         self._venue_id__client_id_map[replaced_by_id] = str(command.client_order_id)
                     if float(new_order["limit_price"]) != float(limit_price):
                         self._log.warning(f"Order already replaced, but limit price has changed. {venue_order_id}")
-                elif msg == "order parameters are not changed":
-                    self._log.info(f"Order {command.client_order_id} order parameters are not changed, skipping")
-                elif "insufficient qty available for order" in msg:
-                    # FIXME: TEST THIS
-                    self._log.error(f"Order not submitted. Msg: {msg}")
+                elif msg == "order parameters are not changed" or "insufficient qty available for order" in msg:
+                    self._log.info(f"Order {command.client_order_id} modify rejected: {msg}")
+                    order = self._cache.order(command.client_order_id)
+                    current_venue_order_id = (
+                        order.venue_order_id if order else command.venue_order_id
+                    )
+                    self.generate_order_modify_rejected(
+                        strategy_id=command.strategy_id,
+                        instrument_id=command.instrument_id,
+                        client_order_id=command.client_order_id,
+                        venue_order_id=current_venue_order_id,
+                        reason=msg,
+                        ts_event=self._clock.timestamp_ns(),
+                    )
                 else:
                     raise Exception(json_text) from e
 
