@@ -35,6 +35,7 @@ from nautilus_trader.adapters.alpaca.websocket import AlpacaWebSocketClient
 from nautilus_trader.common.config import PositiveInt
 from nautilus_trader.common.enums import LogColor
 from nautilus_trader.model.objects import Price, Quantity
+from nautilus_trader.model.events.order import OrderFilled
 from nautilus_trader.model.identifiers import TradeId
 from nautilus_trader.core.uuid import UUID4
 
@@ -193,6 +194,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
         self.order_previous_qty_and_value = dict()
 
         # Setup output directory and file for trade updates
+        # TODO: Pull trade_updates from the logs instead to reduce overhead?
         self._trade_updates_output_file_path = run_artifacts_subdir("alpaca_trade_updates.json")
         self._trade_updates_data = []
 
@@ -608,15 +610,16 @@ class AlpacaExecutionClient(LiveExecutionClient):
         last_px = Price.from_str(alpaca_fill["price"])
         ts_event = alpaca_date_str_to_nanos(alpaca_fill["transaction_time"])
 
-        client_order_id = self._venue_id__client_id_map.get(alpaca_fill["order_id"])
-        if client_order_id is None:
+        client_order_id_str = self._venue_id__client_id_map.get(alpaca_fill["order_id"])
+        if client_order_id_str is not None:
+            client_order_id = ClientOrderId(client_order_id_str)
+        else:
             # FIXME: This code has never been run or tested!
             # Fallback: try to resolve from cache (handles orders submitted but not yet
             # in _venue_id__client_id_map, e.g. if order status reports haven't been processed yet)
-            cached_client_order_id = self._cache.client_order_id(venue_order_id)
-            if cached_client_order_id:
-                client_order_id = str(cached_client_order_id)
-                self._venue_id__client_id_map[alpaca_fill["order_id"]] = client_order_id
+            client_order_id = self._cache.client_order_id(venue_order_id)
+            if client_order_id:
+                self._venue_id__client_id_map[alpaca_fill["order_id"]] = str(client_order_id)
                 self._log.debug(
                     f"Resolved venue order id {alpaca_fill['order_id']} from cache "
                     f"(client_order_id={client_order_id})"
