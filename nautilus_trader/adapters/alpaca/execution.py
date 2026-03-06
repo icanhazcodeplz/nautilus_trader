@@ -1228,6 +1228,11 @@ class AlpacaExecutionClient(LiveExecutionClient):
         try:
             # Extract event type and order data
             msg_received_dt = pd.Timestamp.utcnow()
+
+            # Record the raw message immediately, before any early returns
+            flattened_msg = flatten_dict(msg)
+            self._trade_updates_data.append({"msg_received_dt": str(msg_received_dt), **flattened_msg})
+
             msg_data = msg["data"]
             event = msg_data.get("event")
             order_data = msg_data.get("order", {})
@@ -1417,13 +1422,6 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
         except Exception as e:
             self._log.error(f"Error handling WebSocket message: {e}")
-
-        flattened_msg = flatten_dict(msg)
-
-        self._trade_updates_data.append({"msg_received_dt": str(msg_received_dt), **flattened_msg})
-
-        # Write to file (flush)
-        # self._flush_trade_updates()
 
     def _save_trade_updates(self) -> None:
         # TODO: save these every so often? Or wait until the end?
