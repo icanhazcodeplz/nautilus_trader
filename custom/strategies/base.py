@@ -44,7 +44,7 @@ class BaseStrategyConfig(StrategyConfig, frozen=True):
 class BaseStrategy(Strategy):
     buy_signal_delay_secs: int = 1
     _POSITION_DISCREPANCY_ALLOW_SECS = 10  # Raise if alpaca vs nt discrepancy lasts for longer than this
-    _MODIFY_REJECT_COOLDOWN_SECS = 3  # Seconds to block retries after a ModifyRejected
+    _MODIFY_REJECT_COOLDOWN_SECS = 1  # Seconds to block retries after a ModifyRejected
     _RECONCILE_COOLDOWN_SECS = 3  # Minimum seconds between reconciliation attempts
 
     def __init__(self, config: BaseStrategyConfig) -> None:
@@ -364,13 +364,21 @@ class BaseStrategy(Strategy):
                 "order is not open",
                 "qty must be",  # qty must be > filled_qty
                 "cannot replace order in pending_new status",
+                "cannot replace order in pending_cancel status",
                 "order is already in",  # filled/replaced/rejected state
+                "already closed",
+                "order already pending replacement",
                 "cannot be sold short",
+                "order chain not fully replaced",
+                "too_late_to_cancel",
+                "insufficient qty available for order",
             )
             _SKIP_COOLDOWN_REASONS = (
                 "potential wash trade detected",  # This should only arise in testing when we have high buy orders
+                "order parameters are not changed",
+                "no venue_order_id",  # Occurs if we try to modify immediately after sending and before we get response.
             )
-            reason = order_event.reason or ""
+            reason = (order_event.reason or "").lower()
             if any(r in reason for r in _COOLDOWN_REASONS):
                 self.log.info(f"Applying {self._MODIFY_REJECT_COOLDOWN_SECS}s cooldown for: {reason}")
                 for open_order in self.open_orders:
