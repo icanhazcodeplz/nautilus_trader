@@ -1142,11 +1142,16 @@ class AlpacaExecutionClient(LiveExecutionClient):
         except Exception as e:
             self._log.error(f"Failed to cancel order: {e}")
             if order:
+                # Use the order's CURRENT venue_order_id from cache, not the
+                # (possibly stale) one from the cancel command. After a replace,
+                # the cache order already has the new venue_order_id, and the
+                # engine will reject the event if there's a mismatch.
+                current_venue_order_id = order.venue_order_id or venue_order_id
                 self.generate_order_cancel_rejected(
                     strategy_id=order.strategy_id,
                     instrument_id=order.instrument_id,
                     client_order_id=order.client_order_id,
-                    venue_order_id=venue_order_id if venue_order_id else None,
+                    venue_order_id=current_venue_order_id,
                     reason=str(e),
                     ts_event=self._clock.timestamp_ns(),
                 )
