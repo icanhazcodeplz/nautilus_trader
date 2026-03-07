@@ -3098,8 +3098,22 @@ class LiveExecutionEngine(ExecutionEngine):
             return True  # Reconciled
 
         if report.order_status == OrderStatus.ACCEPTED:
-            if order.status != OrderStatus.ACCEPTED:
+            if order.status in (OrderStatus.INITIALIZED, OrderStatus.SUBMITTED):
                 self._generate_order_accepted(order, report)
+            elif order.status != OrderStatus.ACCEPTED:
+                # Order is already past ACCEPTED (e.g. PARTIALLY_FILLED from fills on
+                # a previous replacement venue order). Can't transition back to ACCEPTED,
+                # but still need to index the replacement venue_order_id.
+                self._log.info(
+                    f"Order {order.client_order_id} already {order.status_string()}, "
+                    f"skipping ACCEPTED event (report venue_order_id={report.venue_order_id})",
+                )
+                if report.venue_order_id and report.venue_order_id != order.venue_order_id:
+                    self._ensure_venue_order_id_indexed(
+                        client_order_id=order.client_order_id,
+                        venue_order_id=report.venue_order_id,
+                        log_context="from reconciliation (order past ACCEPTED)",
+                    )
 
             return True  # Reconciled
 
