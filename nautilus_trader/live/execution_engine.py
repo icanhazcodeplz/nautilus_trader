@@ -1379,6 +1379,19 @@ class LiveExecutionEngine(ExecutionEngine):
         except Exception as e:
             self._log.warning(f"Error during targeted query for {order.client_order_id!r}: {e}")
 
+        return False
+
+    async def _resolve_order_not_found_at_venue(self, order: Order) -> None:
+        ts_now = self._clock.timestamp_ns()
+
+        self._log.debug(
+            f"Performing single-order query for {order.client_order_id!r} before marking as REJECTED",
+            LogColor.BLUE,
+        )
+
+        if await self._query_and_reconcile_order(order):
+            return
+
         if not order.is_open:
             self._log.debug(
                 f"Skipping reconciliation for {order.client_order_id!r} - already {order.status_string()}",
