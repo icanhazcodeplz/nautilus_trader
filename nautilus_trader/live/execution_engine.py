@@ -2222,6 +2222,27 @@ class LiveExecutionEngine(ExecutionEngine):
             self._log_skipping_reconciliation_on_instrument_id(report)
             return True  # Filtered
 
+        # Check if the position report is stale: if any position for this instrument
+        # has a fill (ts_last) newer than when the report was generated (ts_init),
+        # then the report snapshot is outdated and should not be used to create
+        # synthetic fills. The next reconciliation cycle will use fresh data.
+        most_recent_position_ts: int = 0
+        for p in self._cache.positions_open(instrument_id=report.instrument_id):
+            if p.ts_last > most_recent_position_ts:
+                most_recent_position_ts = p.ts_last
+        for p in self._cache.positions_closed(instrument_id=report.instrument_id):
+            if p.ts_last > most_recent_position_ts:
+                most_recent_position_ts = p.ts_last
+
+        if most_recent_position_ts > report.ts_init:
+            self._log.warning(
+                f"Stale position report for {report.instrument_id}: "
+                f"report generated at {report.ts_init} but most recent fill at "
+                f"{most_recent_position_ts} ({most_recent_position_ts - report.ts_init}ns newer), "
+                f"skipping position reconciliation to avoid phantom position",
+            )
+            return True
+
         if report.venue_position_id is not None:
             return self._reconcile_position_report_hedging(report)
         else:
