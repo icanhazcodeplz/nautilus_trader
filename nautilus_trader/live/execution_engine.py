@@ -1542,6 +1542,11 @@ class LiveExecutionEngine(ExecutionEngine):
                         reconcile_reason = (
                             f"filled_qty mismatch: venue={report_filled}, cache={order.filled_qty}"
                         )
+                    elif report.quantity != order.quantity:
+                        should_reconcile = True
+                        reconcile_reason = (
+                            f"quantity mismatch: venue={report.quantity}, cache={order.quantity}"
+                        )
 
             if should_reconcile:
                 # Apply include filter before reconciling
