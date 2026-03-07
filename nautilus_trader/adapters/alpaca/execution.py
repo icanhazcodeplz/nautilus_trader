@@ -1378,17 +1378,6 @@ class AlpacaExecutionClient(LiveExecutionClient):
                     price = Price(float(msg_data["order"]["limit_price"]), precision=order.price.precision)
                     raise RuntimeError("Should not fall here")
 
-                # Alpaca's replacement creates a NEW order with fresh fill history. If the old order had partial fills,
-                # the replacement order's fills are ADDITIONAL. Adjust qty upward so filled_qty doesn't exceed qty
-                # (which would prematurely set the order to FILLED).
-                old_filled = order.filled_qty
-                if old_filled > 0:
-                    adjusted_qty = old_filled + quantity
-                    self._log.debug(
-                        f"Order {client_order_id} had {old_filled} fills before replace, adjusting qty from {quantity} to {adjusted_qty} to account for Alpaca's fresh fill history on replacement order",
-                    )
-                    quantity = adjusted_qty
-
                 self.generate_order_updated(
                     strategy_id=order.strategy_id,
                     instrument_id=instrument_id,
