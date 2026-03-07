@@ -1,8 +1,10 @@
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Tuple
 
+import pandas as pd
+
 from nautilus_trader import ENV
-from nautilus_trader.core.datetime import dt_to_unix_nanos, ensure_pydatetime_utc
+from nautilus_trader.core.datetime import dt_to_unix_nanos
 
 
 def get_alpaca_key_and_secret(paper: bool = True) -> Tuple[str, str]:
@@ -14,17 +16,20 @@ def get_alpaca_key_and_secret(paper: bool = True) -> Tuple[str, str]:
 
 def alpaca_date_str_to_nanos(alpaca_date_str: str) -> int:
     """
-    Parse timestamp (RFC-3339 format)
+    Parse timestamp (RFC-3339 format) with nanosecond precision.
     """
-    timestamp_dt = datetime.fromisoformat(alpaca_date_str.replace("Z", "+00:00"))
-    return dt_to_unix_nanos(timestamp_dt)
+    ts = pd.Timestamp(alpaca_date_str)
+    return dt_to_unix_nanos(ts)
 
 
 def dt_to_iso_8601(dt: datetime) -> str:
-    """Convert a datetime-like object to an ISO 8601 string via ensure_pydatetime_utc."""
-    return ensure_pydatetime_utc(dt).isoformat()
+    """Convert a datetime-like object to an ISO 8601 string with nanosecond precision."""
+    ts = pd.Timestamp(dt)
+    if ts.tzinfo is None:
+        ts = ts.tz_localize("UTC")
+    return ts.isoformat()
 
 
 def ns_to_iso_8601(ns: int) -> str:
-    """Convert nanoseconds since epoch to ISO 8601 UTC string (e.g. '2026-02-13T05:04:00Z')."""
-    return datetime.fromtimestamp(ns / 1e9, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    """Convert nanoseconds since epoch to ISO 8601 UTC string with nanosecond precision."""
+    return pd.Timestamp(ns, unit="ns", tz="UTC").isoformat()
