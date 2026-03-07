@@ -392,6 +392,31 @@ class BaseStrategy(Strategy):
             else:
                 self.log.error(f"Unknown OrderModifyRejected reason: {reason}\n Order_event: {order_event}")
             self._trigger_force_reconciliation()
+        elif isinstance(order_event, OrderCancelRejected):
+            reason = order_event.reason or ""
+            if "already in" in reason and "filled" in reason:
+                self.log.warning(
+                    f"Cancel rejected for {order_event.client_order_id}: already filled at venue. "
+                    "Triggering targeted reconciliation to sync cache."
+                )
+                cache_order = self.cache.order(order_event.client_order_id)
+                if cache_order and self._exec_engine is not None:
+                    self._exec_engine._loop.create_task(self._exec_engine._query_and_reconcile_order(cache_order))
+                return
+            cache_order = self.cache.order(order_event.client_order_id)
+            if cache_order and cache_order.is_open:
+                # Re-add to open_orders if missing (e.g. cancel was rejected after cancel_open_order optimistically
+                # removed it)
+                already_tracked = any(oo.client_order_id == cache_order.client_order_id for oo in self.open_orders)
+                if not already_tracked:
+                    open_order = OpenOrder(cache_order)
+                    if cache_order.side == OrderSide.BUY:
+                        self._open_buys.add(open_order)
+                    elif cache_order.side == OrderSide.SELL:
+                        self._open_sells.add(open_order)
+                    self.log.error(
+                        f"Re-added {cache_order.client_order_id} to open_orders (side={cache_order.side}, status={cache_order.status})"
+                    )
 
     def close_position_limit_order(self):
         last_trade = self.cache.trade_tick(self.config.instrument_id)
