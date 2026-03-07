@@ -25,7 +25,7 @@ from nautilus_trader.model.data import TradeTick
 from nautilus_trader.model.enums import OrderSide, OrderStatus
 from nautilus_trader.model.enums import TimeInForce
 from nautilus_trader.model.identifiers import InstrumentId
-from nautilus_trader.model.events import OrderRejected, OrderModifyRejected
+from nautilus_trader.model.events import OrderRejected, OrderModifyRejected, OrderCancelRejected
 from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.model.orders import LimitOrder, Order
 from nautilus_trader.model.orders.list import OrderList
@@ -56,7 +56,7 @@ class BaseStrategy(Strategy):
         self.stop_price = None
         self.last_buy_dt: Timestamp = pd.Timestamp("1990", tz="UTC")
         self._tick_data_dicts = {}
-        self._tick_init_dt_adjusted = 0
+        self._tick_event_dt_adjusted = 0
 
         self._buy_signals_count = 0
         self.buy_orders_count = 0
@@ -178,8 +178,8 @@ class BaseStrategy(Strategy):
             if order.price != new_limit_price:
                 modified = self.modify_open_order(order, quantity=order_qty, price=new_limit_price)
                 if not modified:
-                    self.log.warning(
-                        f"While stopping out, failed to modify order {order.client_order_id} to {new_limit_price}."
+                    self.log.debug(
+                        f"While stopping out, did not modify order {order.client_order_id} to {new_limit_price}."
                     )
         if remaining_qty_to_sell > 0:
             self.sell(quantity=remaining_qty_to_sell, limit_price=new_limit_price, tag="s")
@@ -196,17 +196,17 @@ class BaseStrategy(Strategy):
 
     def log_buy_signal(self, tick, tag=None):
         return  # TODO: Rethink buy signals?
-        if (self._tick_init_dt_adjusted - self.last_buy_signal_dt) / 1e9 < self.buy_signal_delay_secs:
+        if (self._tick_event_dt_adjusted - self.last_buy_signal_dt) / 1e9 < self.buy_signal_delay_secs:
             return
         self._buy_signals_count += 1
         if tag is None:
             tag = f"{self._buy_signals_count}"
         buy_signal_dict = dict(
-            side="buy", time=self._tick_init_dt_adjusted, price=float(tick.price), tag=tag, win=None, win_delay=None
+            side="buy", time=self._tick_event_dt_adjusted, price=float(tick.price), tag=tag, win=None, win_delay=None
         )
         self.buy_sell_signals.append(buy_signal_dict)
         self.log.info(f"Buy signal {self._buy_signals_count}: {buy_signal_dict}")
-        self.last_buy_signal_dt = self._tick_init_dt_adjusted
+        self.last_buy_signal_dt = self._tick_event_dt_adjusted
 
     def _update_buy_signals(self, tick):
         # Track buy-sell signals
@@ -217,14 +217,14 @@ class BaseStrategy(Strategy):
                     loss = tick.price <= (signal["price"] - self.config.stop_loss)
                     if signal["win"] is None and (win or loss):
                         signal["win"] = win
-                        signal["win_time"] = self._tick_init_dt_adjusted
+                        signal["win_time"] = self._tick_event_dt_adjusted
                     if (
                         signal["win_delay"] is None
                         and (win or loss)
-                        and ((self._tick_init_dt_adjusted - signal["time"]) > 80 * 1e6)
+                        and ((self._tick_event_dt_adjusted - signal["time"]) > 80 * 1e6)
                     ):
                         signal["win_delay"] = win
-                        signal["win_delay_time"] = self._tick_init_dt_adjusted
+                        signal["win_delay_time"] = self._tick_event_dt_adjusted
 
     def _raise_if_needed(self):
         """
@@ -237,10 +237,10 @@ class BaseStrategy(Strategy):
     def on_trade_tick(self, tick: TradeTick) -> None:
         self._raise_if_needed()
         self._last_tick = tick
-        if self._tick_init_dt_adjusted >= tick.ts_init:
-            self._tick_init_dt_adjusted += 1
+        if self._tick_event_dt_adjusted >= tick.ts_event:
+            self._tick_event_dt_adjusted += 1
         else:
-            self._tick_init_dt_adjusted = tick.ts_init
+            self._tick_event_dt_adjusted = tick.ts_event
 
         tick_data = {"price": float(tick.price), "size": int(tick.size)}
         if self.save_artifacts:
@@ -266,7 +266,7 @@ class BaseStrategy(Strategy):
         if self.save_artifacts:
             for metric in self.metrics_to_save_on_tick:
                 tick_data = {**tick_data, **metric.get_vals()}
-            self._tick_data_dicts[self._tick_init_dt_adjusted] = tick_data
+            self._tick_data_dicts[self._tick_event_dt_adjusted] = tick_data
 
             for metric in self.metrics_to_save_on_1min:
                 # FIXME: Implement this
@@ -480,13 +480,13 @@ class BaseStrategy(Strategy):
         cache_open_orders = set(order for order in cache_open_orders if order.status != OrderStatus.PENDING_CANCEL)
         if (len(self_open_orders) + len(cache_open_orders)) > 0:
             for order in cache_open_orders - self_open_orders:
-                self.log.error(
+                self.log.warning(
                     f"Cache open order, venue_id {order.venue_order_id} not found in self.open_orders.\nOrder: {order}"
                 )
                 for order in cache_open_orders:
-                    self.log.warning(f"Cache order {order}")
+                    self.log.debug(f"Cache order {order}")
                 for open_order in self_open_orders:
-                    self.log.warning(f"OpenOrder {open_order}")
+                    self.log.debug(f"OpenOrder {open_order}")
 
             for order in self_open_orders - cache_open_orders:
                 self.log.warning(f"OpenOrder {order} not found in cache.")
@@ -553,7 +553,7 @@ class BaseStrategy(Strategy):
             f"{metrics_data}",
             color=LogColor.CYAN,
         )
-        self._last_log_update_dt = self._tick_init_dt_adjusted
+        self._last_log_update_dt = self._tick_event_dt_adjusted
 
     def on_start(self) -> None:
         if not self._initialized:

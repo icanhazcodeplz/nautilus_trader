@@ -39,19 +39,23 @@ config_node = TradingNodeConfig(
         log_directory=str(artifacts_directory),
         log_file_name=file_log_level,
         use_pyo3=True,
-        log_file_max_size=int(5e6),
+        log_file_max_size=int(10e6),
+        log_file_max_backup_count=50,
+        log_component_levels={
+            "nautilus_infrastructure::redis::cache": "INFO",
+        },
     ),
     exec_engine=LiveExecEngineConfig(
         reconciliation=True,
-        reconciliation_lookback_mins=0,
+        reconciliation_lookback_mins=10,
         reconciliation_instrument_ids=[instrument_id],
         inflight_check_interval_ms=5000,
         reconciliation_startup_delay_secs=3.0,
-        open_check_interval_secs=5,
+        open_check_interval_secs=10,
         # purge_closed_orders_interval_mins=None,
         # purge_closed_positions_interval_mins=None,
-        open_check_open_only=False,
-        open_check_lookback_mins=10,  # TODO: Reduce this?
+        open_check_open_only=True,
+        open_check_lookback_mins=5,  # TODO: Reduce this?
         open_check_threshold_ms=3000,
         graceful_shutdown_on_exception=True,
         allow_overfills=True,  # FIXME: Do we want this?
@@ -98,7 +102,7 @@ strategy_config = MomoStrategyConfig(
     vwap_window=150,
     variance_window=300,
     outer_band_multiplier=3.0,
-    pressure_window=100,
+    pressure_window=10,
     trailing_buy_order=False,
     trailing_take=True,
     num_sell_tiers=3,

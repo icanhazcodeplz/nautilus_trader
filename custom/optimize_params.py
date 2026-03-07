@@ -174,7 +174,7 @@ if __name__ == "__main__":
             upper_scalar_multiplier=linspace_float(low=0.6, high=2.0, step=0.4),
             lower_scalar_multiplier=linspace_float(low=1.6, high=2.5, step=0.3),
             outer_band_multiplier=linspace_float(low=1.0, high=3.0, step=1.0),
-            pressure_window=linspace_int(low=50, high=100, step=50),
+            pressure_window=linspace_int(low=10, high=50, step=20),
             # num_sell_tiers=linspace_int(1,4,step=1),
             # trailing_buy_order=[True, False],
         )

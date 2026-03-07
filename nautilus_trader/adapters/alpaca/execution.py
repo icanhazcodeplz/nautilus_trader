@@ -426,9 +426,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
             alpaca_order = await self._http_client.get_order(venue_order_id.value)
             while alpaca_order.get("replaced_by"):
                 replaced_by = alpaca_order["replaced_by"]
-                self._log.debug(
-                    f"Order {venue_order_id.value} was replaced by {replaced_by}, following chain"
-                )
+                self._log.debug(f"Order {venue_order_id.value} was replaced by {replaced_by}, following chain")
                 # Register the old venue_id mapping before following the chain
                 old_id = alpaca_order["id"]
                 client_order_id_str = alpaca_order.get("client_order_id")
@@ -621,8 +619,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
             if client_order_id:
                 self._venue_id__client_id_map[alpaca_fill["order_id"]] = str(client_order_id)
                 self._log.debug(
-                    f"Resolved venue order id {alpaca_fill['order_id']} from cache "
-                    f"(client_order_id={client_order_id})"
+                    f"Resolved venue order id {alpaca_fill['order_id']} from cache (client_order_id={client_order_id})"
                 )
             else:
                 self._log.warning(
@@ -1083,9 +1080,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 elif msg == "order parameters are not changed" or "insufficient qty available for order" in msg:
                     self._log.info(f"Order {command.client_order_id} modify rejected: {msg}")
                     order = self._cache.order(command.client_order_id)
-                    current_venue_order_id = (
-                        order.venue_order_id if order else command.venue_order_id
-                    )
+                    current_venue_order_id = order.venue_order_id if order else command.venue_order_id
                     self.generate_order_modify_rejected(
                         strategy_id=command.strategy_id,
                         instrument_id=command.instrument_id,
@@ -1169,7 +1164,9 @@ class AlpacaExecutionClient(LiveExecutionClient):
         self._log.info(f"Canceling all orders for {command.instrument_id}")
 
         try:
-            open_orders = await self._http_client.get_orders(status="open", symbols=command.instrument_id.symbol.value)
+            open_orders = await self._http_client.get_orders(
+                status="open", symbols=command.instrument_id.symbol.value, priority=True
+            )
 
             for open_order in open_orders:
                 try:

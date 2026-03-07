@@ -140,21 +140,24 @@ class MomoStrategy(BaseStrategy):
             self.stop_price = tick.price - self.config.stop_loss
             self.log.info(f"Setting stop price to {self.stop_price}")
 
-        if self.stop_price is not None and tick.price <= self.stop_price:
-            # First cancel any open buys
-            for order in self.open_buys:
-                self.cancel_open_order(order)
+        if self.stop_price is not None:
+            if tick.price <= self.stop_price:
+                self._stopping_out = True
+                # First cancel any open buys
+                for order in self.open_buys:
+                    self.cancel_open_order(order)
 
-            self._last_stop_out_attempt = self.clock.timestamp_ns()
-            self._stopping_out = True
-            # TODO: HARDCODED to set stop price to 90% below current price
-            new_limit_price = self.instrument.make_price(float(tick.price) * 0.9)
-            self.log.info(f"Stop price {self.stop_price} reached, selling at {new_limit_price}")
+                self._last_stop_out_attempt = self.clock.timestamp_ns()
+                # TODO: HARDCODED to set stop price to 90% below current price
+                new_limit_price = self.instrument.make_price(float(tick.price) * 0.9)
+                self.log.info(f"Stop price {self.stop_price} reached, selling at {new_limit_price}")
 
-            # FIXME: this is not a great solution. The fills for selling are more accurate during backtesting
-            #  if you use a single order, but during live running it is less buggy to modify existing orders because
-            #  trying to cancel existing orders runs async.
-            self.sell_position_at_price(new_limit_price)
+                # FIXME: sell_position_at_price is not a great solution. The fills for selling are more accurate during backtesting
+                #  if you use a single order, but during live running it is less buggy to modify existing orders because
+                #  trying to cancel existing orders runs async.
+                self.sell_position_at_price(new_limit_price)
+            else:
+                self._stopping_out = False
 
     def _on_trade_tick(self, tick: TradeTick) -> None:
         self.stop_out_if_needed(tick)
