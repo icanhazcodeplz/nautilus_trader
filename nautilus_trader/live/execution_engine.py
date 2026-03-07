@@ -741,8 +741,20 @@ class LiveExecutionEngine(ExecutionEngine):
                     if self._is_shutting_down:
                         break
                     try:
-                        await self._check_orders_consistency()
+                        # Shorter timeout — fail fast rather than block the loop
+                        consistency_timeout = min(consistency_check_interval_ns / 1e9 * 0.5, 4.0)
+                        await asyncio.wait_for(
+                            self._check_orders_consistency(),
+                            timeout=consistency_timeout,
+                        )
                         ts_last_consistency_check = ts_now
+                    except asyncio.TimeoutError:
+                        self._log.warning(
+                            f"Order consistency check timed out after {consistency_timeout:.1f}s "
+                            "(likely due to API rate limiting). Backing off 2x interval.",
+                        )
+                        # Back off: skip the next interval too, so we wait 2x before retrying
+                        ts_last_consistency_check = ts_now + consistency_check_interval_ns
                     except Exception as e:
                         self._log.exception("Failed in check_orders_consistency", e)
 
@@ -1336,14 +1348,11 @@ class LiveExecutionEngine(ExecutionEngine):
                     f"Order {client_order_id!r} not found at venue, retry {retries + 1}/{self.open_check_missing_retries}",
                 )
 
-    async def _resolve_order_not_found_at_venue(self, order: Order) -> None:
-        ts_now = self._clock.timestamp_ns()
+    async def _query_and_reconcile_order(self, order: Order) -> bool:
+        """Query a single order from the venue and reconcile it.
 
-        self._log.debug(
-            f"Performing single-order query for {order.client_order_id!r} before marking as REJECTED",
-            LogColor.BLUE,
-        )
-
+        Returns True if the order was found and reconciled, False otherwise.
+        """
         if len(self._clients) > 1:
             raise RuntimeError("Cannot support multiple clients")
         client = list(self._clients.values())[0]
@@ -1366,7 +1375,7 @@ class LiveExecutionEngine(ExecutionEngine):
                     LogColor.BLUE,
                 )
                 self._reconcile_order_report(report, trades=[])
-                return  # Order found and reconciled, no need to mark as rejected
+                return True
         except Exception as e:
             self._log.warning(f"Error during targeted query for {order.client_order_id!r}: {e}")
 
