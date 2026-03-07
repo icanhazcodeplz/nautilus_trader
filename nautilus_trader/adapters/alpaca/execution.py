@@ -1344,6 +1344,14 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 # can resolve it
                 self._venue_id__client_id_map[replaced_by] = str(client_order_id)
 
+                # Proactively update the cache index so reconciliation can resolve
+                # this venue order ID before generate_order_updated propagates
+                self._cache.add_venue_order_id(
+                    client_order_id,
+                    VenueOrderId(replaced_by),
+                    overwrite=True,
+                )
+
                 # If the order filled during the modify round-trip, the "replaced" event is stale. Cancel the ghost
                 # replacement order on Alpaca.
                 if order.is_closed:
