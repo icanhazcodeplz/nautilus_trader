@@ -11,7 +11,7 @@ from custom.utils.paths import data_subdir
 from nautilus_trader.cache.database import CacheDatabaseAdapter
 from nautilus_trader.config import CacheConfig, DatabaseConfig
 from nautilus_trader.model.enums import OrderSide
-from nautilus_trader.model.events import OrderFilled
+from nautilus_trader.model.events import OrderFilled, OrderEvent
 from nautilus_trader.serialization.serializer import MsgSpecSerializer
 from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.model.identifiers import TraderId
@@ -173,13 +173,20 @@ class ArtifactsIO:
         alpaca_updates_df = self.load_alpaca_trade_updates()
 
         def order_duration(order_df: pd.DataFrame) -> pd.Series:
-            side = order_df["side"].values[0]
-            price = order_df["limit_price"].values[0]
-            event_new = order_df[order_df["event"] == "new"]
-            start_time = event_new["timestamp"].values[0] if len(event_new) > 0 else None
+            order_df = order_df[order_df["event"] != "order_replace_rejected"]
+            order_df = order_df[order_df["event"] != "order_cancel_rejected"]
 
-            # Fill the missing "start_time" cells with the "timestamp" of the "replaced" event of the previous id
-            if start_time is None:
+            first_event_ser = order_df.iloc[0]
+            side = first_event_ser["side"]
+            price = float(first_event_ser["limit_price"])
+
+            event_new = order_df[order_df["event"] == "new"]
+            if len(event_new) > 0:
+                # If there is a "new" event, can use that for the start_time.
+                start_time = event_new["timestamp"].values[0]
+            else:
+                # If not, we assume that this is an order that replaced another order. Get the
+                # start time of this new order by getting the "replaced" timestamp of the previous order
                 replaces = order_df["replaces"].values[0]
                 replaced_df = alpaca_updates_df[alpaca_updates_df["id"] == replaces]
                 try:
@@ -188,9 +195,20 @@ class ArtifactsIO:
                     with pd.option_context("display.max_columns", None, "display.width", None):
                         print(f"No start_time for order \n{order_df}\nSKIPPING")
                     return None
-            end_time = order_df["timestamp"].max()
-            last_event_name = order_df["event"].values[-1]
-            if last_event_name not in ["replaced", "fill", "canceled"]:
+
+            end_time = order_df["timestamp"].iloc[-1]
+
+            # Alpaca uses the `qty` field different for different order events. Need to handle
+            # each case differently
+            last_event = order_df.iloc[-1]
+            last_event_name = last_event["event"]
+            if last_event_name == "replaced":
+                order_qty = last_event["qty"]
+            elif last_event_name == "fill":
+                order_qty = last_event["filled_qty"]
+            elif last_event_name == "canceled":
+                order_qty = last_event["qty"]
+            else:
                 raise ValueError(f"Unknown last order event: {last_event_name}")
 
             return pd.Series(dict(side=side, price=price, start_time=start_time, end_time=end_time))
