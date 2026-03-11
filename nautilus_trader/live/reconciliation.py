@@ -491,15 +491,23 @@ def create_inferred_order_filled_event(
     notional_value: Money = instrument.notional_value(last_qty, last_px)
     commission: Money = Money(notional_value * instrument.taker_fee, instrument.quote_currency)
 
+    # Use order's current venue_order_id when it differs from report's.
+    # During replacement chains the report may reference a different venue
+    # order ID than the one the cached order currently holds, which would
+    # cause Order.apply() to raise a ValueError.
+    venue_order_id = report.venue_order_id
+    if order.venue_order_id and order.venue_order_id != report.venue_order_id:
+        venue_order_id = order.venue_order_id
+
     return OrderFilled(
         trader_id=order.trader_id,
         strategy_id=order.strategy_id,
         instrument_id=report.instrument_id,
         client_order_id=order.client_order_id,
-        venue_order_id=report.venue_order_id,
+        venue_order_id=venue_order_id,
         account_id=report.account_id,
         position_id=report.venue_position_id or PositionId(f"{instrument.id}-EXTERNAL"),
-        trade_id=TradeId(UUID4().value),
+        trade_id=TradeId(f"inferred-{UUID4().value}"),
         order_side=order.side,
         order_type=order.order_type,
         last_qty=last_qty,
