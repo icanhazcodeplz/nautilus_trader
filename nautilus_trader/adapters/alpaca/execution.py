@@ -1142,8 +1142,10 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 self._log.warning(f"Order {command.client_order_id} is already closed")
                 return
 
-            # Get venue order ID
-            venue_order_id = command.venue_order_id or self._cache.venue_order_id(command.client_order_id)
+            # Prefer the cache's venue_order_id — it reflects the latest replacement chain ID (updated by PATCH response
+            # and "replaced" events). The command's venue_order_id may be stale if a replace completed between when the
+            # cancel was initiated and now.
+            venue_order_id = self._cache.venue_order_id(command.client_order_id) or command.venue_order_id
             if not venue_order_id:
                 self._log.error(f"No venue_order_id found for {command.client_order_id}")
                 return
