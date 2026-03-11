@@ -211,7 +211,7 @@ class ArtifactsIO:
             else:
                 raise ValueError(f"Unknown last order event: {last_event_name}")
 
-            return pd.Series(dict(side=side, price=price, start_time=start_time, end_time=end_time))
+            return pd.Series(dict(side=side, price=price, qty=int(order_qty), start_time=start_time, end_time=end_time))
 
         order_duration_df = alpaca_updates_df.groupby("id").apply(order_duration, include_groups=False)
         # Drop rows that have any nans
