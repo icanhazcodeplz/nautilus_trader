@@ -1050,7 +1050,16 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 # Register the new replacement venue order ID immediately so that
                 # fill lookups during reconciliation can resolve it (the WebSocket
                 # "replaced" event may arrive later than REST fill queries)
-                self._venue_id__client_id_map[response["id"]] = str(command.client_order_id)
+                new_venue_order_id = response["id"]
+                self._venue_id__client_id_map[new_venue_order_id] = str(command.client_order_id)
+
+                # Also update the cache index immediately. Without this, any
+                # reconciliation that runs before the WS "replaced" event arrives
+                # will fail to resolve this venue_order_id from the cache,
+                # producing "Venue order ID X not indexed in cache" warnings.
+                self._cache.add_venue_order_id(
+                    command.client_order_id, VenueOrderId(new_venue_order_id), overwrite=True
+                )
 
                 # Check if the order filled during the PATCH round-trip.
                 # If so, Alpaca still created a ghost replacement order that we must cancel.
