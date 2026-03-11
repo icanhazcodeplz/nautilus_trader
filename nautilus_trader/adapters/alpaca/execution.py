@@ -553,6 +553,11 @@ class AlpacaExecutionClient(LiveExecutionClient):
                             )
                             try:
                                 await self._http_client.cancel_order(alpaca_order_id)
+                                # Mark as handled after successful cancel so we don't
+                                # re-detect it if Alpaca's order list API returns stale
+                                # data on the next reconciliation cycle.
+                                self._log.info(f"Ghost {alpaca_order_id} successfully canceled")
+                                self._handled_ghost_ids.add(alpaca_order_id)
                             except Exception as cancel_err:
                                 err_str = str(cancel_err)
                                 # If Alpaca says the order is already in a terminal state,
