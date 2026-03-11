@@ -15,6 +15,12 @@ from custom.utils.paths import run_artifacts_subdir
 from nautilus_trader.adapters.alpaca.utils import get_alpaca_key_and_secret
 
 
+class RateLimitReserveExhausted(Exception):
+    """Raised when a low-priority request is rejected to reserve budget for trading."""
+
+    pass
+
+
 class AlpacaHttpClient:
     def __init__(
         self,
@@ -22,6 +28,7 @@ class AlpacaHttpClient:
         timeout: int,
         record_orders: bool = False,
         rate_limit: int = 194,  # Slightly below alpaca limit of 200
+        rate_limit_reserve: int = 30,  # Reserve for high-priority (trading) requests
     ) -> None:
         self.paper = paper
         self._api_key, self._api_secret = get_alpaca_key_and_secret(paper=self.paper)
@@ -37,8 +44,8 @@ class AlpacaHttpClient:
 
         # Rate limiting: track request timestamps in a sliding window
         self._rate_limit = rate_limit
+        self._rate_limit_reserve = rate_limit_reserve
         self._rate_window = 60.0  # 60 seconds (1 minute)
-        # TODO: Reimplement with logic to check if deque is full at 200 and then check first time?
         self._request_timestamps: deque[float] = deque()
         self._rate_limit_lock = asyncio.Lock()
 
@@ -64,12 +71,24 @@ class AlpacaHttpClient:
             "Content-Type": "application/json",
         }
 
-    async def _wait_for_rate_limit(self) -> None:
+    async def _wait_for_rate_limit(self, priority: bool = True) -> None:
         """
         Enforce rate limiting using a sliding window approach.
 
-        Waits if necessary to ensure we don't exceed the rate limit of
-        requests per minute.
+        High-priority requests (trading: POST/PATCH/DELETE) will wait if the
+        limit is reached. Low-priority requests (monitoring: GET /v2/orders list,
+        positions, fills) are rejected early when the remaining budget drops
+        below ``rate_limit_reserve``, so that trading always has headroom.
+
+        Parameters
+        ----------
+        priority : bool, default True
+            True for trading requests, False for monitoring/bulk-query requests.
+
+        Raises
+        ------
+        RateLimitReserveExhausted
+            If a low-priority request is rejected to preserve budget.
         """
         async with self._rate_limit_lock:
             current_time = time.time()
@@ -78,20 +97,26 @@ class AlpacaHttpClient:
             while self._request_timestamps and current_time - self._request_timestamps[0] >= self._rate_window:
                 self._request_timestamps.popleft()
 
-            # If we've hit the rate limit, wait until we can make another request
-            if len(self._request_timestamps) >= self._rate_limit:
+            current_usage = len(self._request_timestamps)
+
+            # Low-priority requests are rejected when budget is tight
+            if not priority and current_usage >= self._rate_limit - self._rate_limit_reserve:
+                self._log.warning(
+                    f"Rate limit reserve hit: {current_usage}/{self._rate_limit} used, "
+                    f"rejecting low-priority request (reserve={self._rate_limit_reserve})",
+                )
+                raise RateLimitReserveExhausted(
+                    f"{current_usage}/{self._rate_limit} requests used, "
+                    f"reserve of {self._rate_limit_reserve} preserved for trading"
+                )
+
+            # Priority request, but we've hit the rate limit, wait until we can make another request
+            if current_usage >= self._rate_limit:
                 sleep_time = self._rate_window - (current_time - self._request_timestamps[0])
                 if sleep_time > 0:
-                    self._log.warning(
-                        f"Rate limit reached ({self._rate_limit} requests per minute). "
-                        f"Waiting {sleep_time:.2f} seconds."
-                    )
+                    self._log.warning(f"Rate limit {self._rate_limit} reached. Waiting {sleep_time:.2f} seconds.")
                     await asyncio.sleep(sleep_time)
-
-                    # Clean up old timestamps after sleeping
                     current_time = time.time()
-                    while self._request_timestamps and current_time - self._request_timestamps[0] >= self._rate_window:
-                        self._request_timestamps.popleft()
 
             # Record this request
             self._request_timestamps.append(current_time)
@@ -102,6 +127,7 @@ class AlpacaHttpClient:
         endpoint: str,
         params: dict[str, Any] | None = None,
         json_data: dict[str, Any] | None = None,
+        priority: bool = True,
     ) -> dict[str, Any] | list[dict[str, Any]]:
         """
         Make an HTTP request to the Alpaca API.
@@ -116,6 +142,9 @@ class AlpacaHttpClient:
             Query parameters for the request.
         json_data : dict[str, Any], optional
             JSON body for the request.
+        priority : bool, default True
+            High-priority requests wait when rate-limited; low-priority
+            requests raise RateLimitReserveExhausted instead.
 
         Returns
         -------
@@ -126,10 +155,12 @@ class AlpacaHttpClient:
         ------
         Exception
             If the request fails.
+        RateLimitReserveExhausted
+            If a low-priority request is rejected to preserve budget.
 
         """
         # Enforce rate limiting before making the request
-        await self._wait_for_rate_limit()
+        await self._wait_for_rate_limit(priority=priority)
 
         session = await self._ensure_session()
         url = f"{self._base_url}{endpoint}"
@@ -235,6 +266,7 @@ class AlpacaHttpClient:
         nested: bool | None = None,
         symbols: str | None = None,
         side: str | None = None,
+        priority: bool = False,
     ) -> list[dict[str, Any]]:
         params: dict[str, Any] = {"limit": limit}
         if status:
@@ -251,7 +283,7 @@ class AlpacaHttpClient:
             params["symbols"] = symbols
         if side:
             params["side"] = side
-        return await self._request("GET", "/v2/orders", params=params)  # type: ignore
+        return await self._request("GET", "/v2/orders", params=params, priority=priority)  # type: ignore
 
     async def get_orders(
         self,
@@ -262,6 +294,7 @@ class AlpacaHttpClient:
         nested: bool | None = None,
         symbols: str | None = None,
         side: str | None = None,
+        priority: bool = False,
     ) -> list[dict[str, Any]]:
         """
         Get orders with automatic pagination.
@@ -282,21 +315,30 @@ class AlpacaHttpClient:
             Comma-separated list of symbols to filter.
         side : str, optional
             Filter by order side: "buy" or "sell".
+        priority : bool, default False
+            Low-priority by default; stops paginating if rate limit reserve hit.
         """
         page_size = 500
         all_orders: list[dict[str, Any]] = []
         page_after = after
         while True:
-            page = await self._get_orders(
-                status=status,
-                limit=page_size,
-                after=page_after,
-                until=until,
-                direction=direction,
-                nested=nested,
-                symbols=symbols,
-                side=side,
-            )
+            try:
+                page = await self._get_orders(
+                    status=status,
+                    limit=page_size,
+                    after=page_after,
+                    until=until,
+                    direction=direction,
+                    nested=nested,
+                    symbols=symbols,
+                    side=side,
+                    priority=priority,
+                )
+            except RateLimitReserveExhausted:
+                self._log.warning(
+                    f"Stopping order pagination early: got {len(all_orders)} orders before rate limit reserve was hit",
+                )
+                break
             if not page:
                 break
             all_orders.extend(page)
@@ -377,8 +419,8 @@ class AlpacaHttpClient:
 
     # Positions API
 
-    async def get_positions(self) -> list[dict[str, Any]]:
-        return await self._request("GET", "/v2/positions")  # type: ignore
+    async def get_positions(self, priority: bool = False) -> list[dict[str, Any]]:
+        return await self._request("GET", "/v2/positions", priority=priority)  # type: ignore
 
     async def get_position(self, symbol: str) -> dict[str, Any]:
         return await self._request("GET", f"/v2/positions/{symbol}")  # type: ignore
@@ -398,21 +440,28 @@ class AlpacaHttpClient:
         direction: str = "desc",
         page_size: int = 100,
         page_token: str | None = None,
+        priority: bool = False,
     ):
         params: dict[str, Any] = {"after": after, "direction": direction, "page_size": page_size}
         if until is not None:
             params["until"] = until
         if page_token is not None:
             params["page_token"] = page_token
-        return await self._request("GET", "/v2/account/activities/FILL", params=params)
+        return await self._request("GET", "/v2/account/activities/FILL", params=params, priority=priority)
 
     async def get_fills(self, after: str, until: str = None, direction: str = "asc") -> list[dict[str, Any]]:
         all_fills: list[dict[str, Any]] = []
         page_token = None
         while True:
-            page = await self._get_fills(
-                after=after, until=until, direction=direction, page_token=page_token, page_size=100
-            )
+            try:
+                page = await self._get_fills(
+                    after=after, until=until, direction=direction, page_token=page_token, page_size=100
+                )
+            except RateLimitReserveExhausted:
+                self._log.warning(
+                    f"Stopping fills pagination early: got {len(all_fills)} fills before rate limit reserve was hit",
+                )
+                break
             if not page:
                 break
             all_fills.extend(page)
