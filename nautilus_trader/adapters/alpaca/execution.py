@@ -1089,6 +1089,9 @@ class AlpacaExecutionClient(LiveExecutionClient):
                     replaced_by_id = new_order.get("replaced_by")
                     if replaced_by_id:
                         self._venue_id__client_id_map[replaced_by_id] = str(command.client_order_id)
+                        self._cache.add_venue_order_id(
+                            command.client_order_id, VenueOrderId(replaced_by_id), overwrite=True
+                        )
                     if float(new_order["limit_price"]) != float(limit_price):
                         self._log.warning(f"Order already replaced, but limit price has changed. {venue_order_id}")
                 elif msg == "order parameters are not changed" or "insufficient qty available for order" in msg:
