@@ -421,7 +421,7 @@ class BaseStrategy(Strategy):
     def close_position_limit_order(self):
         last_trade = self.cache.trade_tick(self.config.instrument_id)
         limit_price = self.position_avg_px if last_trade is None else last_trade.price
-        self.sell_position_at_price(self.instrument.make_price(limit_price * 0.8))
+        self.sell_position_at_price(self.instrument.make_price(limit_price * 0.9))
 
     def _trigger_force_reconciliation(self):
         """Trigger an async force-reconciliation via the execution engine to re-sync cache with broker."""
