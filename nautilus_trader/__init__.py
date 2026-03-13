@@ -53,3 +53,4 @@ class ENV:
     ALPACA_PAPER_KEY = os.environ["ALPACA_PAPER_KEY"]
     ALPACA_PAPER_SECRET = os.environ["ALPACA_PAPER_SECRET"]
     DATABENTO_API_KEY = os.environ["DATABENTO_API_KEY"]
+    PAPER = os.environ.get("PAPER", "true").lower() != "false"
