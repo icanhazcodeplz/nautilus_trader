@@ -214,6 +214,11 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
         # Track accumulated fills from previous venue orders per client_order_id.
         # Alpaca's replacement model creates a NEW venue order with fresh fill history,
+        # Track qty of inferred fills that have been matched by real WS fills.
+        # Used to avoid double-counting when reconciliation infers a fill and
+        # the real WS fill arrives shortly after with a different trade_id.
+        self._matched_inferred_qty: dict[str, int] = {}  # client_order_id str -> matched qty
+
         # Track ghost replacement order IDs that we've already attempted to cancel
         # and failed with a terminal-state error (rejected/filled/canceled).
         # Prevents infinite retry loops when Alpaca returns these in open orders queries.
@@ -1230,6 +1235,15 @@ class AlpacaExecutionClient(LiveExecutionClient):
         if order_status_report is not None:
             self._send_order_status_report(order_status_report)
 
+    def _unmatched_inferred_fill_qty(self, order) -> int:
+        """Return total inferred fill qty on this order that hasn't been matched by a real WS fill yet."""
+        total_inferred = 0
+        for evt in order.events:
+            if isinstance(evt, OrderFilled) and str(evt.trade_id).startswith("inf-"):
+                total_inferred += int(evt.last_qty)
+        already_matched = self._matched_inferred_qty.get(str(order.client_order_id), 0)
+        return total_inferred - already_matched
+
     # -- WEBSOCKET HANDLERS -------------------------------------------------------------------
 
     def _handle_ws_message(self, msg: dict) -> None:
@@ -1324,23 +1338,55 @@ class AlpacaExecutionClient(LiveExecutionClient):
                     self._log.warning(f"Skipping duplicate execution_id: {alpaca_execution_id}")
                 else:
                     self._processed_execution_ids.add(alpaca_execution_id)
-                    currency = Currency.from_str("USD")
-                    self.generate_order_filled(
-                        strategy_id=order.strategy_id,
-                        instrument_id=instrument_id,
-                        client_order_id=client_order_id,
-                        venue_order_id=venue_order_id,
-                        venue_position_id=None,
-                        trade_id=TradeId(alpaca_execution_id),
-                        order_side=order.side,
-                        order_type=order.order_type,
-                        last_qty=Quantity.from_str(this_fill_qty),
-                        last_px=Price.from_str(this_fill_price),
-                        quote_currency=currency,
-                        commission=Money(0, currency),  # Commission is 0 for Alpaca
-                        liquidity_side=LiquiditySide.TAKER,
-                        ts_event=ts_event,
-                    )
+
+                    # Check if this WS fill was already accounted for by an inferred fill
+                    # from reconciliation. Inferred fills have trade_ids prefixed with "inf-"
+                    # and won't match this execution_id, so execution_id dedup won't catch them.
+                    ws_fill_qty = int(this_fill_qty)
+                    unmatched_inferred = self._unmatched_inferred_fill_qty(order)
+                    if unmatched_inferred > 0 and ws_fill_qty <= unmatched_inferred:
+                        # This WS fill is fully covered by a prior inferred fill — skip it
+                        coid_str = str(client_order_id)
+                        self._matched_inferred_qty[coid_str] = self._matched_inferred_qty.get(coid_str, 0) + ws_fill_qty
+                        self._log.warning(
+                            f"Skipping WS fill ({ws_fill_qty} shares, exec={alpaca_execution_id}) "
+                            f"for {client_order_id} — already covered by inferred fill "
+                            f"(unmatched_inferred={unmatched_inferred})",
+                        )
+                    else:
+                        currency = Currency.from_str("USD")
+
+                        # Use the order's current venue_order_id for the fill event.
+                        # During replacement chains, a fill may arrive on the OLD venue
+                        # order ID while the order object already points to the NEW one.
+                        # Order.apply() enforces strict venue_order_id equality, so we
+                        # must use the order's current ID to avoid a ValueError that
+                        # would drop the fill and cause a position discrepancy.
+                        fill_venue_order_id = venue_order_id
+                        if order.venue_order_id and order.venue_order_id != venue_order_id:
+                            self._log.warning(
+                                f"Fill venue_order_id {venue_order_id} differs from order's "
+                                f"current venue_order_id {order.venue_order_id} "
+                                f"(replacement chain fill). Using order's current ID.",
+                            )
+                            fill_venue_order_id = order.venue_order_id
+
+                        self.generate_order_filled(
+                            strategy_id=order.strategy_id,
+                            instrument_id=instrument_id,
+                            client_order_id=client_order_id,
+                            venue_order_id=fill_venue_order_id,
+                            venue_position_id=None,
+                            trade_id=TradeId(alpaca_execution_id),
+                            order_side=order.side,
+                            order_type=order.order_type,
+                            last_qty=Quantity.from_str(this_fill_qty),
+                            last_px=Price.from_str(this_fill_price),
+                            quote_currency=currency,
+                            commission=Money(0, currency),  # Commission is 0 for Alpaca
+                            liquidity_side=LiquiditySide.TAKER,
+                            ts_event=ts_event,
+                        )
 
             elif event == "canceled":
                 # Use order's current venue_order_id — the WS event may carry a
