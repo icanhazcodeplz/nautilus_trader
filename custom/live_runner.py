@@ -6,6 +6,7 @@ from custom.strategies.momo import MomoStrategy
 from custom.strategies.momo import MomoStrategyConfig
 from custom.utils.paths import run_artifacts_subdir, DT_STR
 from custom.utils.run_utils import run_strategy
+from nautilus_trader import ENV
 from nautilus_trader.adapters.alpaca import ALPACA, AlpacaExecClientConfig, AlpacaDataClientConfig
 from nautilus_trader.adapters.alpaca import AlpacaLiveDataClientFactory
 from nautilus_trader.adapters.alpaca import AlpacaLiveExecClientFactory
@@ -23,7 +24,7 @@ from nautilus_trader.model.identifiers import TraderId
 
 symbol = sys.argv[1].upper() if len(sys.argv) > 1 else "rxt".upper()
 instrument_id = InstrumentId.from_str(f"{symbol}.{ALPACA}")
-paper = True
+paper = ENV.PAPER
 
 instrument_provider_config = InstrumentProviderConfig(load_ids=frozenset([instrument_id]), load_all=False)
 log_level = "INFO"
@@ -112,6 +113,20 @@ strategy_config = MomoStrategyConfig(
     print_update_every_secs=5,
     only_buy_if_macd_positive=False,
 )
+
+if not paper:
+    if strategy_config.trade_size > 3 or strategy_config.max_position_multiplier > 1 or strategy_config.random_buy:
+        raise ValueError("Can't run with these params live")
+    print("\n⚠️  You are running LIVE with:")
+    for key, value in strategy_config.dict().items():
+        if key in ("instrument_id", "oms_type", "external_order_claims"):
+            continue
+        print(f"  {key}: {value}")
+    print(f"  Symbol: {symbol}")
+    user_input = input("\nPress 'y' to continue, type any char to exit... ")
+    if user_input.lower() != 'y':
+        raise SystemExit()
+
 node.add_data_client_factory(ALPACA, AlpacaLiveDataClientFactory)
 node.add_exec_client_factory(ALPACA, AlpacaLiveExecClientFactory)
 
@@ -128,7 +143,7 @@ def place_orders_for_testing(paper: bool = True):
 
 if __name__ == "__main__":
     # place_orders_for_testing(paper=paper)
-    run_config = {"symbol": symbol, "strategy": strategy_config.dict()}
+    run_config = strategy_config.dict()
     strategy = MomoStrategy(config=strategy_config)
     performance_stats = run_strategy(strategy, node, artifacts_directory, run_config=run_config, paper=paper)
     print()

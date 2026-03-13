@@ -2,7 +2,7 @@ import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from nautilus_trader import PACKAGE_ROOT
+from nautilus_trader import PACKAGE_ROOT, ENV
 
 
 def repo_path(*dirs):
@@ -24,4 +24,6 @@ DT_STR = datetime.datetime.now(ZoneInfo("America/New_York")).strftime("%Y%m%d_%H
 
 
 def run_artifacts_subdir(*dirs):
+    if ENV.PAPER:
+        return data_subdir("paper_runs", DT_STR, *dirs)
     return data_subdir("runs", DT_STR, *dirs)
