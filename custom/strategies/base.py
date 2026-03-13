@@ -84,6 +84,7 @@ class BaseStrategy(Strategy):
         self._exec_engine = None  # Set by run_utils after node.build()
         self._force_reconcile_count = 0
         self._last_force_reconcile_ns = 0
+        self._last_negative_flatten_ns = 0
         self._reconciliation_task: asyncio.Task | None = None
 
     def initialize(self, artifacts_location: Optional[Path], trader_helper: Optional[AlpacaTraderHelper] = None):
@@ -391,7 +392,7 @@ class BaseStrategy(Strategy):
                 self.log.info(f"Skipping cooldown for: {reason}")
             else:
                 self.log.error(f"Unknown OrderModifyRejected reason: {reason}\n Order_event: {order_event}")
-            self._trigger_force_reconciliation()
+            self._trigger_nt_reconciliation()
         elif isinstance(order_event, OrderCancelRejected):
             reason = order_event.reason or ""
             if "already in" in reason and "filled" in reason:
@@ -423,12 +424,8 @@ class BaseStrategy(Strategy):
         limit_price = self.position_avg_px if last_trade is None else last_trade.price
         self.sell_position_at_price(self.instrument.make_price(limit_price * 0.9))
 
-    def _trigger_force_reconciliation(self):
+    def _trigger_nt_reconciliation(self):
         """Trigger an async force-reconciliation via the execution engine to re-sync cache with broker."""
-        # TODO: Remove overlap with _reconcile method
-        if self._exec_engine is None:
-            self._log.warning("Cannot force-reconcile: no execution engine reference")
-            return
         # Skip if a reconciliation is already in-flight
         if self._reconciliation_task is not None and not self._reconciliation_task.done():
             return
@@ -439,7 +436,7 @@ class BaseStrategy(Strategy):
         self._force_reconcile_count += 1
         self._last_force_reconcile_ns = now_ns
         self._log.warning(
-            f"Triggering force-reconciliation (attempt {self._force_reconcile_count}) via execution engine"
+            f"Triggering nt reconciliation (attempt {self._force_reconcile_count}) via execution engine"
         )
         self._reconciliation_task = self._exec_engine._loop.create_task(self._exec_engine.reconcile_execution_state())
 
@@ -455,6 +452,10 @@ class BaseStrategy(Strategy):
 
         # FLATTEN POSITION IF NEEDED
         if position_at_broker < 0:
+            now_ns = self.clock.timestamp_ns()
+            if (now_ns - self._last_negative_flatten_ns) / 1e9 < 1.0:
+                return  # Cooldown: only attempt flatten once per second
+            self._last_negative_flatten_ns = now_ns
             self.log.error(
                 f"Position {position_at_broker} is negative! Canceling all existing open_sells and buying to flatten."
             )
@@ -485,16 +486,16 @@ class BaseStrategy(Strategy):
                     )
                     self._position_discrepancy_start_ns = now_ns
                     return
+                self._raise_msg = (
+                    f"Position discrepancy has existed for more than {self._POSITION_DISCREPANCY_ALLOW_SECS}. Raising."
+                )
                 for open_order in self.open_orders:
                     self.log.warning(f"Strategy OpenOrder {open_order.order}")
                 for order in set(self.cache.orders_open() + self.cache.orders_inflight()):
                     self.log.warning(f"Cache order {order}")
-                self._raise_msg = (
-                    f"Position discrepancy has existed for more than {self._POSITION_DISCREPANCY_ALLOW_SECS}. Raising."
-                )
                 return
             # Trigger reconciliation on every check (cooldown enforced inside)
-            self._trigger_force_reconciliation()
+            self._trigger_nt_reconciliation()
         else:
             self._position_discrepancy_start_ns = None
             self._force_reconcile_count = 0
@@ -522,9 +523,9 @@ class BaseStrategy(Strategy):
                         self.log.info(f"Removing open order {order} from self.open_orders because it is closed.")
                         self._remove_open_order(order)
                 except Exception as e:
-                    # check if self_order was just recently opened
                     # FIXME: Test this
-                    print()
+                    self.log.error(f"Failed to remove open order {order} from self.open_orders. Exception: {e}")
+                    # check if self_order was just recently opened
 
     def _cancel_partial_fills_and_orders_past_timeout(self, event: TimeEvent):
         for open_order in self.open_orders:
