@@ -562,9 +562,8 @@ class AlpacaExecutionClient(LiveExecutionClient):
                                 err_str = str(cancel_err)
                                 # If Alpaca says the order is already in a terminal state,
                                 # mark it as handled so we don't retry on every reconciliation cycle
-                                if "already in" in err_str and any(
-                                    state in err_str for state in ("rejected", "filled", "canceled", "expired")
-                                ):
+                                terminal_states = ("rejected", "filled", "canceled", "expired", "replaced")
+                                if "already in" in err_str and any(state in err_str for state in terminal_states):
                                     self._handled_ghost_ids.add(alpaca_order_id)
                                     self._log.warning(
                                         f"Ghost {alpaca_order_id} is in terminal state at Alpaca, suppressing future cancel retries",
