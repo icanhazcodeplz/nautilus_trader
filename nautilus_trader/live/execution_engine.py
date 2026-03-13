@@ -3140,6 +3140,21 @@ class LiveExecutionEngine(ExecutionEngine):
         if report.order_status == OrderStatus.ACCEPTED:
             if order.status in (OrderStatus.INITIALIZED, OrderStatus.SUBMITTED):
                 self._generate_order_accepted(order, report)
+            elif order.status == OrderStatus.PENDING_UPDATE:
+                # The WS 'replaced' event was likely dropped. The report confirms
+                # the replacement landed (new venue_order_id, possibly new qty/price).
+                # Generate the OrderUpdated that the missing WS event should have produced.
+                self._log.warning(
+                    f"Order {order.client_order_id} stuck in PENDING_UPDATE, "
+                    f"forcing OrderUpdated from report (venue_order_id={report.venue_order_id})",
+                )
+                if report.venue_order_id and report.venue_order_id != order.venue_order_id:
+                    self._ensure_venue_order_id_indexed(
+                        client_order_id=order.client_order_id,
+                        venue_order_id=report.venue_order_id,
+                        log_context="from reconciliation (PENDING_UPDATE recovery)",
+                    )
+                self._generate_order_updated(order, report)
             elif order.status != OrderStatus.ACCEPTED:
                 # Order is already past ACCEPTED (e.g. PARTIALLY_FILLED from fills on
                 # a previous replacement venue order). Can't transition back to ACCEPTED,
