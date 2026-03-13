@@ -3022,6 +3022,12 @@ class LiveExecutionEngine(ExecutionEngine):
                     )
                 return True  # Already reconciled on a prior cycle
 
+            # Cache has more fills than venue reports. This typically happens during
+            # rapid replacement chains where WS fill events arrive out of order relative
+            # to "replaced" events, causing fills on predecessor venue orders to be counted
+            # on top of the replacement's qty adjustment.
+            overfill_delta = order.filled_qty - report.filled_qty
+
             # Gather diagnostic information
             fill_history = [
                 (event.trade_id, event.last_qty, event.ts_event)
@@ -3029,9 +3035,9 @@ class LiveExecutionEngine(ExecutionEngine):
                 if isinstance(event, OrderFilled)
             ]
 
-            self._log.error(
-                f"report.filled_qty {report.filled_qty} < order.filled_qty {order.filled_qty}, "
-                f"this could potentially be caused by duplicate fills or corrupted cached state; "
+            self._log.warning(
+                f"report.filled_qty {report.filled_qty} < order.filled_qty {order.filled_qty} "
+                f"(delta={overfill_delta}), likely replacement chain race condition; "
                 f"order_id={order.client_order_id}, venue_order_id={order.venue_order_id}, "
                 f"total_fills_applied={len(fill_history)}, "
                 f"fill_trade_ids={order.trade_ids}, "
@@ -3041,25 +3047,32 @@ class LiveExecutionEngine(ExecutionEngine):
 
             # Log each fill for forensics
             for trade_id, qty, ts in fill_history:
-                self._log.error(f"  Fill: {trade_id}, qty={qty}, ts={ts}")
+                self._log.warning(f"  Fill: {trade_id}, qty={qty}, ts={ts}")
 
-            # If venue reports the order as FILLED, trust the venue status and update the order quantity to match fills
-            # already applied. This handles the Alpaca race condition where fills on a predecessor order during
-            # replacement are reported via WebSocket but not fully carried into the replacement order's cumulative
-            # filled_qty.
-            if (
-                report.order_status == OrderStatus.FILLED
-                and order.is_open
-            ):
+            if report.order_status == OrderStatus.FILLED and order.is_open:
+                # Venue says FILLED: adjust qty to match cache filled_qty to force FILLED transition
                 self._log.warning(
                     f"Venue reports order {order.client_order_id} as FILLED despite fill count "
                     f"mismatch. Updating order quantity from {order.quantity} to {order.filled_qty}"
                     " to force FILLED status.",
                 )
-                # Set report quantity to match cached filled_qty so the OrderUpdated event triggers
-                # a FILLED transition (leaves_qty becomes 0 when quantity == filled_qty)
                 original_qty = report.quantity
                 report.quantity = order.filled_qty
+                self._generate_order_updated(order, report)
+                report.quantity = original_qty
+                return True  # Reconciled
+
+            if order.is_open:
+                # Venue says still open: bump order quantity by the overfill delta so that
+                # leaves_qty stays correct and the order doesn't prematurely close.
+                adjusted_qty = order.quantity + overfill_delta
+                self._log.warning(
+                    f"Adjusting order {order.client_order_id} quantity from {order.quantity} "
+                    f"to {adjusted_qty} to compensate for {overfill_delta} extra fills "
+                    f"from replacement chain race.",
+                )
+                original_qty = report.quantity
+                report.quantity = adjusted_qty
                 self._generate_order_updated(order, report)
                 report.quantity = original_qty
                 return True  # Reconciled
