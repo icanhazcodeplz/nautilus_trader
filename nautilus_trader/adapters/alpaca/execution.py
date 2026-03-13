@@ -1389,7 +1389,12 @@ class AlpacaExecutionClient(LiveExecutionClient):
                     quantity = pending_qty if pending_qty is not None else order.quantity
                     price = pending_price if pending_price is not None else order.price
                 else:
-                    # External replacement or no pending params - fall back to old order data
+                    # Pending params already consumed by an earlier replacement in a rapid-modify chain,
+                    # or this is an external replacement. Fall back to WS message data.
+                    self._log.debug(
+                        f"No pending modify params for {client_order_id} on 'replaced' event — "
+                        f"likely consumed by a prior replacement in a rapid-modify chain"
+                    )
                     quantity = Quantity.from_str(msg_data["order"]["qty"])
                     price = Price(float(msg_data["order"]["limit_price"]), precision=order.price.precision)
 
