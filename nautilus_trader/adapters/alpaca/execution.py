@@ -1154,6 +1154,12 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 self._log.error(f"No venue_order_id found for {command.client_order_id}")
                 return
 
+            if command.venue_order_id and command.venue_order_id != venue_order_id:
+                self._log.warning(
+                    f"Cancel for {command.client_order_id}: using cache venue_order_id "
+                    f"{venue_order_id} instead of command's stale {command.venue_order_id}",
+                )
+
             # Cancel order via HTTP API
             await self._http_client.cancel_order(venue_order_id.value)
 
