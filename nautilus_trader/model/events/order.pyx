@@ -1739,6 +1739,16 @@ cdef class OrderAccepted(OrderEvent):
     def __hash__(self) -> int:
         return hash(self.id)
 
+    def __getstate__(self):
+        return OrderAccepted.to_dict_c(self)
+
+    def __setstate__(self, state):
+        cdef OrderAccepted restored = OrderAccepted.from_dict_c(state)
+        self._mem = restored._mem
+
+    def __reduce__(self):
+        return (OrderAccepted.from_dict, (OrderAccepted.to_dict_c(self),))
+
     def __str__(self) -> str:
         return (
             f"{type(self).__name__}("
