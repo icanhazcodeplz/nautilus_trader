@@ -1180,6 +1180,28 @@ class AlpacaExecutionClient(LiveExecutionClient):
                     ts_event=self._clock.timestamp_ns(),
                 )
 
+    async def _re_cancel_order(
+        self,
+        order,
+        instrument_id: InstrumentId,
+        client_order_id: ClientOrderId,
+        current_venue_id: VenueOrderId,
+        ts_event: int,
+    ) -> None:
+        """Re-issue a cancel using the order's current venue_order_id after a cancel rejection."""
+        try:
+            await self._http_client.cancel_order(current_venue_id.value)
+        except Exception as cancel_err:
+            self._log.error(f"Re-cancel of {client_order_id} ({current_venue_id}) failed: {cancel_err}")
+            self.generate_order_cancel_rejected(
+                strategy_id=order.strategy_id,
+                instrument_id=instrument_id,
+                client_order_id=client_order_id,
+                venue_order_id=current_venue_id,
+                reason=str(cancel_err),
+                ts_event=ts_event,
+            )
+
     async def _cancel_all_orders(self, command: CancelAllOrders) -> None:
         """
         Cancel all orders for an instrument on Alpaca.
@@ -1491,15 +1513,29 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 )
 
                 if order.is_open and order.is_pending_cancel:
-
-                    self.generate_order_cancel_rejected(
-                        strategy_id=order.strategy_id,
-                        instrument_id=instrument_id,
-                        client_order_id=client_order_id,
-                        venue_order_id=venue_order_id,
-                        reason=reason,
-                        ts_event=ts_event,
-                    )
+                    current_venue_id = order.venue_order_id
+                    if current_venue_id and current_venue_id != venue_order_id:
+                        # If the cancel was rejected because the order was already replaced,
+                        # the old venue order ID is dead. Re-issue the cancel against the
+                        # order's CURRENT venue order ID (which may have been updated by a
+                        # "replaced" event or cache index update in the meantime).
+                        self._log.warning(
+                            f"Re-issuing cancel for {client_order_id} using current "
+                            f"venue_order_id {current_venue_id} (was {venue_order_id})",
+                        )
+                        self._loop.create_task(
+                            self._re_cancel_order(order, instrument_id, client_order_id, current_venue_id, ts_event),
+                        )
+                    else:
+                        # No newer venue ID available — propagate the rejection
+                        self.generate_order_cancel_rejected(
+                            strategy_id=order.strategy_id,
+                            instrument_id=instrument_id,
+                            client_order_id=client_order_id,
+                            venue_order_id=venue_order_id,
+                            reason=reason,
+                            ts_event=ts_event,
+                        )
 
             elif event in ["pending_new", "accepted", "held"]:
                 self._log.debug(f"Unhandled trade update event: {event}")
