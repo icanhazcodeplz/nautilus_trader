@@ -1,14 +1,13 @@
 from collections import deque
-from copy import copy
 from dataclasses import dataclass
 import random
 
 import pandas as pd
 
-from custom.nt_extensions.indicators import VWAPBands, VWAPBandsNew
+from custom.nt_extensions.indicators import VWAPBandsNew
 from custom.strategies.base import BaseStrategy, BaseStrategyConfig
 from custom.strategies._tiers import Tiers
-from custom.utils.market_utils import market_round
+from nautilus_trader.common.enums import LogColor
 from nautilus_trader.indicators.trend import MACDHistogram
 from nautilus_trader.model.data import Bar
 from nautilus_trader.model.data import TradeTick
@@ -150,11 +149,13 @@ class MomoStrategy(BaseStrategy):
                 self._last_stop_out_attempt = self.clock.timestamp_ns()
                 # TODO: HARDCODED to set stop price to 90% below current price
                 new_limit_price = self.instrument.make_price(float(tick.price) * 0.9)
-                self.log.info(f"Stop price {self.stop_price} reached, selling at {new_limit_price}")
+                self.log.info(
+                    f"Stop price {self.stop_price} reached, selling at {new_limit_price}", color=LogColor.YELLOW
+                )
 
-                # FIXME: sell_position_at_price is not a great solution. The fills for selling are more accurate during backtesting
-                #  if you use a single order, but during live running it is less buggy to modify existing orders because
-                #  trying to cancel existing orders runs async.
+                # FIXME: sell_position_at_price is not a great solution. The fills for selling are more accurate during
+                #  backtesting if you use a single order, but during live running it is less buggy to modify existing
+                #  orders because trying to cancel existing orders runs async.
                 self.sell_position_at_price(new_limit_price)
             else:
                 self._stopping_out = False
@@ -192,7 +193,6 @@ class MomoStrategy(BaseStrategy):
         if self.last_take_ts is None:
             self.last_take_ts = self.clock.utc_now()
 
-        price_1ago = self.price_dq[-1]
         price = tick.price
 
         self.price_dq.append(tick.price)

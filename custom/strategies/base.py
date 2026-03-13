@@ -435,9 +435,7 @@ class BaseStrategy(Strategy):
             return
         self._force_reconcile_count += 1
         self._last_force_reconcile_ns = now_ns
-        self._log.warning(
-            f"Triggering nt reconciliation (attempt {self._force_reconcile_count}) via execution engine"
-        )
+        self._log.warning(f"Triggering nt reconciliation (attempt {self._force_reconcile_count}) via execution engine")
         self._reconciliation_task = self._exec_engine._loop.create_task(self._exec_engine.reconcile_execution_state())
 
     def _reconcile(self, event: TimeEvent = None):
