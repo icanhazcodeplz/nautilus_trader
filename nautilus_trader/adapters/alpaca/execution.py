@@ -1196,11 +1196,12 @@ class AlpacaExecutionClient(LiveExecutionClient):
                         order = self._cache.order(client_order_id)
 
                         if order:
+                            effective_venue_order_id = order.venue_order_id or venue_order_id
                             self.generate_order_canceled(
                                 strategy_id=order.strategy_id,
                                 instrument_id=order.instrument_id,
                                 client_order_id=client_order_id,
-                                venue_order_id=venue_order_id,
+                                venue_order_id=effective_venue_order_id,
                                 ts_event=self._clock.timestamp_ns(),
                             )
                 except Exception as e:
@@ -1342,11 +1343,15 @@ class AlpacaExecutionClient(LiveExecutionClient):
                     )
 
             elif event == "canceled":
+                # Use order's current venue_order_id — the WS event may carry a
+                # stale ghost ID from a replacement chain, causing Order.apply()
+                # to raise ValueError on the venue_order_id equality check.
+                effective_venue_order_id = order.venue_order_id or venue_order_id
                 self.generate_order_canceled(
                     strategy_id=order.strategy_id,
                     instrument_id=instrument_id,
                     client_order_id=client_order_id,
-                    venue_order_id=venue_order_id,
+                    venue_order_id=effective_venue_order_id,
                     ts_event=ts_event,
                 )
 
@@ -1361,11 +1366,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
                 # Proactively update the cache index so reconciliation can resolve
                 # this venue order ID before generate_order_updated propagates
-                self._cache.add_venue_order_id(
-                    client_order_id,
-                    VenueOrderId(replaced_by),
-                    overwrite=True,
-                )
+                self._cache.add_venue_order_id(client_order_id, VenueOrderId(replaced_by), overwrite=True)
 
                 # If the order filled during the modify round-trip, the "replaced" event is stale. Cancel the ghost
                 # replacement order on Alpaca.
@@ -1391,7 +1392,6 @@ class AlpacaExecutionClient(LiveExecutionClient):
                     # External replacement or no pending params - fall back to old order data
                     quantity = Quantity.from_str(msg_data["order"]["qty"])
                     price = Price(float(msg_data["order"]["limit_price"]), precision=order.price.precision)
-                    raise RuntimeError("Should not fall here")
 
                 self.generate_order_updated(
                     strategy_id=order.strategy_id,
@@ -1408,17 +1408,17 @@ class AlpacaExecutionClient(LiveExecutionClient):
             elif event == "order_replace_rejected":
                 reason = msg_data["reason"]
                 self._pending_modify_params.pop(client_order_id, None)
+                effective_venue_order_id = order.venue_order_id or venue_order_id
                 self.generate_order_modify_rejected(
                     strategy_id=order.strategy_id,
                     instrument_id=instrument_id,
                     client_order_id=client_order_id,
-                    venue_order_id=venue_order_id,
+                    venue_order_id=effective_venue_order_id,
                     reason=reason,
                     ts_event=ts_event,
                 )
             elif event == "rejected":
-                # FIXME: This is dead code on paper trading, remove?
-                reason = "Unknown"
+                reason = msg_data["reason"]
                 self.generate_order_rejected(
                     strategy_id=order.strategy_id,
                     instrument_id=instrument_id,
