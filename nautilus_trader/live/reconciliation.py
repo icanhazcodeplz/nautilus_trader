@@ -507,7 +507,8 @@ def create_inferred_order_filled_event(
         venue_order_id=venue_order_id,
         account_id=report.account_id,
         position_id=report.venue_position_id or PositionId(f"{instrument.id}-EXTERNAL"),
-        trade_id=TradeId(f"inferred-{UUID4().value}"),
+        # inf-UUID is exactly 36 chars to maintain compatibility with StackStr
+        trade_id=TradeId(f"inf-{UUID4().value.replace('-', '')}"),
         order_side=order.side,
         order_type=order.order_type,
         last_qty=last_qty,
