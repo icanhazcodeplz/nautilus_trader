@@ -1428,6 +1428,23 @@ class AlpacaExecutionClient(LiveExecutionClient):
                     ts_event=ts_event,
                 )
 
+            elif event == "order_cancel_rejected":
+                reason = msg_data["reason"]
+                self._log.warning(
+                    f"Cancel rejected for {client_order_id} (venue={venue_order_id}): {reason}",
+                )
+
+                if order.is_open and order.is_pending_cancel:
+
+                    self.generate_order_cancel_rejected(
+                        strategy_id=order.strategy_id,
+                        instrument_id=instrument_id,
+                        client_order_id=client_order_id,
+                        venue_order_id=venue_order_id,
+                        reason=reason,
+                        ts_event=ts_event,
+                    )
+
             elif event in ["pending_new", "accepted", "held"]:
                 self._log.debug(f"Unhandled trade update event: {event}")
             else:
