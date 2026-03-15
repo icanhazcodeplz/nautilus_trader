@@ -1,4 +1,5 @@
-from custom.catalog_options import CATALOG_OPTIONS
+import pandas as pd
+
 from custom.nt_extensions.tbbo_data import TBBOData
 
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
@@ -21,20 +22,32 @@ def get_catalog_data(symbol, start, end, data_cls, venue, identifiers=None):
         data_list = [d.data for d in data_list]
     return data_list
 
-
-def load_catalog_data_to_engine_for_backtest(engine, catalog_key, data_venue):
-    catalog_params = CATALOG_OPTIONS[catalog_key.lower()]
-    symbol = catalog_params["symbol"].upper()
-    start_str = catalog_params["start"]
-    end_str = catalog_params["end"]
-
+def load_catalog_data_to_engine(engine, symbol, start_str, end_str, data_venue="ALPACA"):
     test_instrument = TestInstrumentProvider.equity(symbol=symbol, venue=data_venue)
     engine.add_instrument(test_instrument)
 
     for data_cls in [QuoteTick, TradeTick]:
         engine.add_data(get_catalog_data(symbol, start_str, end_str, data_cls=data_cls, venue=data_venue))
 
+
     return test_instrument, engine
+
+
+def check_catalog_data_available(symbol, day, venue="ALPACA"):
+    """Check if trade_tick and quote_tick data exists for the given day.
+
+    day: a date or tz-aware datetime (only the date portion is used).
+    """
+    identifier = f"{symbol.upper()}.{venue}"
+    day_ts = pd.Timestamp(day).normalize()
+    for data_cls in [TradeTick, QuoteTick]:
+        first = BACKTESTING_CATALOG.query_first_timestamp(data_cls, identifier)
+        last = BACKTESTING_CATALOG.query_last_timestamp(data_cls, identifier)
+        if first is None or last is None:
+            return False
+        if not (first.normalize() <= day_ts <= last.normalize()):
+            return False
+    return True
 
 
 # def _get_L3_order_book_delta():

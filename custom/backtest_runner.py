@@ -4,11 +4,14 @@ import shutil
 
 import pandas as pd
 
-from custom.backtest_utils.load_catalog_data import load_catalog_data_to_engine_for_backtest
+from custom.backtest_utils.load_catalog_data import load_catalog_data_to_engine
+from custom.catalog_options import extract_dataset_name_info
 from custom.nt_extensions.limit_fill_model import LimitFillModel
 from custom.strategies.momo import MomoStrategyConfig, MomoStrategy
 from custom.artifacts import ArtifactsIO, BACKTEST_RUNS_PATH
 from custom.strategies.random import RandomConfig, Random
+from custom.utils.paths import data_subdir
+from nautilus_trader.adapters.alpaca.utils import ns_to_iso_8601
 from nautilus_trader.backtest.engine import BacktestEngine
 from nautilus_trader.backtest.engine import BacktestEngineConfig
 from custom.statistics.trade_avg import AvgTrade
@@ -21,7 +24,14 @@ from nautilus_trader.adapters.alpaca import ALPACA
 from nautilus_trader.backtest.models import LatencyModel
 from nautilus_trader.cache.config import CacheConfig
 from nautilus_trader.config import LoggingConfig
-from nautilus_trader.model.events import OrderFilled
+from nautilus_trader.model.events import (
+    OrderFilled,
+    OrderAccepted,
+    OrderInitialized,
+    OrderCanceled,
+    OrderExpired,
+    OrderUpdated,
+)
 from nautilus_trader.persistence.config import StreamingConfig
 from nautilus_trader.core.nautilus_pyo3 import (
     Expectancy,
@@ -111,7 +121,7 @@ def buy_signal_stats(signals):
     return num_buy_sells, long_wins
 
 
-def run_single_backtest(dataset_name, strategy_name, params, artifacts_location=None, log_level="ERROR"):
+def run_single_backtest(symbol, start_str, end_str, strategy_name, params, artifacts_location=None, log_level="ERROR"):
     params_copy = params.copy()
     random_seed = params_copy.pop("random_seed", None)
     random.seed(random_seed)
@@ -120,7 +130,7 @@ def run_single_backtest(dataset_name, strategy_name, params, artifacts_location=
     if artifacts_location is not None:
         streaming = StreamingConfig(
             catalog_path=str(artifacts_location),
-            include_types=[OrderFilled],
+            include_types=[OrderInitialized, OrderFilled, OrderAccepted, OrderCanceled, OrderUpdated, OrderExpired],
             replace_existing=True,
         )
 
@@ -157,7 +167,7 @@ def run_single_backtest(dataset_name, strategy_name, params, artifacts_location=
         latency_model=latency_model,
     )
 
-    test_instrument, engine = load_catalog_data_to_engine_for_backtest(engine, dataset_name, data_venue=DATA_VENUE)
+    test_instrument, engine = load_catalog_data_to_engine(engine, symbol, start_str, end_str, data_venue="ALPACA")
 
     avg_trade_scaled = PnlPer100()
 
@@ -196,21 +206,39 @@ def run_single_backtest(dataset_name, strategy_name, params, artifacts_location=
         from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
 
         catalog = ParquetDataCatalog(str(artifacts_location))
-        fills = catalog.read_backtest(instance_id=str(engine.kernel.instance_id), data_cls=OrderFilled)
+        relevant_order_updates = catalog.read_backtest(instance_id=str(engine.kernel.instance_id))
         # Deduplicate: OrderFilled events are published twice in engine.pyx
         # (once from _handle_order_fill, once from _handle_event)
-        fills = list(set(f for f in fills))
+        relevant_order_updates = list(set(f for f in relevant_order_updates))
+        relevant_order_updates.sort(key=lambda e: e.ts_event)
         artifacts_io = ArtifactsIO(BACKTEST_RUNS_PATH)
-        artifacts_io.save_backtest_fills_to_pkl(fills)
+        artifacts_io.save_backtest_order_updates_to_pkl(relevant_order_updates)
         shutil.rmtree(BACKTEST_RUNS_PATH / "backtest", ignore_errors=True)
 
     return performance_stats
 
 
+def run_single_backtest_from_dataset_name(
+    dataset_name, strategy_name, params, artifacts_location=None, log_level="ERROR"
+):
+    symbol, start_str, end_str = extract_dataset_name_info(dataset_name)
+    return run_single_backtest(
+        symbol,
+        start_str,
+        end_str,
+        strategy_name,
+        params,
+        artifacts_location=artifacts_location,
+        log_level=log_level,
+    )
+
+
 def run_multiple_backtests(dataset_names, strategy_name, params, log_level="ERROR"):
     performance_stats = []
     for dataset_name in dataset_names:
-        p_stats = run_single_backtest(dataset_name, strategy_name, params, artifacts_location=None, log_level=log_level)
+        p_stats = run_single_backtest_from_dataset_name(
+            dataset_name, strategy_name, params, artifacts_location=None, log_level=log_level
+        )
         performance_stats.append({"name": dataset_name, **p_stats})
     stats_df = pd.DataFrame(performance_stats).round(3)
     return stats_df
@@ -232,7 +260,57 @@ def analyze_trades(trades, print_report=False):
     return win_ratio
 
 
+def replay_live_run(live_run_artifacts_dir, log_level="ERROR"):
+    """Run a backtest with the same parameters as a live run."""
+    artifacts_io = ArtifactsIO(live_run_artifacts_dir)
+    config = artifacts_io.load_config()
+
+    # Derive dataset name from run date and symbol
+    ticks = artifacts_io.load_ticks_and_metrics_file()
+    start_str = ns_to_iso_8601(min(ticks.keys()))
+    end_str = ns_to_iso_8601(max(ticks.keys()))
+
+    symbol = config.pop("instrument_id").split(".")[0]
+
+    return run_backtest_and_analyze(
+        symbol,
+        start_str,
+        end_str,
+        "momo",
+        config,
+        log_level=log_level,
+    )
+
+
+def run_backtest_and_analyze(symbol, start_str, end_str, strategy_name, params, log_level="ERROR"):
+    print(f"\nRunning single backtest for {symbol}: {start_str} to {end_str}")
+    start_time = pd.Timestamp.now()
+    run_single_backtest(
+        symbol,
+        start_str,
+        end_str,
+        strategy_name,
+        params,
+        artifacts_location=BACKTEST_RUNS_PATH,
+        log_level=log_level,
+    )
+    artifacts_io = ArtifactsIO(BACKTEST_RUNS_PATH)
+
+    p_mets = artifacts_io.load_performance_metrics()
+    print("\n".join(f"{k}: {round(v, 2)}" for k, v in p_mets.items()))
+    print()
+
+    orders_report = artifacts_io.load_orders_report()
+    trades, sell_legs = orders_to_trades(orders_report)
+    analyze_trades(trades, print_report=True)
+    print(f"\nTotal Runtime {pd.Timestamp.now() - start_time}")
+
+
 if __name__ == "__main__":
+    live_run_artifacts_dir = data_subdir("runs", "20260313_144138")
+    replay_live_run(live_run_artifacts_dir)
+    raise
+
     log_level = "INFO"
     # log_level = "DEBUG"
     log_level = "ERROR"
@@ -245,21 +323,21 @@ if __name__ == "__main__":
         trade_size=100,
         stop_loss=1.0,
         take_profit=None,
-        upper_scalar_multiplier=2.0,
+        upper_scalar_multiplier=1.0,
         lower_scalar_multiplier=1.5,
         vwap_window=150,
         variance_window=300,
         outer_band_multiplier=2.5,
-        pressure_window=50,
+        pressure_window=10,
         simple_take=False,
-        only_buy_if_macd_positive=True,
+        only_buy_if_macd_positive=False,
         trailing_take=True,
         num_sell_tiers=3,
         trailing_buy_order=False,
         random_buy=False,
         random_seed=11,
     )
-    datasets = ["radx"]
+    datasets = ["0129_vivssm"]
 
     all_stats = []
     if len(datasets) > 1:
@@ -272,21 +350,5 @@ if __name__ == "__main__":
             print(stats)
             pass
     else:
-        print(f"\nRunning single backtest for {datasets[0]}")
-        start_time = pd.Timestamp.now()
-        run_single_backtest(
-            datasets[0], strategy_name, params, artifacts_location=BACKTEST_RUNS_PATH, log_level=log_level
-        )
-        artifacts_io = ArtifactsIO(BACKTEST_RUNS_PATH)
-        num_buy_sells, long_wins = buy_signal_stats(artifacts_io.load_signals())
-
-        p_mets = artifacts_io.load_performance_metrics()
-        print("\n".join(f"{k}: {round(v, 2)}" for k, v in p_mets.items()))
-        print()
-
-        orders_report = artifacts_io.load_orders_report()
-        df = orders_report.copy()
-
-        trades, sell_legs = orders_to_trades(df)
-        analyze_trades(trades, print_report=True)
-        print(f"\nTotal Runtime {pd.Timestamp.now() - start_time}")
+        symbol, start_str, end_str = extract_dataset_name_info(datasets[0])
+        run_backtest_and_analyze(symbol, start_str, end_str, strategy_name, params, log_level=log_level)

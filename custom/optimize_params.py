@@ -10,7 +10,7 @@ import logging
 
 sys.path.append(os.getcwd())
 from custom.utils.process_manager import ProcessManager
-from custom.backtest_runner import run_single_backtest
+from custom.backtest_runner import run_single_backtest_from_dataset_name
 
 DATABASE_STR = "sqlite:///optuna.db"
 # mysql_optuna = "mysql://root@localhost/optuna"
@@ -106,7 +106,7 @@ def optimize(trial):
         if previous_trail_value is not None:
             return previous_trail_value
 
-    performance_stats = run_single_backtest(dataset, strategy_name, params, artifacts_location=None, log_level="ERROR")
+    performance_stats = run_single_backtest_from_dataset_name(dataset, strategy_name, params, artifacts_location=None, log_level="ERROR")
     try:
         if OPTIMIZE_BUY_SIGNALS:
             buy_signals = performance_stats["buy_signals"]

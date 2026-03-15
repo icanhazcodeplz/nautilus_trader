@@ -5,10 +5,11 @@ import json
 
 from custom.backtest_utils.load_catalog_data import get_catalog_data
 from custom.catalog_options import write_json_single_line_entries
+from custom.utils.paths import repo_path
 from nautilus_trader.adapters.alpaca import ALPACA
 from nautilus_trader.model.data import TradeTick
 
-CATALOG_JSON_PATH = "/Users/brent/code/nautilus_trader/custom/catalog_options.json"
+CATALOG_JSON_PATH = repo_path("custom", "catalog_options.json")
 
 
 def add_metadata_to_catalog_options():
