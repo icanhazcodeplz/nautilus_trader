@@ -41,17 +41,18 @@ def index():
 @app.route("/api/data")
 def get_data():
     ticks_dict = artifacts_io.load_ticks_and_metrics_file()
+    symbol = artifacts_io.symbol
 
     signals = artifacts_io.load_signals()
 
-    orders_report = artifacts_io.load_orders_report()
+    orders_report, fills, positions, order_durations_list = artifacts_io.get_run_data()
+
     trades, sell_legs = orders_to_trades(orders_report)
     analyze_trades(trades, print_report=True)
 
-    trades["desc"] = trades["buy_id"].astype(str)
+    if not trades.empty:
+        trades["desc"] = trades["buy_id"].astype(str)
     trades_markers = CreateMarkers().create_trades_markers(trades)
-    fills, positions = artifacts_io.get_fills_and_position()
-    order_durations_list = artifacts_io.create_order_duration_df(time_as_ns_int=True, as_list=True)
     order_markers = CreateMarkers().create_order_markers(order_durations_list)
     fill_markers = CreateMarkers().create_fill_markers(fills)
     markers = sorted(trades_markers + fill_markers + order_markers, key=lambda x: x["time"])
@@ -96,7 +97,11 @@ def get_data():
         s["time"] = str(s["time"])
 
     baby_blue = "#59e5ea"
+    title_start_str = pd.Timestamp(int(ticks[0]['time']), unit='ns', tz='UTC').tz_convert('US/Eastern').strftime('%m/%d %H:%M')
+    title_end_str = pd.Timestamp(int(ticks[-1]['time']), unit='ns', tz='UTC').tz_convert('US/Eastern').strftime('%H:%M')
+    title = f"{symbol} {title_start_str} to {title_end_str} {' - backtest' if artifacts_dir == BACKTEST_RUNS_PATH else ''}",
     records = dict(
+        title=title,
         ticks=ticks,
         ten_sec=[],
         one_min=[],
@@ -107,8 +112,8 @@ def get_data():
         TickChartLines=[
             dict(key="vwap_value", color="#45d14c", width=2, type=0),
             dict(key="vwap_low", color="red", width=1.5, type=0),
-            # dict(key="vwap_low_inner", color=baby_blue, width=1, type=0),
-            # dict(key="vwap_low_outer", color=baby_blue, width=1, type=0),
+            dict(key="vwap_low_inner", color=baby_blue, width=1, type=0),
+            dict(key="vwap_low_outer", color=baby_blue, width=1, type=0),
             dict(key="vwap_high", color=baby_blue, width=1.5, type=0),
             # dict(key="vwap_high_inner", color="red", width=1, type=0),
             # dict(key="vwap_high_outer", color="red", width=1, type=0),

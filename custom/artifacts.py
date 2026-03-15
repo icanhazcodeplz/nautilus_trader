@@ -45,6 +45,11 @@ class ArtifactsIO:
         with open(filepath, "rb") as f:
             return pickle.load(f)
 
+    @property
+    def symbol(self):
+        config = self.load_config()
+        return config["instrument_id"].split(".")[0]
+
     def save_config(self, config):
         dict_to_file(config, self.directory / "config.json")
 
@@ -64,7 +69,7 @@ class ArtifactsIO:
             "strategy_id",
             "order_id_tag",
         ]:
-            config["strategy"].pop(drop_key)
+            config.pop(drop_key)
         return config
 
     @staticmethod
@@ -91,50 +96,124 @@ class ArtifactsIO:
         )
         return database.load_orders()
 
-    def get_fills(self) -> list[dict[str, Any]]:
+    def _order_events_to_order_durations(self, order_events):
+        def parse_order_event_dict(o_dict):
+            options = o_dict.get("options")
+            if options is not None:
+                price = options["price"]
+                o_dict["price"] = price
+            return o_dict
+
+        as_dicts = [parse_order_event_dict(type(e).to_dict(e)) for e in order_events]
+
+        df = pd.DataFrame(as_dicts)
+
+        def client_id_to_durations(orders):
+            if orders["ts_event"].nunique() < len(orders):
+                dupes = orders[orders.duplicated(subset="ts_event", keep=False)]
+                dupes_types = set(dupes["type"])
+                if dupes_types == {"OrderFilled"}:
+                    # Do nothing, all the same type
+                    pass
+                elif dupes_types == {"OrderAccepted", "OrderFilled"} or dupes_types == {"OrderUpdated", "OrderFilled"}:
+                    filled_idx = dupes[dupes["type"] == "OrderFilled"].index
+                    orders.loc[filled_idx, "ts_event"] += 1
+                elif dupes_types == {"OrderUpdated", "OrderFilled", "OrderCanceled"}:
+                    filled_idx = dupes[dupes["type"] == "OrderFilled"].index
+                    canceled_idx = dupes[dupes["type"] == "OrderCanceled"].index
+                    orders.loc[filled_idx, "ts_event"] += 1
+                    orders.loc[canceled_idx, "ts_event"] += 2
+                elif len(dupes) != 2:
+                    raise
+                else:
+                    print()
+                orders = orders.sort_values("ts_event")
+
+            durations = []
+
+            for _, order in orders.iterrows():
+                if order["type"] == "OrderInitialized":
+                    qty = int(order["quantity"])
+                    leaves_qty_at_start = qty
+                    filled_qty = 0
+                    price = float(order["price"])
+                    side = "buy" if order["order_side"] == OrderSide.BUY else "sell"
+                elif order["type"] == "OrderAccepted":
+                    start = order["ts_event"]
+                elif order["type"] == "OrderFilled":
+                    filled_qty += int(order["last_qty"])
+                    leaves_qty = qty - filled_qty
+                    if leaves_qty == 0:
+                        end = orders.iloc[-1]["ts_event"]
+                        durations.append(
+                            dict(side=side, price=price, qty=leaves_qty_at_start, start_time=start, end_time=end)
+                        )
+                    elif leaves_qty < 0:
+                        print()
+                elif order["type"] == "OrderUpdated":
+                    # Add the previous order to durations.
+                    updated_time = order["ts_event"]
+                    durations.append(
+                        dict(side=side, price=price, qty=leaves_qty_at_start, start_time=start, end_time=updated_time)
+                    )
+
+                    # Now update values because we just started a new order
+                    start = updated_time
+                    qty = int(order["quantity"])
+                    leaves_qty_at_start = qty - filled_qty
+                    price = float(order["price"])
+                elif order["type"] == "OrderCanceled":
+                    cancel_time = order["ts_event"]
+                    durations.append(
+                        dict(side=side, price=price, qty=leaves_qty_at_start, start_time=start, end_time=cancel_time)
+                    )
+                else:
+                    print()
+
+            return pd.DataFrame(durations)
+
+        durations_df = df.groupby("client_order_id")[
+            ["order_side", "type", "ts_event", "quantity", "price", "last_px", "last_qty"]
+        ].apply(client_id_to_durations)
+        durations_list = durations_df.reset_index(drop=True).to_dict(orient="records")
+        return durations_list
+
+    def get_run_data(self):
+        orders_report = self.load_orders_report()
+
         if self._backtest:
-            fills = self._load_pickle("fills.pkl")
-            fill_events = [self._parse_fill_event(event) for event in fills]
+            order_events = self.load_backtest_order_updates_to_pkl()
+            fill_events = [self._parse_fill_event(event) for event in order_events if isinstance(event, OrderFilled)]
+            order_durations_list = self._order_events_to_order_durations(order_events)
+
         else:
-            orders = self.read_db_order_events()
+            order_events = self.read_db_order_events()
             fill_events = [
                 self._parse_fill_event(event)
-                for order in orders.values()
+                for order in order_events.values()
                 for event in order.events
                 if isinstance(event, OrderFilled)
             ]
 
-        fill_events = sorted(fill_events, key=lambda e: e["ts_event"])
-        return fill_events
+            order_durations_list = self._alpaca_order_durations_list(time_as_ns_int=True, as_list=True)
 
-    def get_fills_and_position(self):
-        fill_events = self.get_fills()
+        fills = sorted(fill_events, key=lambda e: e["ts_event"])
 
         # Use fill events to create a list of (time, position) dicts
         position = 0
-        position_list = []
-        for fill in fill_events:
+        positions = []
+        for fill in fills:
             qty = fill["qty"] if fill["side"] == "buy" else -fill["qty"]
             position += qty
-            position_list.append({"time": fill["ts_event"], "position": position})
-        return fill_events, position_list
+            positions.append({"time": fill["ts_event"], "position": position})
 
-    def save_backtest_fills_to_pkl(self, fills_list: list[OrderFilled]):
-        self._save_pickle(fills_list, "fills.pkl")
+        return orders_report, fills, positions, order_durations_list
 
-    def __get_fills_and_buys(self) -> list[dict[str, Any]]:
-        # FIXME: Remove? might use instead of using orders_report?
-        fills = self.get_fills()
-        df = pd.DataFrame([f for f in fills if f["side"] == "buy"])
+    def save_backtest_order_updates_to_pkl(self, fills_list: list[OrderEvent]):
+        self._save_pickle(fills_list, "order_updates.pkl")
 
-        def fills_to_buys(gp):
-            ts_event = gp["ts_event"].max()
-            qty = gp["qty"].sum()
-            avg_px = (gp["qty"] * gp["price"]).sum() / qty
-            return pd.Series({"ts_event": ts_event, "qty": int(qty), "avg_px": float(avg_px)})
-
-        buys = df.groupby("client_order_id").apply(fills_to_buys)
-        return fills, buys
+    def load_backtest_order_updates_to_pkl(self):
+        return self._load_pickle("order_updates.pkl")
 
     def save_performance_metrics(self, performance_metrics):
         dict_to_file(performance_metrics, self.directory / "performance_metrics.json")
@@ -144,6 +223,8 @@ class ArtifactsIO:
 
     def load_alpaca_trade_updates(self):
         txt = load_txt_file_to_dict(self.directory / "alpaca_trade_updates.json")
+        if len(txt) == 0:
+            return None
         alpaca_updates_df = pd.DataFrame.from_dict(txt)
         alpaca_updates_df = alpaca_updates_df[
             [
@@ -167,10 +248,10 @@ class ArtifactsIO:
         ]
         return alpaca_updates_df
 
-    def create_order_duration_df(self, time_as_ns_int: bool = False, as_list=False) -> pd.DataFrame:
-        if self._backtest:
-            return pd.DataFrame()
+    def _alpaca_order_durations_list(self, time_as_ns_int: bool = False, as_list=False) -> pd.DataFrame:
         alpaca_updates_df = self.load_alpaca_trade_updates()
+        if alpaca_updates_df is None:
+            return []
 
         def order_duration(order_df: pd.DataFrame) -> pd.Series:
             order_df = order_df[order_df["event"] != "order_replace_rejected"]
@@ -221,6 +302,12 @@ class ArtifactsIO:
             # Convert "start_time" and "end_time" columns into ns since epoch
             for col in ["start_time", "end_time"]:
                 order_duration_df[col] = pd.to_datetime(order_duration_df[col]).astype("int64")
+
+            # If end_time equals start_time, add one nanosecond to end_time so that the plotting
+            # tools don't break
+            mask = order_duration_df["start_time"] == order_duration_df["end_time"]
+            order_duration_df.loc[mask, "end_time"] += 1
+
         if as_list:
             return order_duration_df.reset_index(drop=True).to_dict(orient="records")
         return order_duration_df.sort_values("start_time")
@@ -229,6 +316,7 @@ class ArtifactsIO:
         self._save_pickle(orders_report_df, "orders_report.pkl")
 
     def load_orders_report(self, process=False):
+        # TODO: Create orders_report from individual order events
         df = self._load_pickle("orders_report.pkl")
         if process:
             cols = [
