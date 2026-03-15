@@ -4,8 +4,10 @@ import pandas as pd
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockTradesRequest, StockQuotesRequest
 
+from custom.artifacts import ArtifactsIO
 from custom.backtest_utils.load_catalog_data import BACKTESTING_CATALOG
 from custom.catalog_options import write_json_single_line_entries
+from custom.utils.paths import data_subdir, repo_path
 from nautilus_trader.adapters.alpaca import ALPACA
 from nautilus_trader.adapters.alpaca.utils import get_alpaca_key_and_secret
 from nautilus_trader.core.datetime import dt_to_unix_nanos
@@ -67,9 +69,7 @@ def get_trades_and_save_to_catalog_if_needed(symbol, start_dt_str, end_dt_str, f
             print(f"Trades exist for {symbol} from {start_dt_str} to {end_dt_str}, skipping")
             return
 
-    request = StockTradesRequest(
-        feed="sip", symbol_or_symbols=symbol, start=start_dt_str, end=end_dt_str
-    )
+    request = StockTradesRequest(feed="sip", symbol_or_symbols=symbol, start=start_dt_str, end=end_dt_str)
 
     # Fetch the tick data
     alpaca_response = client.get_stock_trades(request)
@@ -112,9 +112,7 @@ def get_quotes_and_save_to_catalog(symbol, start_dt_str, end_dt_str, force=False
             print(f"Quotes exist for {symbol} from {start_dt_str} to {end_dt_str}, skipping")
             return
 
-    request = StockQuotesRequest(
-        feed="sip", symbol_or_symbols=symbol, start=start_dt_str, end=end_dt_str
-    )
+    request = StockQuotesRequest(feed="sip", symbol_or_symbols=symbol, start=start_dt_str, end=end_dt_str)
 
     alpaca_response = client.get_stock_quotes(request)
     quotes = alpaca_response.data[symbol]
@@ -135,15 +133,54 @@ def get_quotes_and_save_to_catalog(symbol, start_dt_str, end_dt_str, force=False
     BACKTESTING_CATALOG.write_data(quote_ticks)
 
 
-def prepare_alpaca_data(symbol, start_dt):
-    end_dt = start_dt.replace(hour=0, minute=0) + pd.Timedelta(days=1)
+def prepare_alpaca_data(symbol, start_dt, end_dt):
     start_dt_str = start_dt.isoformat()
     end_dt_str = end_dt.isoformat()
     get_trades_and_save_to_catalog_if_needed(symbol, start_dt_str, end_dt_str)
     get_quotes_and_save_to_catalog(symbol, start_dt_str, end_dt_str)
 
 
+def add_entry_to_catalog_options(key, symbol, data_start_dt, data_end_dt, notes=None):
+    catalog_json_path = repo_path("custom", "catalog_options.json")
+    with open(catalog_json_path) as f:
+        catalog_options = json.load(f)
+
+    # Check if the key is already
+    if key in catalog_options.keys():
+        print(f"{key} already in catalog_options. Skipping.")
+        return
+
+    catalog_options[key] = {
+        "symbol": symbol.upper(),
+        "start": data_start_dt.strftime("%Y-%m-%d %H:%M"),
+        "end": data_end_dt.strftime("%Y-%m-%d %H:%M"),
+        "notes": "" if notes is None else notes,
+    }
+
+    write_json_single_line_entries(catalog_options, catalog_json_path)
+
+
+def download_matching_data_from_live_run(artifacts_dir):
+    """ """
+    artifacts_io = ArtifactsIO(artifacts_dir)
+    ticks = artifacts_io.load_ticks_and_metrics_file()
+    start = min(ticks.keys())
+    symbol = artifacts_io.symbol
+
+    data_start_dt = pd.Timestamp(start, unit="ns", tz="UTC").tz_convert("US/Eastern").normalize()
+    data_end_dt = data_start_dt + pd.Timedelta(days=1)
+    prepare_alpaca_data(symbol, data_start_dt, data_end_dt)
+    date_str = data_start_dt.strftime("%m%d")
+    key = f"{date_str}_{symbol.lower()}"
+    add_entry_to_catalog_options(key, symbol, data_start_dt, data_end_dt)
+
+
 if __name__ == "__main__":
+    artifacts_dir = data_subdir("runs", "20260313_144138")
+    # artifacts_dir = data_subdir("paper_runs", "20260311_104208")
+    download_matching_data_from_live_run(artifacts_dir)
+
+    raise
     import os
     from pathlib import Path
 
@@ -162,9 +199,7 @@ if __name__ == "__main__":
         print(parquet_file)
         for hr in check_hours:
             start_dt = top_gainers_df.timestamp[0].replace(hour=hr, minute=0)
-            candidates = top_gainers_df[top_gainers_df["timestamp"] == start_dt].head(
-                must_be_in_top
-            )
+            candidates = top_gainers_df[top_gainers_df["timestamp"] == start_dt].head(must_be_in_top)
             candidates = candidates[
                 (candidates["price"] > price_min)
                 & (candidates["price"] < price_max)
@@ -174,28 +209,13 @@ if __name__ == "__main__":
             print(f"{candidates}\n")
             for symbol in candidates["symbol"].unique():
                 data_start_dt = start_dt - pd.Timedelta(hours=1)
-                prepare_alpaca_data(symbol, data_start_dt)
-
-                # Add entry to catalog_options.json
-                catalog_json_path = "/Users/brent/code/nautilus_trader/custom/catalog_options.json"
-                with open(catalog_json_path) as f:
-                    catalog_options = json.load(f)
-
                 data_end_dt = data_start_dt.replace(hour=0, minute=0) + pd.Timedelta(days=1)
-                date_str = data_start_dt.strftime("%m%d")
-                key = f"{date_str}_{symbol.lower()}"
-                # Check if the key is already
-                if key in catalog_options.keys():
-                    print(f"{key} already in catalog_options. Skipping.")
+                prepare_alpaca_data(symbol, data_start_dt, data_end_dt)
 
-                catalog_options[key] = {
-                    "symbol": symbol.upper(),
-                    "start": data_start_dt.strftime("%Y-%m-%d %H:%M"),
-                    "end": data_end_dt.strftime("%Y-%m-%d %H:%M"),
-                    "notes": "",
-                }
-
-                write_json_single_line_entries(catalog_options, catalog_json_path)
+            data_end_dt = data_start_dt.replace(hour=0, minute=0) + pd.Timedelta(days=1)
+            date_str = data_start_dt.strftime("%m%d")
+            key = f"{date_str}_{symbol.lower()}"
+            add_entry_to_catalog_options(key, symbol, data_start_dt, data_end_dt)
 
     if False:
         end_dt_str = pd.Timestamp(start_dt_str) + pd.Timedelta(days=1)
