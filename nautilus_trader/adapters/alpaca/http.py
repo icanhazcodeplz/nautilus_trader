@@ -539,6 +539,74 @@ class AlpacaHttpClient:
 
             return await response.json()  # type: ignore
 
+    async def get_bars(
+        self,
+        symbol: str,
+        timeframe: str,
+        start: str | None = None,
+        end: str | None = None,
+        limit: int | None = None,
+        feed: str | None = None,
+        sort: str | None = None,
+        page_token: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Get historical bars for a symbol.
+
+        Parameters
+        ----------
+        symbol : str
+            The stock symbol.
+        timeframe : str
+            The bar timeframe (e.g., "1Min", "5Min", "1Hour", "1Day").
+        start : str, optional
+            Start time in RFC-3339 format.
+        end : str, optional
+            End time in RFC-3339 format.
+        limit : int, optional
+            Maximum number of bars to return (max 10000).
+        feed : str, optional
+            The data feed: "iex" or "sip".
+        sort : str, optional
+            Sort order: "asc" or "desc".
+        page_token : str, optional
+            Pagination token for next page.
+        """
+        params: dict[str, Any] = {"timeframe": timeframe}
+        if start:
+            params["start"] = start
+        if end:
+            params["end"] = end
+        if limit:
+            params["limit"] = limit
+        if feed:
+            params["feed"] = feed
+        if sort:
+            params["sort"] = sort
+        if page_token:
+            params["page_token"] = page_token
+
+        await self._wait_for_rate_limit()
+
+        session = await self._ensure_session()
+        url = f"{self._data_base_url}/v2/stocks/{symbol}/bars"
+        headers = self._get_headers()
+
+        self._log.debug(f"GET {url}")
+
+        async with session.request(
+            "GET",
+            url,
+            headers=headers,
+            params=params,
+        ) as response:
+            if response.status >= 400:
+                text = await response.text()
+                self._log.error(f"HTTP {response.status}: {text}")
+                raise Exception(f"HTTP {response.status}: {text}")
+
+            return await response.json()  # type: ignore
+
 
 #
 # @lru_cache(1)
