@@ -311,9 +311,30 @@ class AlpacaDataClient(LiveMarketDataClient):
 
     def _handle_bar_message(self, msg: dict[str, Any]) -> None:
         """Parse and handle a bar message."""
-        # TODO: Implement bar parsing when Bar data type is needed
-        self._log.debug(f"Received bar message for {msg.get('S')}")
-        raise NotImplementedError("Bar data type not yet implemented")
+        try:
+            symbol = msg["S"]
+            bar_type = self._bar_type_by_symbol.get(symbol)
+            if bar_type is None:
+                self._log.warning(f"Received bar for untracked symbol: {symbol}")
+                return
+
+            ts_event = alpaca_date_str_to_nanos(msg["t"])
+
+            bar = Bar(
+                bar_type=bar_type,
+                open=Price.from_str(str(msg["o"])),
+                high=Price.from_str(str(msg["h"])),
+                low=Price.from_str(str(msg["l"])),
+                close=Price.from_str(str(msg["c"])),
+                volume=Quantity.from_str(str(msg["v"])),
+                ts_event=ts_event,
+                ts_init=self._clock.timestamp_ns(),
+            )
+
+            self._handle_data(bar)
+
+        except Exception as e:
+            self._log.error(f"Error parsing bar message: {e}")
 
     # Subscription methods
 
