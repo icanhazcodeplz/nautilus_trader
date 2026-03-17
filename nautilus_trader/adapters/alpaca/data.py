@@ -31,9 +31,13 @@ from nautilus_trader.adapters.alpaca.utils import dt_to_iso_8601
 
 from nautilus_trader.live.config import LiveDataClientConfig
 from nautilus_trader.live.data_client import LiveMarketDataClient
+from nautilus_trader.model.data import Bar
+from nautilus_trader.model.data import BarAggregation
+from nautilus_trader.model.data import BarType
 from nautilus_trader.model.data import QuoteTick
 from nautilus_trader.model.data import TradeTick
 from nautilus_trader.model.enums import AggressorSide
+from nautilus_trader.model.enums import PriceType
 from nautilus_trader.model.identifiers import ClientId
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.identifiers import TradeId
@@ -45,17 +49,19 @@ if TYPE_CHECKING:
     from nautilus_trader.cache.cache import Cache
     from nautilus_trader.common.component import LiveClock
     from nautilus_trader.common.component import MessageBus
-    from nautilus_trader.data.messages import RequestTradeTicks
+    from nautilus_trader.data.messages import RequestTradeTicks, RequestBars
     from nautilus_trader.data.messages import SubscribeInstrument
     from nautilus_trader.data.messages import SubscribeInstruments
     from nautilus_trader.data.messages import SubscribeOrderBook
     from nautilus_trader.data.messages import SubscribeQuoteTicks
     from nautilus_trader.data.messages import SubscribeTradeTicks
+    from nautilus_trader.data.messages import SubscribeBars
     from nautilus_trader.data.messages import UnsubscribeInstrument
     from nautilus_trader.data.messages import UnsubscribeInstruments
     from nautilus_trader.data.messages import UnsubscribeOrderBook
     from nautilus_trader.data.messages import UnsubscribeQuoteTicks
     from nautilus_trader.data.messages import UnsubscribeTradeTicks
+    from nautilus_trader.data.messages import UnsubscribeBars
 
 
 class AlpacaDataClientConfig(LiveDataClientConfig, frozen=True):
@@ -129,6 +135,9 @@ class AlpacaDataClient(LiveMarketDataClient):
 
         # http_client used to request historical data
         self._http_client = http_client
+
+        # Map symbol -> BarType for WS bar subscriptions
+        self._bar_type_by_symbol: dict[str, BarType] = {}
 
         # Initialize WebSocket client for market data streaming
         self._ws_client = AlpacaMarketDataWebSocketClient(
@@ -462,6 +471,47 @@ class AlpacaDataClient(LiveMarketDataClient):
         except Exception as e:
             self._log.error(f"Failed to unsubscribe from trade ticks for {command.instrument_id}: {e}")
 
+    async def _subscribe_bars(self, command: SubscribeBars) -> None:
+        """Subscribe to bars via WebSocket."""
+        if not self._ws_client or not self._ws_client.is_connected:
+            self._log.error(
+                f"Cannot subscribe to bars for {command.bar_type}: WebSocket not connected",
+                LogColor.RED,
+            )
+            return
+
+        symbol = command.bar_type.instrument_id.symbol.value
+
+        # Store the bar type so the WS handler can construct Bar objects
+        self._bar_type_by_symbol[symbol] = command.bar_type
+
+        try:
+            await self._ws_client.subscribe(bars=[symbol])
+            self._log.info(
+                f"Subscribed to bars for {command.bar_type}",
+                LogColor.GREEN,
+            )
+        except Exception as e:
+            self._log.error(
+                f"Failed to subscribe to bars for {command.bar_type}: {e}",
+                LogColor.RED,
+            )
+
+    async def _unsubscribe_bars(self, command: UnsubscribeBars) -> None:
+        """Unsubscribe from bars."""
+        if not self._ws_client or not self._ws_client.is_connected:
+            self._log.debug(f"Cannot unsubscribe from bars for {command.bar_type}: WebSocket not connected")
+            return
+
+        symbol = command.bar_type.instrument_id.symbol.value
+
+        try:
+            await self._ws_client.unsubscribe(bars=[symbol])
+            self._bar_type_by_symbol.pop(symbol, None)
+            self._log.info(f"Unsubscribed from bars for {command.bar_type}")
+        except Exception as e:
+            self._log.error(f"Failed to unsubscribe from bars for {command.bar_type}: {e}")
+
     async def _request_trade_ticks(self, request: RequestTradeTicks) -> None:
         """Request historical trade ticks."""
         # Extract symbol from instrument_id (format: SYMBOL.ALPACA)
@@ -548,3 +598,101 @@ class AlpacaDataClient(LiveMarketDataClient):
 
         # Send trades to data engine
         self._handle_trade_ticks(request.instrument_id, trades, request.id, request.start, request.end, request.params)
+
+    # -- Bar aggregation to Alpaca timeframe mapping ---
+
+    _AGGREGATION_TO_ALPACA_UNIT: dict = {
+        BarAggregation.MINUTE: "Min",
+        BarAggregation.HOUR: "Hour",
+        BarAggregation.DAY: "Day",
+        BarAggregation.WEEK: "Week",
+        BarAggregation.MONTH: "Month",
+    }
+
+    async def _request_bars(self, request: RequestBars) -> None:
+        """Request historical bars."""
+        bar_type = request.bar_type
+
+        # Validate aggregation source
+        if bar_type.is_internally_aggregated():
+            self._log.error(
+                f"Cannot request internally aggregated bars from Alpaca: {bar_type}",
+            )
+            return
+
+        # Validate price type
+        if bar_type.spec.price_type != PriceType.LAST:
+            self._log.error(
+                f"Only LAST price type available from Alpaca, got {bar_type.spec.price_type}",
+            )
+            return
+
+        # Validate time-based aggregation
+        if not bar_type.spec.is_time_aggregated():
+            self._log.error(
+                f"Only time-based bar aggregations supported from Alpaca, got {bar_type.spec}",
+            )
+            return
+
+        # Map aggregation to Alpaca timeframe string
+        unit = self._AGGREGATION_TO_ALPACA_UNIT.get(bar_type.spec.aggregation)
+        if unit is None:
+            self._log.error(
+                f"Unsupported bar aggregation for Alpaca: {bar_type.spec.aggregation}",
+            )
+            return
+
+        timeframe = f"{bar_type.spec.step}{unit}"
+
+        symbol = bar_type.instrument_id.symbol.value
+        instrument = self._cache.instrument(bar_type.instrument_id)
+        if instrument is None:
+            self._log.error(f"Cannot request bars for unknown instrument {bar_type.instrument_id}")
+            return
+
+        start_str = dt_to_iso_8601(request.start) if request.start else None
+        end_str = dt_to_iso_8601(request.end) if request.end else None
+        limit = request.limit
+
+        try:
+            response = await self._http_client.get_bars(
+                symbol=symbol,
+                timeframe=timeframe,
+                start=start_str,
+                end=end_str,
+                limit=limit,
+                feed=self._config.feed,
+                sort="asc",
+            )
+        except Exception as exc:
+            self._log.exception(f"Failed to request bars for {bar_type}", exc)
+            return
+
+        bars_data = response.get("bars", [])
+        if not bars_data:
+            self._log.info(f"No bars returned for {bar_type}")
+            self._handle_bars(bar_type, [], request.id, request.start, request.end, request.params)
+            return
+
+        bars = []
+        for raw in bars_data:
+            try:
+                ts_event = alpaca_date_str_to_nanos(raw["t"])
+                bar = Bar(
+                    bar_type=bar_type,
+                    open=Price.from_str(str(raw["o"])),
+                    high=Price.from_str(str(raw["h"])),
+                    low=Price.from_str(str(raw["l"])),
+                    close=Price.from_str(str(raw["c"])),
+                    volume=Quantity.from_str(str(raw["v"])),
+                    ts_event=ts_event,
+                    ts_init=ts_event,
+                )
+                bars.append(bar)
+            except Exception as exc:
+                self._log.warning(f"Failed to parse bar data: {raw}", exc)
+                continue
+
+        self._log.info(f"Received {len(bars)} bars for {bar_type}")
+
+        self._handle_bars(bar_type, bars, request.id, request.start, request.end, request.params)
