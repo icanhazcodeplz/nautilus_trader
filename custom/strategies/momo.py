@@ -410,14 +410,8 @@ class MomoStrategy(BaseStrategy):
                 self.log.info(f"Setting stop price to {new_stop_price}")
                 self.stop_price = new_stop_price
 
-    def on_bar(self, bar: Bar) -> None:
+    def _on_bar(self, bar: Bar) -> None:
         pass
-        # if not self.indicators_initialized():
-        #     self.log.info(
-        #         f"Waiting for indicators to warm up [{self.cache.bar_count(self.config.bar_type)}]",
-        #         color=LogColor.BLUE,
-        #     )
-        #     return  # Wait for indicators to warm up...
 
     def on_reset(self) -> None:
         raise NotImplementedError
