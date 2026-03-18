@@ -106,6 +106,7 @@ dev = [
   "ruff==0.14.13", # Pinned to 0.14.13 (keep in line with pre-commit)
   "types-pytz>=2025.2,<2026.0",
   "types-toml>=0.10.2,<1.0.0",
+  "exchange-calendars",
   "flask",
   "flask_restful",
   "flask_cors",
