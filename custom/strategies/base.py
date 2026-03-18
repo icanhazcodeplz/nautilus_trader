@@ -17,7 +17,7 @@ from nautilus_trader.config import StrategyConfig
 from nautilus_trader.core.data import Data
 from nautilus_trader.core.message import Event
 from nautilus_trader.model.book import OrderBook
-from nautilus_trader.model.data import BarType
+from nautilus_trader.model.data import BarType, Bar
 from nautilus_trader.model.data import OrderBookDeltas
 from nautilus_trader.model.data import QuoteTick
 from nautilus_trader.model.data import TradeTick
@@ -248,30 +248,54 @@ class BaseStrategy(Strategy):
             tick_data = {
                 **tick_data,
                 "ts_event": tick.ts_event,
-                "ts_recv": tick.ts_init,
-                "ts_clock": self.clock.utc_now(),
-                "ts_now": pd.Timestamp.utcnow(),
+                # These can be used to measure data latency
+                # "ts_recv": tick.ts_init,
+                # "ts_clock": self.clock.utc_now(),
+                # "ts_now": pd.Timestamp.utcnow(),
             }
 
         #  Actual operations of this method
         if self.indicators_initialized():
             self._on_trade_tick(tick)
 
-        # Record if needed
-        if self.save_artifacts:
-            tick_data["ts_now_after"] = pd.Timestamp.utcnow()
-
         # TODO: Rethink buy signals?
         # self._update_buy_signals(tick)
 
         if self.save_artifacts:
+            # tick_data["ts_now_after"] = pd.Timestamp.utcnow()
             for metric in self.metrics_to_save_on_tick:
                 tick_data = {**tick_data, **metric.get_vals()}
             self._tick_data_dicts[self._tick_event_dt_adjusted] = tick_data
 
+    def _on_bar(self, bar: Bar) -> None:
+        pass
+
+    def on_bar(self, bar: Bar):
+        self._on_bar(bar)
+        if self.save_artifacts:
+            tick_data = {}
             for metric in self.metrics_to_save_on_1min:
-                # FIXME: Implement this
-                pass
+                tick_data = {**tick_data, **metric.get_vals()}
+            self._tick_data_dicts[bar.ts_init] = tick_data
+
+    def on_historical_data(self, data) -> None:
+        if not self.save_artifacts:
+            return
+        if not isinstance(data, TradeTick):
+            return
+
+        tick: TradeTick = data
+        if self._tick_event_dt_adjusted >= tick.ts_event:
+            self._tick_event_dt_adjusted += 1
+        else:
+            self._tick_event_dt_adjusted = tick.ts_event
+
+        tick_data = {
+            "price": float(tick.price),
+            "size": int(tick.size),
+            "ts_event": tick.ts_event,
+        }
+        self._tick_data_dicts[self._tick_event_dt_adjusted] = tick_data
 
     def _submit_orders_if_allowed(self, order_or_order_list, expire_time=None) -> None:
         buy_included = False
@@ -566,7 +590,7 @@ class BaseStrategy(Strategy):
             position_str = f"Position {self.position_qty} @ {round(avg_px, 2)} | PerShare {round(gain, 2)} | PnL ${round(unrealized, 2)} | {OpenSellsQty=} | Diff={diff}\n"
         metrics_data = {}
         for metric in self.metrics_to_save_on_tick + self.metrics_to_save_on_1min:
-            vals = {k: str(round(v, 3)) for k, v in metric.get_vals().items()}
+            vals = {k: str(round(v, 3)) if v is not None else "None" for k, v in metric.get_vals().items()}
             metrics_data = {**metrics_data, **vals}
         self.log.info(
             f"UPDATE: {self.config.instrument_id}\n{tick_str}\n"
@@ -617,15 +641,17 @@ class BaseStrategy(Strategy):
 
         self.subscribe_trade_ticks(self.config.instrument_id)
 
-        bar_type = BarType.from_str(f"{self.config.instrument_id}-1-MINUTE-LAST-INTERNAL")
-        # bar_type = BarType.from_str(f"{self.config.instrument_id}-1-MINUTE-LAST-EXTERNAL")
+        # TODO: Test if "internal" vs "external" bars does anything for us
+        #    Can't request "historical" internal bars. Not implemented in NT
+        # bar_type = BarType.from_str(f"{self.config.instrument_id}-1-MINUTE-LAST-INTERNAL")
+        bar_type = BarType.from_str(f"{self.config.instrument_id}-1-MINUTE-LAST-EXTERNAL")
         for metric in self.metrics_to_save_on_1min:
             self.register_indicator_for_bars(bar_type=bar_type, indicator=metric.obj)
 
         # Subscribe to 1-minute bars
-        # TODO: Test if "internal" vs "external" bars does anything for us
         if len(self.metrics_to_save_on_1min) > 0:
             self.subscribe_bars(bar_type)
+            self.request_bars(bar_type, start=self._clock.utc_now() - pd.Timedelta(minutes=30))
 
         # self.subscribe_quote_ticks(self.config.instrument_id)
         # self.subscribe_order_book_depth(self.config.instrument_id, book_type=BookType.L1_MBP)
@@ -633,8 +659,6 @@ class BaseStrategy(Strategy):
         # self.subscribe_order_book_at_interval(self.config.instrument_id, depth=20)  # For debugging
 
         # Get historical data
-        # if self.config.request_historical_bars:
-        #     self.request_bars( self.config.bar_type, start=self._clock.utc_now() - pd.Timedelta(days=1) )
         # self.request_quote_ticks(self.config.instrument_id)
 
     def on_stop(self) -> None:
