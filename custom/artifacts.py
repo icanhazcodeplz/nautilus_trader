@@ -108,6 +108,12 @@ class ArtifactsIO:
 
         df = pd.DataFrame(as_dicts)
 
+        def _append_to_durations(durations, side, price, qty, start, end):
+            if start == end:
+                end += 1
+            durations.append(dict(side=side, price=price, qty=qty, start_time=str(start), end_time=str(end)))
+            return durations
+
         def client_id_to_durations(orders):
             if orders["ts_event"].nunique() < len(orders):
                 dupes = orders[orders.duplicated(subset="ts_event", keep=False)]
@@ -126,7 +132,7 @@ class ArtifactsIO:
                 elif len(dupes) != 2:
                     raise
                 else:
-                    print()
+                    raise
                 orders = orders.sort_values("ts_event")
 
             durations = []
@@ -145,17 +151,13 @@ class ArtifactsIO:
                     leaves_qty = qty - filled_qty
                     if leaves_qty == 0:
                         end = orders.iloc[-1]["ts_event"]
-                        durations.append(
-                            dict(side=side, price=price, qty=leaves_qty_at_start, start_time=start, end_time=end)
-                        )
+                        durations = _append_to_durations(durations, side, price, leaves_qty_at_start, start, end)
                     elif leaves_qty < 0:
-                        print()
+                        raise
                 elif order["type"] == "OrderUpdated":
                     # Add the previous order to durations.
                     updated_time = order["ts_event"]
-                    durations.append(
-                        dict(side=side, price=price, qty=leaves_qty_at_start, start_time=start, end_time=updated_time)
-                    )
+                    durations = _append_to_durations(durations, side, price, leaves_qty_at_start, start, updated_time)
 
                     # Now update values because we just started a new order
                     start = updated_time
@@ -164,17 +166,17 @@ class ArtifactsIO:
                     price = float(order["price"])
                 elif order["type"] == "OrderCanceled":
                     cancel_time = order["ts_event"]
-                    durations.append(
-                        dict(side=side, price=price, qty=leaves_qty_at_start, start_time=start, end_time=cancel_time)
-                    )
+                    durations = _append_to_durations(durations, side, price, leaves_qty_at_start, start, cancel_time)
                 else:
-                    print()
+                    raise
 
             return pd.DataFrame(durations)
 
         durations_df = df.groupby("client_order_id")[
             ["order_side", "type", "ts_event", "quantity", "price", "last_px", "last_qty"]
         ].apply(client_id_to_durations)
+        durations_df["start_time"] = durations_df["start_time"].astype("int64")
+        durations_df["end_time"] = durations_df["end_time"].astype("int64")
         durations_list = durations_df.reset_index(drop=True).to_dict(orient="records")
         return durations_list
 
@@ -226,26 +228,27 @@ class ArtifactsIO:
         if len(txt) == 0:
             return None
         alpaca_updates_df = pd.DataFrame.from_dict(txt)
-        alpaca_updates_df = alpaca_updates_df[
-            [
-                "msg_received_dt",
-                "at",  # Time alpaca generated the message
-                "timestamp",  # Time event occurred at exchange
-                "filled_at",
-                "event",
-                "side",
-                "id",
-                "client_order_id",
-                "qty",
-                "filled_qty",
-                "status",
-                "price",
-                "limit_price",
-                "position_qty",
-                "replaced_by",
-                "replaces",
-            ]
+        cols_to_use = [
+            "msg_received_dt",
+            "at",  # Time alpaca generated the message
+            "timestamp",  # Time event occurred at exchange
+            "filled_at",
+            "event",
+            "side",
+            "id",
+            "client_order_id",
+            "qty",
+            "filled_qty",
+            "status",
+            "limit_price",
+            "replaced_by",
+            "replaces",
         ]
+        if "price" in alpaca_updates_df.columns:
+            cols_to_use.append("price")
+        if "position_qty" in alpaca_updates_df.columns:
+            cols_to_use.append("position_qty")
+        alpaca_updates_df = alpaca_updates_df[cols_to_use]
         return alpaca_updates_df
 
     def _alpaca_order_durations_list(self, time_as_ns_int: bool = False, as_list=False) -> pd.DataFrame:
