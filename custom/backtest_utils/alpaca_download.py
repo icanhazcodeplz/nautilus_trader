@@ -53,20 +53,41 @@ api_key, api_secret = get_alpaca_key_and_secret(paper=True)
 client = StockHistoricalDataClient(api_key, api_secret, raw_data=False)
 
 
-def get_trades_and_save_to_catalog_if_needed(symbol, start_dt_str, end_dt_str, force=False):
+def _price_precision(price):
+    if price < 1.0:
+        return 4
+    return 2
+
+
+def _data_exists(instrument_id, day_in_question, data_type):
+    intervals = BACKTESTING_CATALOG.get_intervals(data_type, str(instrument_id))
+    intervals_days = {pd.Timestamp(tp[0]).date() for tp in intervals}
+    if day_in_question.date() in intervals_days:
+        print(f"{data_type.__name__}s exist for {instrument_id} on {day_in_question}")
+        return True
+    return False
+
+
+def _delete_range(instrument_id, start_dt_str, end_dt_str, data_type):
+    print(f"Deleting {instrument_id} from {start_dt_str} to {end_dt_str}")
+    BACKTESTING_CATALOG.delete_data_range(
+        data_cls=data_type, identifier=str(instrument_id), start=start_dt_str, end=end_dt_str
+    )
+
+
+def get_trades_and_save_to_catalog_if_needed(symbol, day_in_question: pd.Timestamp, force=False):
     """Download trades from Alpaca and save to catalog."""
+    start_dt_str = day_in_question.isoformat()
+    end_dt_str = (day_in_question + pd.Timedelta(days=1)).isoformat()
     instrument_id = TestInstrumentProvider.equity(symbol=symbol, venue=ALPACA).id
 
-    # Check if trades exist for the range in BACKTESTING_CATALOG
-    if not force:
-        existing_trades = BACKTESTING_CATALOG.query(
-            data_cls=TradeTick,
-            identifiers=[str(instrument_id)],
-            start=start_dt_str,
-            end=end_dt_str,
-        )
-        if existing_trades:
-            print(f"Trades exist for {symbol} from {start_dt_str} to {end_dt_str}, skipping")
+    # Check if trades exist for the range in BACKTESTING_CATALOG (reads filenames only, no data loaded)
+    data_type = TradeTick
+    if _data_exists(instrument_id, day_in_question, data_type):
+        if force:
+            _delete_range(instrument_id, start_dt_str, end_dt_str, data_type)
+        else:
+            print(f"Force is off, skipping")
             return
 
     request = StockTradesRequest(feed="sip", symbol_or_symbols=symbol, start=start_dt_str, end=end_dt_str)
@@ -75,14 +96,10 @@ def get_trades_and_save_to_catalog_if_needed(symbol, start_dt_str, end_dt_str, f
     alpaca_response = client.get_stock_trades(request)
     trades = alpaca_response.data[symbol]
 
-    any_penny = any(trade.price < 1 for trade in trades)
-    if any_penny:
-        raise ValueError(f"Penny stocks not yet supported")
-
     trade_ticks = [
         TradeTick(
             instrument_id=instrument_id,
-            price=Price(trade.price, precision=2),
+            price=Price(trade.price, precision=_price_precision(trade.price)),
             size=Quantity.from_int(int(trade.size)),
             aggressor_side=AggressorSide.NO_AGGRESSOR,
             trade_id=TradeId(str(i)),
@@ -96,20 +113,19 @@ def get_trades_and_save_to_catalog_if_needed(symbol, start_dt_str, end_dt_str, f
     BACKTESTING_CATALOG.write_data(trade_ticks)
 
 
-def get_quotes_and_save_to_catalog(symbol, start_dt_str, end_dt_str, force=False):
+def get_quotes_and_save_to_catalog_if_needed(symbol, day_in_question: pd.Timestamp, force=False):
     """Download quote data from Alpaca and save as QuoteTicks to catalog."""
+    start_dt_str = day_in_question.isoformat()
+    end_dt_str = (day_in_question + pd.Timedelta(days=1)).isoformat()
     instrument_id = TestInstrumentProvider.equity(symbol=symbol, venue=ALPACA).id
 
-    # Check if quotes exist for the range in BACKTESTING_CATALOG
-    if not force:
-        existing_quotes = BACKTESTING_CATALOG.query(
-            data_cls=QuoteTick,
-            identifiers=[str(instrument_id)],
-            start=start_dt_str,
-            end=end_dt_str,
-        )
-        if existing_quotes:
-            print(f"Quotes exist for {symbol} from {start_dt_str} to {end_dt_str}, skipping")
+    # Check if trades exist for the range in BACKTESTING_CATALOG (reads filenames only, no data loaded)
+    data_type = QuoteTick
+    if _data_exists(instrument_id, day_in_question, data_type):
+        if force:
+            _delete_range(instrument_id, start_dt_str, end_dt_str, data_type)
+        else:
+            print(f"Force is off, skipping")
             return
 
     request = StockQuotesRequest(feed="sip", symbol_or_symbols=symbol, start=start_dt_str, end=end_dt_str)
@@ -120,8 +136,8 @@ def get_quotes_and_save_to_catalog(symbol, start_dt_str, end_dt_str, force=False
     quote_ticks = [
         QuoteTick(
             instrument_id=instrument_id,
-            bid_price=Price(quote.bid_price, precision=2),
-            ask_price=Price(quote.ask_price, precision=2),
+            bid_price=Price(quote.bid_price, precision=_price_precision(quote.bid_price)),
+            ask_price=Price(quote.ask_price, precision=_price_precision(quote.bid_price)),
             bid_size=Quantity.from_int(int(quote.bid_size)),
             ask_size=Quantity.from_int(int(quote.ask_size)),
             ts_event=(ts := dt_to_unix_nanos(quote.timestamp)),
@@ -133,11 +149,10 @@ def get_quotes_and_save_to_catalog(symbol, start_dt_str, end_dt_str, force=False
     BACKTESTING_CATALOG.write_data(quote_ticks)
 
 
-def prepare_alpaca_data(symbol, start_dt, end_dt):
-    start_dt_str = start_dt.isoformat()
-    end_dt_str = end_dt.isoformat()
-    get_trades_and_save_to_catalog_if_needed(symbol, start_dt_str, end_dt_str)
-    get_quotes_and_save_to_catalog(symbol, start_dt_str, end_dt_str)
+def prepare_alpaca_data(symbol, day_in_question, force=False):
+    print(f"\nGetting data for {symbol} on {day_in_question.date()}, force={force}")
+    get_trades_and_save_to_catalog_if_needed(symbol, day_in_question, force=force)
+    get_quotes_and_save_to_catalog_if_needed(symbol, day_in_question, force=force)
 
 
 def add_entry_to_catalog_options(key, symbol, data_start_dt, data_end_dt, notes=None):
@@ -169,18 +184,18 @@ def download_matching_data_from_live_run(artifacts_dir):
 
     data_start_dt = pd.Timestamp(start, unit="ns", tz="UTC").tz_convert("US/Eastern").normalize()
     data_end_dt = data_start_dt + pd.Timedelta(days=1)
-    prepare_alpaca_data(symbol, data_start_dt, data_end_dt)
+    prepare_alpaca_data(symbol, data_start_dt)
     date_str = data_start_dt.strftime("%m%d")
     key = f"{date_str}_{symbol.lower()}"
     add_entry_to_catalog_options(key, symbol, data_start_dt, data_end_dt)
 
 
 if __name__ == "__main__":
-    artifacts_dir = data_subdir("runs", "20260313_144138")
+    # --------- DOWNLOAD MATCHING DATA FROM LIVE RUN ------------
+    # artifacts_dir = data_subdir("runs", "20260313_144138")
     # artifacts_dir = data_subdir("paper_runs", "20260311_104208")
-    download_matching_data_from_live_run(artifacts_dir)
+    # download_matching_data_from_live_run(artifacts_dir)
 
-    raise
     import os
     from pathlib import Path
 
