@@ -9,6 +9,7 @@ from nautilus_trader.persistence.catalog import ParquetDataCatalog
 
 CATALOG_PATH = PACKAGE_ROOT / "catalog"
 BACKTESTING_CATALOG = ParquetDataCatalog(CATALOG_PATH)
+CATALOG_TIME_STR_FMT = "%Y-%m-%d %H:%M:%S%z"
 
 
 def get_catalog_data(symbol, start, end, data_cls, venue, identifiers=None):
@@ -22,13 +23,13 @@ def get_catalog_data(symbol, start, end, data_cls, venue, identifiers=None):
         data_list = [d.data for d in data_list]
     return data_list
 
+
 def load_catalog_data_to_engine(engine, symbol, start_str, end_str, data_venue="ALPACA"):
     test_instrument = TestInstrumentProvider.equity(symbol=symbol, venue=data_venue)
     engine.add_instrument(test_instrument)
 
     for data_cls in [QuoteTick, TradeTick]:
         engine.add_data(get_catalog_data(symbol, start_str, end_str, data_cls=data_cls, venue=data_venue))
-
 
     return test_instrument, engine
 
