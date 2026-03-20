@@ -118,9 +118,14 @@ def get_data():
             # dict(key="vwap_high_inner", color="red", width=1, type=0),
             # dict(key="vwap_high_outer", color="red", width=1, type=0),
         ],
-        SecondaryTickChartLines=[
+        TickChart2Lines=[
             # dict(key="vwap_pressure", color="#e70f0f", color_negative=baby_blue, width=1, type=0),
-            dict(key="position", color="#e70f0f", color_negative=baby_blue, width=1, type=1),
+            # dict(key="position", color="#e70f0f", color_negative=baby_blue, width=1, type=1),
+            dict(key="allow_buy", color="#e70f0f", color_negative=baby_blue, width=1, type=1),
+            dict(key="macd_value", color="#e70f0f", color_negative=baby_blue, width=1, type=1),
+        ],
+        TickChart3Lines=[
+            # dict(key="pnl", color="green", color_negative="red", width=1, type=1),
         ],
     )
     return jsonify(records)
