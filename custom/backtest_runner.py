@@ -4,13 +4,12 @@ import shutil
 
 import pandas as pd
 
-from custom.backtest_utils.load_catalog_data import load_catalog_data_to_engine
-from custom.catalog_options import extract_dataset_name_info
+from custom.backtest_utils.load_catalog_data import load_catalog_data_to_engine, CATALOG_TIME_STR_FMT
+from custom.backtest_utils.prepare_top_gainers import parse_candidate_str, get_allow_buy_times_for_candidate
 from custom.nt_extensions.limit_fill_model import LimitFillModel
 from custom.strategies.momo import MomoStrategyConfig, MomoStrategy
 from custom.artifacts import ArtifactsIO, BACKTEST_RUNS_PATH
 from custom.strategies.random import RandomConfig, Random
-from custom.utils.paths import data_subdir
 from nautilus_trader.adapters.alpaca.utils import ns_to_iso_8601
 from nautilus_trader.backtest.engine import BacktestEngine
 from nautilus_trader.backtest.engine import BacktestEngineConfig
@@ -65,22 +64,18 @@ prob_fill_on_limit = 0.5
 DATA_VENUE = ALPACA
 
 
-def buy_signal_stats(signals):
-    num_buy_sells = len(signals)
-    if num_buy_sells > 0:
-        signals_df = pd.DataFrame(signals).dropna()
-        wins = len(signals_df[signals_df["win"]])
-        long_wins = len(signals_df[signals_df["win"] & signals_df["win_delay"]])
-        wins_ratio = round(wins / num_buy_sells, 2)
-        long_wins_ratio = round(long_wins / num_buy_sells, 2)
-        # print(f"\nBuySignals:  {num_buy_sells}   {wins}/{num_buy_sells - wins} = {wins_ratio}")
-        print(f"LongWins__:  {num_buy_sells}   {long_wins}/{num_buy_sells - long_wins} = {long_wins_ratio}")
-    else:
-        long_wins = 0
-    return num_buy_sells, long_wins
-
-
-def run_single_backtest(symbol, start_str, end_str, strategy_name, params, artifacts_location=None, log_level="ERROR"):
+def run_single_backtest(
+    symbol,
+    start_str,
+    end_str,
+    strategy_name,
+    params,
+    artifacts_location=None,
+    allow_buy_times=None,
+    log_level="ERROR",
+    analyze=False,
+):
+    start_time = pd.Timestamp.now()
     params_copy = params.copy()
     random_seed = params_copy.pop("random_seed", None)
     random.seed(random_seed)
@@ -146,7 +141,7 @@ def run_single_backtest(symbol, start_str, end_str, strategy_name, params, artif
     ]:
         engine.portfolio.analyzer.deregister_statistic(stat_class())
 
-    for stat_class in [NumTrades, Winners, Losers, WinLossRatio, AvgTrade, TotalBought]:  # Scratches
+    for stat_class in [NumTrades, Winners, Losers, WinLossRatio, AvgTrade, TotalBought]:
         engine.portfolio.analyzer.register_statistic(stat_class())
 
     engine.portfolio.analyzer.register_statistic(avg_trade_scaled)
@@ -157,6 +152,11 @@ def run_single_backtest(symbol, start_str, end_str, strategy_name, params, artif
     elif strategy_name == "momo":
         config = MomoStrategyConfig(instrument_id=test_instrument.id, **params_copy)
         strategy = MomoStrategy(config=config)
+
+    if allow_buy_times is not None:
+        strategy.allow_buy_times = allow_buy_times
+        strategy.set_allow_buys(False)
+    strategy.internal_bars = True
 
     performance_stats = run_strategy(strategy, engine, artifacts_location, run_config=config.dict())
 
@@ -174,28 +174,50 @@ def run_single_backtest(symbol, start_str, end_str, strategy_name, params, artif
         artifacts_io.save_backtest_order_updates_to_pkl(relevant_order_updates)
         shutil.rmtree(BACKTEST_RUNS_PATH / "backtest", ignore_errors=True)
 
+    if artifacts_location is not None and analyze:
+        analyze_backtest()
+        print(f"\nTotal Runtime {pd.Timestamp.now() - start_time}")
+
     return performance_stats
 
 
-def run_single_backtest_from_dataset_name(
-    dataset_name, strategy_name, params, artifacts_location=None, log_level="ERROR"
+def run_single_backtest_from_top_gainers_candidate(
+    candidate_str, strategy_name, params, artifacts_location=None, log_level="ERROR", analyze=False
 ):
-    symbol, start_str, end_str = extract_dataset_name_info(dataset_name)
+    rank_max = params.pop("rank_max")
+    vol_30min_min = params.pop("vol_30min_min")
+    perc_gain_min = params.pop("perc_gain_min")
+    price_min = params.pop("price_min")
+    price_max = params.pop("price_max")
+
+    symbol, day_str = parse_candidate_str(candidate_str)
+    allow_buy_times = get_allow_buy_times_for_candidate(
+        symbol, day_str, rank_max, vol_30min_min, perc_gain_min, price_min, price_max
+    )
+
+    start = allow_buy_times[0] - pd.Timedelta(minutes=30)
+    end = allow_buy_times[-1] + pd.Timedelta(minutes=20)
+
+    start_str = pd.Timestamp.strftime(start, CATALOG_TIME_STR_FMT)
+    end_str = pd.Timestamp.strftime(end, CATALOG_TIME_STR_FMT)
+
     return run_single_backtest(
         symbol,
         start_str,
         end_str,
         strategy_name,
         params,
+        allow_buy_times=allow_buy_times,
         artifacts_location=artifacts_location,
         log_level=log_level,
+        analyze=analyze,
     )
 
 
 def run_multiple_backtests(dataset_names, strategy_name, params, log_level="ERROR"):
     performance_stats = []
     for dataset_name in dataset_names:
-        p_stats = run_single_backtest_from_dataset_name(
+        p_stats = run_single_backtest_from_top_gainers_candidate(
             dataset_name, strategy_name, params, artifacts_location=None, log_level=log_level
         )
         performance_stats.append({"name": dataset_name, **p_stats})
@@ -231,28 +253,10 @@ def replay_live_run(live_run_artifacts_dir, log_level="ERROR"):
 
     symbol = config.pop("instrument_id").split(".")[0]
 
-    return run_backtest_and_analyze(
-        symbol,
-        start_str,
-        end_str,
-        "momo",
-        config,
-        log_level=log_level,
-    )
+    return run_single_backtest(symbol, start_str, end_str, "momo", config, log_level=log_level, analyze=True)
 
 
-def run_backtest_and_analyze(symbol, start_str, end_str, strategy_name, params, log_level="ERROR"):
-    print(f"\nRunning single backtest for {symbol}: {start_str} to {end_str}")
-    start_time = pd.Timestamp.now()
-    run_single_backtest(
-        symbol,
-        start_str,
-        end_str,
-        strategy_name,
-        params,
-        artifacts_location=BACKTEST_RUNS_PATH,
-        log_level=log_level,
-    )
+def analyze_backtest():
     artifacts_io = ArtifactsIO(BACKTEST_RUNS_PATH)
 
     p_mets = artifacts_io.load_performance_metrics()
@@ -262,13 +266,11 @@ def run_backtest_and_analyze(symbol, start_str, end_str, strategy_name, params, 
     orders_report = artifacts_io.load_orders_report()
     trades, sell_legs = orders_to_trades(orders_report)
     analyze_trades(trades, print_report=True)
-    print(f"\nTotal Runtime {pd.Timestamp.now() - start_time}")
 
 
 if __name__ == "__main__":
-    live_run_artifacts_dir = data_subdir("runs", "20260313_144138")
-    replay_live_run(live_run_artifacts_dir)
-    raise
+    # live_run_artifacts_dir = data_subdir("runs", "20260313_144138")
+    # replay_live_run(live_run_artifacts_dir)
 
     log_level = "INFO"
     # log_level = "DEBUG"
@@ -278,36 +280,52 @@ if __name__ == "__main__":
     strategy_name = "momo"
     params = dict(
         allow_trades=True,
-        max_position_multiplier=10,
-        trade_size=100,
-        stop_loss=1.0,
+        max_position_multiplier=1,
+        trade_size=10,
+        stop_loss=0.50,
         take_profit=None,
-        upper_scalar_multiplier=1.0,
-        lower_scalar_multiplier=1.5,
+        upper_scalar_multiplier=1.1,
+        lower_scalar_multiplier=2.0,
         vwap_window=150,
         variance_window=300,
         outer_band_multiplier=2.5,
         pressure_window=10,
         simple_take=False,
-        only_buy_if_macd_positive=False,
+        only_buy_if_macd_positive=True,
         trailing_take=True,
         num_sell_tiers=3,
         trailing_buy_order=False,
         random_buy=False,
         random_seed=11,
+        # --- TOP GAINERS PARAMS ----------------
+        price_min=1.0,
+        price_max=20.0,
+        vol_30min_min=100_000,
+        perc_gain_min=30,
+        rank_max=5,
     )
-    datasets = ["0129_vivssm"]
 
-    all_stats = []
-    if len(datasets) > 1:
-        for random_seed in [1]:
-            params["random_seed"] = random_seed
-            stats = run_multiple_backtests(datasets, strategy_name, params, log_level=log_level)
-            all_stats.append(stats)
-        stats = pd.concat(all_stats)
-        with pd.option_context("display.max_rows", 100, "display.max_columns", None, "display.width", 300):
-            print(stats)
-            pass
-    else:
-        symbol, start_str, end_str = extract_dataset_name_info(datasets[0])
-        run_backtest_and_analyze(symbol, start_str, end_str, strategy_name, params, log_level=log_level)
+    candidate_str = "2026-03-18_AIM"
+    run_single_backtest_from_top_gainers_candidate(
+        candidate_str, strategy_name, params, artifacts_location=BACKTEST_RUNS_PATH, log_level="ERROR", analyze=True
+    )
+
+    # symbol = 'WNW'
+    # start_str = "2026-03-17 04:00-04:00"
+    # end_str = "2026-03-17 06:00-04:00"
+    # run_backtest_and_analyze(symbol, start_str, end_str, strategy_name, params, log_level=log_level)
+
+    # datasets = ["0129_vivssm"]
+    # all_stats = []
+    # if len(datasets) > 1:
+    #     for random_seed in [1]:
+    #         params["random_seed"] = random_seed
+    #         stats = run_multiple_backtests(datasets, strategy_name, params, log_level=log_level)
+    #         all_stats.append(stats)
+    #     stats = pd.concat(all_stats)
+    #     with pd.option_context("display.max_rows", 100, "display.max_columns", None, "display.width", 300):
+    #         print(stats)
+    #         pass
+    # else:
+    #     symbol, start_str, end_str = extract_dataset_name_info(datasets[0])
+    #     run_backtest_and_analyze(symbol, start_str, end_str, strategy_name, params, log_level=log_level)
