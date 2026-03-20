@@ -55,6 +55,10 @@ class BaseStrategy(Strategy):
 
         self.stop_price = None
         self.last_buy_dt: Timestamp = pd.Timestamp("1990", tz="UTC")
+        self._allow_buys: bool = True
+        self.allow_buy_times: Optional[set[pd.Timestamp]] = None
+        self.internal_bars = False
+
         self._tick_data_dicts = {}
         self._tick_event_dt_adjusted = 0
 
@@ -93,6 +97,23 @@ class BaseStrategy(Strategy):
         if artifacts_location is not None:
             self._artifacts_io = ArtifactsIO(artifacts_location)
             self.save_artifacts = True
+
+    def _add_tick_data(self, ts_event, data_dict: dict):
+        if ts_event in self._tick_data_dicts:
+            self._tick_data_dicts[ts_event] |= data_dict
+        else:
+            self._tick_data_dicts[ts_event] = data_dict
+
+    def set_allow_buys(self, new_allow_buys: bool):
+        if new_allow_buys != self._allow_buys:
+            self._allow_buys = new_allow_buys
+            self.log.info(f"allow_buys set to {new_allow_buys}", color=LogColor.YELLOW)
+            if self.save_artifacts:
+                self._add_tick_data(self.clock.timestamp_ns(), {"allow_buy": int(new_allow_buys)})
+
+    @property
+    def allow_buys(self):
+        return self._allow_buys
 
     @property
     def position_qty(self):
@@ -265,7 +286,7 @@ class BaseStrategy(Strategy):
             # tick_data["ts_now_after"] = pd.Timestamp.utcnow()
             for metric in self.metrics_to_save_on_tick:
                 tick_data = {**tick_data, **metric.get_vals()}
-            self._tick_data_dicts[self._tick_event_dt_adjusted] = tick_data
+            self._add_tick_data(self._tick_event_dt_adjusted, tick_data)
 
     def _on_bar(self, bar: Bar) -> None:
         pass
@@ -276,7 +297,7 @@ class BaseStrategy(Strategy):
             tick_data = {}
             for metric in self.metrics_to_save_on_1min:
                 tick_data = {**tick_data, **metric.get_vals()}
-            self._tick_data_dicts[bar.ts_init] = tick_data
+            self._add_tick_data(bar.ts_init, tick_data)
 
     def on_historical_data(self, data) -> None:
         if not self.save_artifacts:
@@ -295,7 +316,7 @@ class BaseStrategy(Strategy):
             "size": int(tick.size),
             "ts_event": tick.ts_event,
         }
-        self._tick_data_dicts[self._tick_event_dt_adjusted] = tick_data
+        self._add_tick_data(self._tick_event_dt_adjusted, tick_data)
 
     def _submit_orders_if_allowed(self, order_or_order_list, expire_time=None) -> None:
         buy_included = False
@@ -340,6 +361,10 @@ class BaseStrategy(Strategy):
         self._submit_orders_if_allowed(order, expire_time=expire_time)
 
     def buy(self, quantity, limit_price, tag, cancel_after_secs=None) -> None:
+        if not self.allow_buys:
+            self.log.info("self.allow_buys is False, skipping buy order")
+            return
+
         if self._stopping_out:
             self.log.info(f"Ignoring buy request because self._stopping_out is True")
             return
@@ -366,6 +391,11 @@ class BaseStrategy(Strategy):
         self._on_order_filled(order)
         if order.order_side == OrderSide.BUY:
             self._total_buy_qty += int(order.last_qty)
+        elif order.order_side == OrderSide.SELL:
+            if self.save_artifacts:
+                realized_pnl = self.portfolio.realized_pnl(self.config.instrument_id)
+                if realized_pnl is not None:
+                    self._add_tick_data(order.ts_event, {"pnl": float(realized_pnl)})
 
     @abstractmethod
     def _on_trade_tick(self, tick: TradeTick) -> None:
@@ -603,6 +633,10 @@ class BaseStrategy(Strategy):
         )
         self._last_log_update_dt = self._tick_event_dt_adjusted
 
+    def _set_allow_buy_based_on_allow_buy_times(self, event: TimeEvent):
+        current_5min = pd.Timestamp(self.clock.utc_now()).floor("5min")
+        self.set_allow_buys(current_5min in self.allow_buy_times)
+
     def on_start(self) -> None:
         if not self._initialized:
             raise RuntimeError("Strategy must be initialized before starting. Call method `initialize` first.")
@@ -610,15 +644,29 @@ class BaseStrategy(Strategy):
         # TIME INTERVAL FUNCTIONS
         self.clock.set_timer(
             name="cancel_orders_timer",
-            interval=timedelta(seconds=0.5),
+            interval=timedelta(seconds=1),
             callback=self._cancel_partial_fills_and_orders_past_timeout,
         )
-        self.clock.set_timer(name="reconcile_internal_fn", interval=timedelta(seconds=3), callback=self._reconcile)
+        self.clock.set_timer(
+            name="reconcile_internal_fn",
+            interval=timedelta(seconds=3),
+            callback=self._reconcile,
+        )
+
+        # Only create print_update timer if requested in config
         if self.config.print_update_every_secs is not None:
             self.clock.set_timer(
                 name="print_update",
                 interval=timedelta(seconds=self.config.print_update_every_secs),
                 callback=self.print_update,
+            )
+
+        # Only create buy_ranges check if needed
+        if self.allow_buy_times is not None:
+            self.clock.set_timer(
+                name="set_allow_buy_based_on_allow_buy_times",
+                interval=timedelta(seconds=15),
+                callback=self._set_allow_buy_based_on_allow_buy_times,
             )
 
         self.instrument = self.cache.instrument(self.config.instrument_id)
@@ -643,8 +691,9 @@ class BaseStrategy(Strategy):
 
         # TODO: Test if "internal" vs "external" bars does anything for us
         #    Can't request "historical" internal bars. Not implemented in NT
-        # bar_type = BarType.from_str(f"{self.config.instrument_id}-1-MINUTE-LAST-INTERNAL")
         bar_type = BarType.from_str(f"{self.config.instrument_id}-1-MINUTE-LAST-EXTERNAL")
+        if self.internal_bars:
+            bar_type = BarType.from_str(f"{self.config.instrument_id}-1-MINUTE-LAST-INTERNAL")
         for metric in self.metrics_to_save_on_1min:
             self.register_indicator_for_bars(bar_type=bar_type, indicator=metric.obj)
 
