@@ -7,7 +7,7 @@ from alpaca.data.requests import StockTradesRequest, StockQuotesRequest
 from custom.artifacts import ArtifactsIO
 from custom.backtest_utils.load_catalog_data import BACKTESTING_CATALOG
 from custom.catalog_options import write_json_single_line_entries
-from custom.utils.paths import data_subdir, repo_path
+from custom.utils.paths import repo_path
 from nautilus_trader.adapters.alpaca import ALPACA
 from nautilus_trader.adapters.alpaca.utils import get_alpaca_key_and_secret
 from nautilus_trader.core.datetime import dt_to_unix_nanos
@@ -87,12 +87,13 @@ def get_trades_and_save_to_catalog_if_needed(symbol, day_in_question: pd.Timesta
         if force:
             _delete_range(instrument_id, start_dt_str, end_dt_str, data_type)
         else:
-            print(f"Force is off, skipping")
+            print(f"\tForce is off, skipping")
             return
 
     request = StockTradesRequest(feed="sip", symbol_or_symbols=symbol, start=start_dt_str, end=end_dt_str)
 
     # Fetch the tick data
+    print(f"\tGetting Trades for {instrument_id}")
     alpaca_response = client.get_stock_trades(request)
     trades = alpaca_response.data[symbol]
 
@@ -125,11 +126,12 @@ def get_quotes_and_save_to_catalog_if_needed(symbol, day_in_question: pd.Timesta
         if force:
             _delete_range(instrument_id, start_dt_str, end_dt_str, data_type)
         else:
-            print(f"Force is off, skipping")
+            print(f"\tForce is off, skipping")
             return
 
     request = StockQuotesRequest(feed="sip", symbol_or_symbols=symbol, start=start_dt_str, end=end_dt_str)
 
+    print(f"\tGetting Quotes for {instrument_id}")
     alpaca_response = client.get_stock_quotes(request)
     quotes = alpaca_response.data[symbol]
 
