@@ -65,47 +65,6 @@ prob_fill_on_limit = 0.5
 DATA_VENUE = ALPACA
 
 
-def _calculate_oco_win_ratio_DEPRECATED(orders_report):
-    """Calculate win/loss ratio based on each buy order."""
-    if "trigger_price" in orders_report:
-        cols = ["side", "quantity", "filled_qty", "price", "trigger_price", "avg_px", "tags", "ts_init", "ts_last"]
-    else:
-        cols = ["side", "quantity", "filled_qty", "price", "avg_px", "tags", "ts_init", "ts_last"]
-
-    # FOR DEBUGGING
-    # for col in ["ts_init", "ts_last"]:
-    #     orders_report[col] = orders_report[col].apply(lambda x: pd.Timestamp(x))
-
-    orders = orders_report[cols].copy()
-    # Calculate win/loss ratio based on each buy order, instead of each trade.
-    orders["order_num"] = orders["tags"].apply(lambda t: t[0])
-
-    orders["position_change"] = orders["filled_qty"].astype(int)
-    orders.loc[orders["side"] == "SELL", "position_change"] = -orders.loc[orders["side"] == "SELL", "position_change"]
-    orders["position_cumsum"] = orders["position_change"].cumsum()
-
-    def pnl(group):
-        group["trade_value"] = group["price"] * group["filled_qty"]
-        group_buy_value = group[group["side"] == "BUY"]["trade_value"].sum()
-        group_sell_value = group[group["side"] == "SELL"]["trade_value"].sum()
-        return group_sell_value - group_buy_value
-
-    orders["price"] = orders["price"].astype(float)
-    orders["filled_qty"] = orders["filled_qty"].astype(int)
-    pnl_for_each_buy = orders.groupby("order_num")[["side", "filled_qty", "price"]].apply(pnl)
-    trade_count = len(pnl_for_each_buy)
-    if trade_count == 0:
-        return 0, 0
-    wins = len(pnl_for_each_buy[pnl_for_each_buy > 0])
-    losses = len(pnl_for_each_buy[pnl_for_each_buy < 0])
-
-    win_ratio = round(wins / trade_count, 3)
-
-    print(f"{trade_count} buys. W/L {wins}|{losses} = {win_ratio}\n")
-
-    return wins, trade_count
-
-
 def buy_signal_stats(signals):
     num_buy_sells = len(signals)
     if num_buy_sells > 0:
