@@ -16,7 +16,7 @@ from nautilus_trader.adapters.alpaca.utils import ns_to_iso_8601
 from nautilus_trader.backtest.engine import BacktestEngine
 from nautilus_trader.backtest.engine import BacktestEngineConfig
 from custom.statistics.trade_avg import AvgTrade
-from custom.statistics.trade_avg_scaled import PnlPer100, TotalBought
+from custom.statistics.trade_avg_scaled import PnlPer100, TotalBought, AverageBuyPrice
 from custom.statistics.trade_counts import Winners, Losers, NumTrades
 from custom.statistics.win_loss_ratio import WinLossRatio
 from custom.utils.orders_to_trades import orders_to_trades
@@ -89,15 +89,19 @@ def run_single_backtest(
             include_types=[OrderInitialized, OrderFilled, OrderAccepted, OrderCanceled, OrderUpdated, OrderExpired],
             replace_existing=True,
         )
+        for log_file in glob.glob(os.path.join(str(artifacts_location), "*.log")):
+            os.remove(log_file)
 
     engine = BacktestEngine(
         config=BacktestEngineConfig(
             trader_id=TraderId("M-1"),
             logging=LoggingConfig(
                 log_level=log_level,
-                log_level_file=None,
-                log_directory="logs",
-                log_file_name=f"{log_level}.log",
+                log_level_file="DEBUG" if artifacts_location is not None else None,
+                log_directory=str(artifacts_location) if artifacts_location is not None else "logs",
+                log_file_name="DEBUG",
+                log_file_max_size=int(10e6),
+                log_file_max_backup_count=50,
                 log_component_levels=dict(
                     RiskEngine="WARNING",
                     Portfolio="WARNING",
@@ -143,7 +147,7 @@ def run_single_backtest(
     ]:
         engine.portfolio.analyzer.deregister_statistic(stat_class())
 
-    for stat_class in [NumTrades, Winners, Losers, WinLossRatio, AvgTrade, TotalBought]:
+    for stat_class in [NumTrades, Winners, Losers, WinLossRatio, AvgTrade, TotalBought, AverageBuyPrice]:
         engine.portfolio.analyzer.register_statistic(stat_class())
 
     engine.portfolio.analyzer.register_statistic(avg_trade_scaled)
@@ -298,9 +302,9 @@ if __name__ == "__main__":
         num_sell_tiers=3,
         trailing_buy_order=False,
         random_buy=False,
-        random_seed=11,
+        random_seed=1,
         # --- TOP GAINERS PARAMS ----------------
-        price_min=1.0,
+        price_min=0.8,
         price_max=20.0,
         vol_30min_min=100_000,
         perc_gain_min=30,
