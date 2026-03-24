@@ -33,6 +33,9 @@ def get_allow_buy_times_for_candidate(symbol, day_str, rank_max, vol_30min_min, 
 def make_top_gainers_candidates_txt_and_prepare_catalog(
     date_strs, rank_max, vol_30min_min, perc_gain_min, price_min, price_max
 ):
+    """
+    Return True if top_gainers_candidates.txt was edited. False if it remained the same.
+    """
     all_candidates = []
     for date_str in date_strs:
         top_gainers_df = pd.read_parquet(Path(TOP_GAINERS_DIR) / f"{date_str}.parquet")
@@ -43,12 +46,17 @@ def make_top_gainers_candidates_txt_and_prepare_catalog(
             prepare_alpaca_data(symbol, day_in_question, force=False)
             all_candidates.append(f"{date_str}_{symbol}")
 
-    _write_top_gainers_candidates(all_candidates)
+    return _write_top_gainers_candidates(all_candidates)
 
 
-def _write_top_gainers_candidates(candidates: list[str]):
+def _write_top_gainers_candidates(candidates: list[str]) -> bool:
+    """
+    Return True if file changed. False otherwise.
+    """
+    existing = read_top_gainers_candidates()
     with open(TOP_GAINERS_CANDIDATES_FILE, "w") as f:
         f.write("\n".join(candidates))
+    return set(existing) != set(candidates)
 
 
 def read_top_gainers_candidates() -> list[str]:
