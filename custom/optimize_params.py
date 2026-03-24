@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 import os
 import sys
+
+sys.path.append(os.getcwd())
 from datetime import datetime
 from time import sleep
 
 import numpy as np
+import pandas as pd
 import optuna
 import logging
+import shutil
 
 sys.path.append(os.getcwd())
 from custom.utils.process_manager import ProcessManager
@@ -69,14 +73,14 @@ def optimize(trial):
 
     params = dict(
         trade_size=100,
-        max_position_multiplier=10,
-        stop_loss=1.0,
+        max_position_multiplier=1,
+        stop_pct=0.05,
         take_profit=None,
         vwap_window=160,
         variance_window=300,
-        lower_scalar_multiplier=2.0,
-        upper_scalar_multiplier=0.8,
-        outer_band_multiplier=1.0,
+        lower_scalar_multiplier=1.5,
+        upper_scalar_multiplier=1.2,
+        outer_band_multiplier=3.0,
         trailing_buy_order=False,
         only_buy_if_macd_positive=True,
         simple_take=False,
@@ -167,7 +171,7 @@ if __name__ == "__main__":
         search_space = dict(
             random_seed=[1, 2, 3, 4],
             # max_position_multiplier=linspace_int(low=1, high=1, step=1),
-            # stop_loss=linspace_float(low=0.18, high=0.28, step=0.03),
+            # stop_pct=linspace_float(low=0.05, high=0.15, step=0.05),
             # take_profit=linspace_float(low=0.25, high=0.35, step=0.10),
             # variance_window=linspace_int(low=280, high=320, step=20),
             vwap_window=linspace_int(low=120, high=200, step=40),

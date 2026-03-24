@@ -10,6 +10,7 @@ from pandas import Timestamp
 from custom.artifacts import ArtifactsIO
 from custom.strategies._open_order import OpenOrder, CLOSED_STATUS_LIST
 from custom.utils.alpaca_trader_http_client import AlpacaTraderHelper
+from custom.utils.precision_utils import make_Price
 from nautilus_trader.common.component import TimeEvent
 
 from nautilus_trader.common.enums import LogColor
@@ -36,7 +37,7 @@ class BaseStrategyConfig(StrategyConfig, frozen=True):
     instrument_id: InstrumentId
     trade_size: int
     max_position_multiplier: int
-    stop_loss: float
+    stop_pct: float
     allow_trades: bool = True
     print_update_every_secs: int = None
 
@@ -54,6 +55,7 @@ class BaseStrategy(Strategy):
         self.metrics_to_save_on_1min = []
 
         self.stop_price = None
+        self.stop_loss: float = None
         self.last_buy_dt: Timestamp = pd.Timestamp("1990", tz="UTC")
         self._allow_buys: bool = True
         self.allow_buy_times: Optional[set[pd.Timestamp]] = None
@@ -178,7 +180,7 @@ class BaseStrategy(Strategy):
     def modify_open_order(self, open_order: OpenOrder, quantity, price):
         now_ns = self.clock.timestamp_ns()
         qty_obj = self.instrument.make_qty(quantity)
-        price_obj = self.instrument.make_price(price)
+        price_obj = make_Price(price)
         if open_order.update_last_modify_if_allowed(qty_obj, price_obj, now_ns):
             self.log.debug(f"Modifying order {open_order.client_order_id} with values {qty_obj} @ {price_obj}.")
             self.modify_order(open_order.order, quantity=qty_obj, price=price_obj)
@@ -235,8 +237,8 @@ class BaseStrategy(Strategy):
         for signal in self.buy_sell_signals:
             if signal["win"] is None or signal["win_delay"] is None:
                 if signal["side"] == "buy":
-                    win = tick.price >= (signal["price"] + self.config.stop_loss)
-                    loss = tick.price <= (signal["price"] - self.config.stop_loss)
+                    win = tick.price >= (signal["price"] + self.stop_loss)
+                    loss = tick.price <= (signal["price"] - self.stop_loss)
                     if signal["win"] is None and (win or loss):
                         signal["win"] = win
                         signal["win_time"] = self._tick_event_dt_adjusted
@@ -263,6 +265,9 @@ class BaseStrategy(Strategy):
             self._tick_event_dt_adjusted += 1
         else:
             self._tick_event_dt_adjusted = tick.ts_event
+
+        if self.stop_loss is None:
+            self.stop_loss = self.config.stop_pct * float(tick.price)
 
         tick_data = {"price": float(tick.price), "size": int(tick.size)}
         if self.save_artifacts:
@@ -351,7 +356,7 @@ class BaseStrategy(Strategy):
             instrument_id=self.config.instrument_id,
             order_side=side,
             quantity=self.instrument.make_qty(quantity),
-            price=self.instrument.make_price(limit_price),
+            price=make_Price(limit_price),
             time_in_force=TimeInForce.DAY,
             expire_time=None,
             tags=tags,
@@ -391,6 +396,7 @@ class BaseStrategy(Strategy):
         self._on_order_filled(order)
         if order.order_side == OrderSide.BUY:
             self._total_buy_qty += int(order.last_qty)
+            self.stop_loss = self.config.stop_pct * float(order.last_px)
         elif order.order_side == OrderSide.SELL:
             if self.save_artifacts:
                 realized_pnl = self.portfolio.realized_pnl(self.config.instrument_id)
@@ -476,7 +482,7 @@ class BaseStrategy(Strategy):
     def close_position_limit_order(self):
         last_trade = self.cache.trade_tick(self.config.instrument_id)
         limit_price = self.position_avg_px if last_trade is None else last_trade.price
-        self.sell_position_at_price(self.instrument.make_price(limit_price * 0.9))
+        self.sell_position_at_price(make_Price(limit_price * 0.9))
 
     def _trigger_nt_reconciliation(self):
         """Trigger an async force-reconciliation via the execution engine to re-sync cache with broker."""

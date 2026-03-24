@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import glob
+import os
 import random
 import shutil
 
@@ -281,8 +283,8 @@ if __name__ == "__main__":
     params = dict(
         allow_trades=True,
         max_position_multiplier=1,
-        trade_size=10,
-        stop_loss=0.50,
+        trade_size=100,
+        stop_pct=0.1,
         take_profit=None,
         upper_scalar_multiplier=1.1,
         lower_scalar_multiplier=2.0,

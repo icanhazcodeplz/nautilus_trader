@@ -35,7 +35,7 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     instrument_id: InstrumentId
     trade_size: int
     max_position_multiplier: int
-    stop_loss: float
+    stop_pct: float
 
     take_profit: float
     lower_scalar_multiplier: float
@@ -83,7 +83,7 @@ class MomoStrategy(BaseStrategy):
         if sum([self.config.trailing_buy_order, self.config.random_buy]) > 1:
             raise ValueError("Cannot use more than one of trailing_buy_order, random_buy")
         # FIXME: This is temporary
-        self.take_profit = self.config.take_profit if self.config.take_profit is not None else self.config.stop_loss
+        self.take_profit = self.config.take_profit if self.config.take_profit is not None else 0.0
         self.market_open_only = False  # TODO: remove this?
         # self.vwap = VWAPBands(
         self.vwap = VWAPBandsNew(
@@ -136,7 +136,7 @@ class MomoStrategy(BaseStrategy):
             return
 
         if self.position_qty > 0 and self.stop_price is None:
-            self.stop_price = tick.price - self.config.stop_loss
+            self.stop_price = tick.price - self.stop_loss
             self.log.info(f"Setting stop price to {self.stop_price}")
 
         if self.stop_price is not None:
@@ -285,7 +285,6 @@ class MomoStrategy(BaseStrategy):
             starting_price=self.vwap.high,
             mean_variance=self.vwap.mean_variance,
             num_tiers=self.config.num_sell_tiers,
-            instrument=self.instrument,
         )
         orders_to_be_modified = []
         existing_open_sell_qty = 0
@@ -401,7 +400,7 @@ class MomoStrategy(BaseStrategy):
         if order_filled.is_buy:
             # Set take and stop losses based on order fill price
             self.take_price = order_filled.last_px + self.take_profit
-            new_stop_price = order_filled.last_px - self.config.stop_loss
+            new_stop_price = order_filled.last_px - self.stop_loss
             if self.stop_price is not None:
                 if new_stop_price > self.stop_price:
                     self.log.info(f"Changing stop price from {self.stop_price} to {new_stop_price}")
