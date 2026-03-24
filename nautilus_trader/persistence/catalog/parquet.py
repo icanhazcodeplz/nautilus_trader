@@ -1742,15 +1742,31 @@ class ParquetDataCatalog(BaseDataCatalog):
 
             directories = {os.path.dirname(file) for file in file_list}
             for directory in directories:
-                self._register_directory_table(
-                    session=session,
-                    directory=directory,
-                    data_type=data_type,
-                    file_prefix=file_prefix,
-                    start=start,
-                    end=end,
-                    where=where,
-                )
+                try:
+                    self._register_directory_table(
+                        session=session,
+                        directory=directory,
+                        data_type=data_type,
+                        file_prefix=file_prefix,
+                        start=start,
+                        end=end,
+                        where=where,
+                    )
+                except RuntimeError:
+                    # Schema conflict across files in directory (e.g. different
+                    # price_precision). Fall back to registering matching files
+                    # individually.
+                    dir_files = [f for f in file_list if os.path.dirname(f) == directory]
+                    for file in dir_files:
+                        self._register_file_table(
+                            session=session,
+                            file=file,
+                            data_type=data_type,
+                            file_prefix=file_prefix,
+                            start=start,
+                            end=end,
+                            where=where,
+                        )
 
         return session
 
