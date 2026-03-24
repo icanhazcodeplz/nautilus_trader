@@ -124,6 +124,9 @@ class ArtifactsIO:
                 elif dupes_types == {"OrderAccepted", "OrderFilled"} or dupes_types == {"OrderUpdated", "OrderFilled"}:
                     filled_idx = dupes[dupes["type"] == "OrderFilled"].index
                     orders.loc[filled_idx, "ts_event"] += 1
+                elif dupes_types == {"OrderFilled", "OrderCanceled"}:
+                    canceled_idx = dupes[dupes["type"] == "OrderCanceled"].index
+                    orders.loc[canceled_idx, "ts_event"] += 1
                 elif dupes_types == {"OrderUpdated", "OrderFilled", "OrderCanceled"}:
                     filled_idx = dupes[dupes["type"] == "OrderFilled"].index
                     canceled_idx = dupes[dupes["type"] == "OrderCanceled"].index
