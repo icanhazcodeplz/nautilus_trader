@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import sys
-from time import sleep
 
 from custom.strategies.momo import MomoStrategy
 from custom.strategies.momo import MomoStrategyConfig
@@ -124,21 +123,11 @@ if not paper:
         print(f"  {key}: {value}")
     print(f"  Symbol: {symbol}")
     user_input = input("\nPress 'y' to continue, type any char to exit... ")
-    if user_input.lower() != 'y':
+    if user_input.lower() != "y":
         raise SystemExit()
 
 node.add_data_client_factory(ALPACA, AlpacaLiveDataClientFactory)
 node.add_exec_client_factory(ALPACA, AlpacaLiveExecClientFactory)
-
-
-def place_orders_for_testing(paper: bool = True):
-    from custom.utils.alpaca_trader_http_client import AlpacaTraderHttpClient
-
-    client = AlpacaTraderHttpClient(paper=paper)
-    client.limit_order(side="buy", symbol=symbol, qty=1000, price=2.50)
-    sleep(3)
-    client.limit_order(side="sell", symbol=symbol, qty=100, price=3.00)
-    sleep(1)
 
 
 if __name__ == "__main__":
