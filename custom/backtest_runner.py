@@ -184,6 +184,7 @@ def run_single_backtest(
         analyze_backtest()
         print(f"\nTotal Runtime {pd.Timestamp.now() - start_time}")
 
+    engine.dispose()
     return performance_stats
 
 
