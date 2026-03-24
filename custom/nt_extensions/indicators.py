@@ -161,8 +161,9 @@ class VWAPBands(Indicator):
 
 
 class VWAPBandsNew(Indicator):
-    initial_upper_lower_scalar = 1.0
-    adjust_every = 100  # FIXME: Increase this
+    INITIAL_UPPER_LOWER_SCALAR = 0.50
+    ADJUST_EVERY = 100  # FIXME: Increase this?
+    MINIMUM_BAND = 0.01
 
     def __init__(
         self,
@@ -182,7 +183,7 @@ class VWAPBandsNew(Indicator):
                 variance_window,
                 adjustment_window,
                 pressure_window,
-                outer_band_multiplier
+                outer_band_multiplier,
             ]
         )
         if rolling_window > adjustment_window:
@@ -212,8 +213,8 @@ class VWAPBandsNew(Indicator):
         self._window_filled = False
         self._adjust_counter = 1
 
-        self._lower_scalar = self.initial_upper_lower_scalar
-        self._upper_scalar = self.initial_upper_lower_scalar
+        self._lower_scalar = self.INITIAL_UPPER_LOWER_SCALAR
+        self._upper_scalar = self.INITIAL_UPPER_LOWER_SCALAR
 
         self.vwap = None
         self.mean_variance = 0.0
@@ -300,13 +301,13 @@ class VWAPBandsNew(Indicator):
 
         variance_from_val = abs(price - self.vwap)
         self._variances.append(variance_from_val)
-        self.mean_variance = sum(self._variances) / len(self._variances)
+        self.mean_variance = max(sum(self._variances) / len(self._variances), self.MINIMUM_BAND)
         self._mean_variances_for_adj.append(self.mean_variance)
 
         self._prices_for_adj.append(price)
         self._vwaps_for_adj.append(self.vwap)
 
-        if self._adjust_counter % self.adjust_every == 0:
+        if self._adjust_counter % self.ADJUST_EVERY == 0:
             self._adjust_counter = 1
             self._reached_max_window()
             self._adjust_upper_lower()
