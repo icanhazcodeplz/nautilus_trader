@@ -49,3 +49,22 @@ class TotalBought(PortfolioStatistic):
             total_shares_bought += shares_bought
 
         return int(total_shares_bought)
+
+class AverageBuyPrice(PortfolioStatistic):
+
+    def calculate_from_positions(self, positions: list[Position]) -> Any | None:
+        if not positions:
+            return None
+
+        total_cost = 0
+        total_shares_bought = 0
+        for pos in positions:
+            for e in pos.events:
+                if isinstance(e, OrderFilled) and e.is_buy:
+                    total_cost += float(e.last_px) * float(e.last_qty)
+                    total_shares_bought += float(e.last_qty)
+
+        if total_shares_bought == 0:
+            return None
+
+        return round(total_cost / total_shares_bought, 4)
