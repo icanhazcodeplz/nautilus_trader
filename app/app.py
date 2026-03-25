@@ -2,6 +2,7 @@ import os
 import sys
 
 sys.path.append(os.getcwd())
+import pandas as pd
 from flask import Flask, render_template, jsonify
 
 from flask_restful import Api
@@ -16,7 +17,8 @@ app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, expose_headers=["Content-Range"])
 
 api = Api(app)
-# artifacts_dir = data_subdir("runs", "20260206_160334")
+artifacts_dir = data_subdir("runs", "20260313_144138")
+artifacts_dir = data_subdir("paper_runs", "20260317_143429")
 artifacts_dir = BACKTEST_RUNS_PATH
 
 artifacts_io = ArtifactsIO(artifacts_dir)
@@ -97,9 +99,13 @@ def get_data():
         s["time"] = str(s["time"])
 
     baby_blue = "#59e5ea"
-    title_start_str = pd.Timestamp(int(ticks[0]['time']), unit='ns', tz='UTC').tz_convert('US/Eastern').strftime('%m/%d %H:%M')
-    title_end_str = pd.Timestamp(int(ticks[-1]['time']), unit='ns', tz='UTC').tz_convert('US/Eastern').strftime('%H:%M')
-    title = f"{symbol} {title_start_str} to {title_end_str} {' - backtest' if artifacts_dir == BACKTEST_RUNS_PATH else ''}",
+    title_start_str = (
+        pd.Timestamp(int(ticks[0]["time"]), unit="ns", tz="UTC").tz_convert("US/Eastern").strftime("%m/%d %H:%M")
+    )
+    title_end_str = pd.Timestamp(int(ticks[-1]["time"]), unit="ns", tz="UTC").tz_convert("US/Eastern").strftime("%H:%M")
+    title = (
+        f"{symbol} {title_start_str} to {title_end_str} {' - backtest' if artifacts_dir == BACKTEST_RUNS_PATH else ''}",
+    )
     records = dict(
         title=title,
         ticks=ticks,
@@ -121,11 +127,11 @@ def get_data():
         TickChart2Lines=[
             # dict(key="vwap_pressure", color="#e70f0f", color_negative=baby_blue, width=1, type=0),
             # dict(key="position", color="#e70f0f", color_negative=baby_blue, width=1, type=1),
-            dict(key="allow_buy", color="#e70f0f", color_negative=baby_blue, width=1, type=1),
-            dict(key="macd_value", color="#e70f0f", color_negative=baby_blue, width=1, type=1),
+            # dict(key="allow_buy", color="#e70f0f", color_negative=baby_blue, width=1, type=1),
+            # dict(key="macd_value", color="#e70f0f", color_negative=baby_blue, width=1, type=1),
         ],
         TickChart3Lines=[
-            # dict(key="pnl", color="green", color_negative="red", width=1, type=1),
+            dict(key="pnl", color="green", color_negative="red", width=1, type=1),
         ],
     )
     return jsonify(records)
