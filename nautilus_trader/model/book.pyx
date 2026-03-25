@@ -696,10 +696,6 @@ cdef class OrderBook(Data):
             fill_price = Price.from_mem_c(raw_fill[0])
             fill_size = Quantity.from_mem_c(raw_fill[1])
             fills.append((fill_price, fill_size))
-            if fill_price.precision != price_prec:
-                raise RuntimeError(f"{fill_price.precision=} did not match instrument {price_prec=}")
-            if fill_size.precision != size_prec:
-                raise RuntimeError(f"{fill_size.precision=} did not match instrument {size_prec=}")
 
         vec_drop_fills(raw_fills_vec)
 

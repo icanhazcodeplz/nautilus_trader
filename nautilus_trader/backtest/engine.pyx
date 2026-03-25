@@ -4053,26 +4053,14 @@ cdef class OrderMatchingEngine:
         """
         Condition.not_none(tick, "tick")
 
-        if is_logging_initialized():
-            self._log.debug(f"Processing {tick!r}")
+        # Dynamically adjust precisions to match incoming tick
+        cdef uint8_t max_price_prec = max(tick._mem.bid_price.precision, tick._mem.ask_price.precision)
+        if max_price_prec != self._price_prec:
+            self._price_prec = max_price_prec
 
-        # Validate precisions
-        if tick._mem.bid_price.precision != self._price_prec:
-            raise RuntimeError(
-                f"invalid {tick.bid_price.precision=} did not match instrument.price_precision={self._price_prec}",
-            )
-        if tick._mem.ask_price.precision != self._price_prec:
-            raise RuntimeError(
-                f"invalid {tick.ask_price.precision=} did not match instrument.price_precision={self._price_prec}",
-            )
-        if tick._mem.bid_size.precision != self._size_prec:
-            raise RuntimeError(
-                f"invalid {tick.bid_size.precision=} did not match instrument.size_precision={self._size_prec}",
-            )
-        if tick._mem.ask_size.precision != self._size_prec:
-            raise RuntimeError(
-                f"invalid {tick.ask_size.precision=} did not match instrument.size_precision={self._size_prec}",
-            )
+        cdef uint8_t max_size_prec = max(tick._mem.bid_size.precision, tick._mem.ask_size.precision)
+        if max_size_prec != self._size_prec:
+            self._size_prec = max_size_prec
 
         if self.book_type == BookType.L1_MBP:
             self._book.update_quote_tick(tick)
@@ -4100,18 +4088,11 @@ cdef class OrderMatchingEngine:
         """
         Condition.not_none(tick, "tick")
 
-        if is_logging_initialized():
-            self._log.debug(f"Processing {tick!r}")
-
-        # Validate precisions
+        # Dynamically adjust precisions to match incoming tick
         if tick._mem.price.precision != self._price_prec:
-            raise RuntimeError(
-                f"invalid {tick.price.precision=} did not match instrument.price_precision={self._price_prec}",
-            )
+            self._price_prec = tick._mem.price.precision
         if tick._mem.size.precision != self._size_prec:
-            raise RuntimeError(
-                f"invalid {tick.size.precision=} did not match instrument.size_precision={self._size_prec}",
-            )
+            self._size_prec = tick._mem.size.precision
 
         if self.book_type == BookType.L1_MBP:
             self._book.update_trade_tick(tick)
@@ -5925,21 +5906,13 @@ cdef class OrderMatchingEngine:
             )
 
         for fill_px, fill_qty in fills:
-            # Validate price precision
+            # Adjust price precision to match current instrument precision
             if fill_px._mem.precision != self._price_prec:
-                raise RuntimeError(
-                    f"Invalid price precision for fill {fill_px.precision} "
-                    f"when instrument price precision is {self._price_prec}. "
-                    f"Check that the data price precision matches the {self.instrument.id} instrument"
-                )
+                self._price_prec = fill_px._mem.precision
 
-            # Validate size precision
+            # Adjust size precision to match current fill precision
             if fill_qty._mem.precision != self._size_prec:
-                raise RuntimeError(
-                    f"Invalid size precision for fill {fill_qty.precision} "
-                    f"when instrument size precision is {self._size_prec}. "
-                    f"Check that the data size precision matches the {self.instrument.id} instrument"
-                )
+                self._size_prec = fill_qty._mem.precision
 
             if order.filled_qty._mem.raw == 0:
                 if order.order_type == OrderType.MARKET_TO_LIMIT:

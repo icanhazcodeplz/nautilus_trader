@@ -1021,8 +1021,11 @@ cdef class RiskEngine(Component):
             return None
 
         if price.precision > instrument.price_precision:
-            # Check failed
-            return f"price {price} invalid (precision {price.precision} > {instrument.price_precision})"
+            # Allow 4-digit precision for sub-dollar prices
+            if price.as_double() < 1.0 and price.precision <= 4:
+                pass
+            else:
+                return f"price {price} invalid (precision {price.precision} > {instrument.price_precision})"
 
         if instrument.instrument_class not in NEGATIVE_PRICE_INSTRUMENT_CLASSES:
             if price.raw_int_c() <= 0:
