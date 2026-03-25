@@ -1,3 +1,5 @@
+from functools import lru_cache
+
 import pandas as pd
 
 from custom.nt_extensions.tbbo_data import TBBOData
@@ -12,6 +14,7 @@ BACKTESTING_CATALOG = ParquetDataCatalog(CATALOG_PATH)
 CATALOG_TIME_STR_FMT = "%Y-%m-%d %H:%M:%S%z"
 
 
+@lru_cache(maxsize=10)
 def get_catalog_data(symbol, start, end, data_cls, venue, identifiers=None):
     identifiers_str = f"{symbol}.{venue}"
 
