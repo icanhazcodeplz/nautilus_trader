@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import random
 
 import pandas as pd
+import torch
 
 from custom.nt_extensions.indicators import VWAPBandsNew
 from custom.strategies.base import BaseStrategy, BaseStrategyConfig
@@ -13,6 +14,8 @@ from nautilus_trader.model.data import Bar
 from nautilus_trader.model.data import TradeTick
 from nautilus_trader.model.enums import OrderStatus
 from nautilus_trader.model.identifiers import InstrumentId
+
+from lstm.lstm_common import TICK_LOOKBACK, build_live_features, get_device, load_model
 
 
 @dataclass
@@ -50,6 +53,7 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     simple_take: bool = False
     trailing_take: bool = False
     random_buy: bool = False
+    lstm_buy: bool = False
     num_sell_tiers: int = 1
     print_update_every_secs: int = None
 
@@ -126,6 +130,35 @@ class MomoStrategy(BaseStrategy):
         self._sell_diff_start_ns: int | None = None
         self._last_tier_adjustment_ns = None
 
+        # LSTM Model internal params
+        self.lstm_model = None
+        self.lstm_device = None
+        self._candle_10s_mids = deque(maxlen=30)
+        self._candle_1m_mids = deque(maxlen=60)
+        self._last_10s_bucket = None
+        self._last_1m_bucket = None
+        if self.config.lstm_buy:
+            self.lstm_device = get_device()
+            self.lstm_model = load_model("lstm/lstm_best.pt", self.lstm_device)
+
+    def _update_candle_mids(self, tick: TradeTick):
+        ts_ns = tick.ts_event
+        bucket_10s = ts_ns // (10 * 1_000_000_000)
+        bucket_1m = ts_ns // (60 * 1_000_000_000)
+
+        quote = self.cache.quote_tick(self.config.instrument_id)
+        if quote is None:
+            return
+        mid = (float(quote.bid_price) + float(quote.ask_price)) / 2
+
+        if self._last_10s_bucket is not None and bucket_10s != self._last_10s_bucket:
+            self._candle_10s_mids.append(mid)
+        self._last_10s_bucket = bucket_10s
+
+        if self._last_1m_bucket is not None and bucket_1m != self._last_1m_bucket:
+            self._candle_1m_mids.append(mid)
+        self._last_1m_bucket = bucket_1m
+
     def stop_out_if_needed(self, tick: TradeTick):
         if self.position_qty == 0:
             self.stop_price = None
@@ -170,108 +203,131 @@ class MomoStrategy(BaseStrategy):
         # best_bid = ob.best_bid_price()
         if self.market_open_only and not is_market_open(self.clock.utc_now()):
             return
-
-        buy_orders = self.open_buys
-        position_qty = self.position_qty
-        if self.config.random_buy and not self._stopping_out:
-            if (
-                len(buy_orders) == 0
-                and (self.clock.utc_now() - self.last_buy_dt).total_seconds() > 20
-                and position_qty < self.max_position_allowed
-                and random.random() < 0.3
-            ):
-                # Only send buy command if it has been at least 10 seconds of flat
-                all_positions = self.cache.positions(instrument_id=self.config.instrument_id)
-                if len(all_positions) > 0:
-                    most_recent_close = all_positions[0].ts_closed
-                else:
-                    most_recent_close = 0
-
-                if (self.clock.timestamp_ns() - most_recent_close) / 1e9 > 10:
-                    buy_limit = tick.price + 0.00
-                    self.buy(self.config.trade_size, buy_limit, cancel_after_secs=10, tag=f"{self.buy_orders_count}")
-
+        if self.config.lstm_buy:
+            self._update_candle_mids(tick)
         initialize_deque_if_needed(self.price_dq, tick.price)
         if self.last_take_ts is None:
             self.last_take_ts = self.clock.utc_now()
 
         price = tick.price
-
         self.price_dq.append(tick.price)
+
+        buy_orders = self.open_buys
+        position_qty = self.position_qty
+
+        allow_buy = True
+        if self._stopping_out:
+            allow_buy = False
+        if self.config.only_buy_if_macd_positive:
+            if not self.macd.initialized or self.macd.value < 0:
+                allow_buy = False
+
         # BUY LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-        if self.config.trailing_buy_order:
-            vwap_lower = self.instrument.make_price(self.vwap.low)
-            for order in self.open_buys:
-                if order.price != vwap_lower:
-                    self.modify_open_order(order, quantity=order.quantity, price=vwap_lower)
-
-            if len(buy_orders) == 0 and (self.clock.utc_now() - self.last_buy_dt).total_seconds() > 1:
-                # FIXME: Clunky to add buy orders count tag here. Should be handled in buy()
-                self.buy(self.config.trade_size, vwap_lower, cancel_after_secs=None, tag=f"{self.buy_orders_count}")
-
-        if (
-            price < self.vwap.low
-            # and price_1ago > self.vwap.low
-            # and (price > price_1ago)
-            # and (price > self.vwap_day.value)
-        ):
-            self.log_buy_signal(tick)
-            if (
-                position_qty < self.max_position_allowed
-                # and tick.size > 1
-                # and (self.clock.utc_now() - self.last_buy_ts).total_seconds() > random.randint(1, 20)
-                and (self.clock.utc_now() - self.last_buy_dt).total_seconds() > 1
-            ):
-                if not self.config.trailing_buy_order:
-                    if self.config.only_buy_if_macd_positive:
-                        if self.macd.initialized and self.macd.value > 0:
-                            self.buy(
-                                self.config.trade_size, price, cancel_after_secs=1, tag=f"{self._buy_signals_count}"
-                            )
+        if allow_buy:
+            if self.config.random_buy:
+                if (
+                    len(buy_orders) == 0
+                    and (self.clock.utc_now() - self.last_buy_dt).total_seconds() > 20
+                    and position_qty < self.max_position_allowed
+                    and random.random() < 0.3
+                ):
+                    # Only send buy command if it has been at least 10 seconds of flat
+                    all_positions = self.cache.positions(instrument_id=self.config.instrument_id)
+                    if len(all_positions) > 0:
+                        most_recent_close = all_positions[0].ts_closed
                     else:
-                        self.buy(self.config.trade_size, price, cancel_after_secs=1, tag=f"{self._buy_signals_count}")
+                        most_recent_close = 0
+
+                    if (self.clock.timestamp_ns() - most_recent_close) / 1e9 > 10:
+                        buy_limit = tick.price + 0.00
+                        self.buy(
+                            self.config.trade_size, buy_limit, cancel_after_secs=10, tag=f"{self.buy_orders_count}"
+                        )
+            elif self.config.lstm_buy:
+                trade_ticks = self.cache.trade_ticks(self.config.instrument_id)
+                quote_tick = self.cache.quote_tick(self.config.instrument_id)
+                if (
+                    len(trade_ticks) >= TICK_LOOKBACK
+                    and quote_tick is not None
+                    and len(self._candle_10s_mids) >= 30
+                    and len(self._candle_1m_mids) >= 60
+                    and len(buy_orders) == 0
+                    and position_qty < self.max_position_allowed
+                    and (self.clock.utc_now() - self.last_buy_dt).total_seconds() > 1
+                    and tick.price < self.vwap.low
+                ):
+                    tick_feat, ctx_feat = build_live_features(
+                        list(reversed(trade_ticks[:TICK_LOOKBACK])),
+                        quote_tick,
+                        list(self._candle_10s_mids),
+                        list(self._candle_1m_mids),
+                    )
+                    tick_feat = tick_feat.to(self.lstm_device)
+                    ctx_feat = ctx_feat.to(self.lstm_device)
+                    with torch.no_grad():
+                        logit = self.lstm_model(tick_feat, ctx_feat).item()
+                    prob_up = torch.sigmoid(torch.tensor(logit)).item()
+                    if prob_up > 0.85:
+                        self.buy(
+                            self.config.trade_size,
+                            tick.price,
+                            cancel_after_secs=10,
+                            tag=f"lstm_p{prob_up:.2f}",
+                        )
+
+            elif self.config.trailing_buy_order:
+                vwap_lower = self.instrument.make_price(self.vwap.low)
+                for order in self.open_buys:
+                    if order.price != vwap_lower:
+                        self.modify_open_order(order, quantity=order.quantity, price=vwap_lower)
+
+                if len(buy_orders) == 0 and (self.clock.utc_now() - self.last_buy_dt).total_seconds() > 1:
+                    # FIXME: Clunky to add buy orders count tag here. Should be handled in buy()
+                    self.buy(self.config.trade_size, vwap_lower, cancel_after_secs=None, tag=f"{self.buy_orders_count}")
+            elif (
+                price < self.vwap.low
+                # and price_1ago > self.vwap.low
+                # and (price > price_1ago)
+                # and (price > self.vwap_day.value)
+            ):
+                self.log_buy_signal(tick)
+                if (
+                    position_qty < self.max_position_allowed
+                    # and tick.size > 1
+                    # and (self.clock.utc_now() - self.last_buy_ts).total_seconds() > random.randint(1, 20)
+                    and (self.clock.utc_now() - self.last_buy_dt).total_seconds() > 1
+                ):
+                    self.buy(self.config.trade_size, price, cancel_after_secs=1, tag=f"{self._buy_signals_count}")
 
         # TAKE LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-        if self.config.trailing_take and not self._stopping_out:
-            if (
-                self._last_tier_adjustment_ns is None
-                or (self.clock.timestamp_ns() - self._last_tier_adjustment_ns) / 1e9
-                > self._ADJUST_TIERS_ONLY_EVERY_MS / 1000
-            ):
-                self._rolling_tiered_take()
-
-        if not self.config.trailing_take:
-            if (
-                self.open_sell_qty < position_qty
-                and price >= self.take_price
-                and (self.clock.utc_now() - self.last_take_ts).total_seconds() > 1
-            ):
-                if self.config.simple_take:
-                    self.sell(position_qty, limit_price=price, cancel_after_secs=10, tag="simple")
-                elif (
-                    # price > self.vwap.upper
-                    # and price <= price_1ago
-                    tick.size > 1
+        allow_take = True
+        if self._stopping_out:
+            allow_take = False
+        if allow_take:
+            if self.config.trailing_take:
+                if (
+                    self._last_tier_adjustment_ns is None
+                    or (self.clock.timestamp_ns() - self._last_tier_adjustment_ns) / 1e9
+                    > self._ADJUST_TIERS_ONLY_EVERY_MS / 1000
                 ):
-                    # and price > self.vwap.upper
-                    sell_qty = max(int(position_qty), int(self.config.trade_size / 10), 1)
-                    self.sell(sell_qty, limit_price=price, cancel_after_secs=10, tag="t")
-                    self.last_take_ts = self.clock.utc_now()
-
-        # Cancel buy if price has spiked above vwap
-        # open_buys = self.open_buys
-        # if (
-        #     not (self.config.trailing_buy_order or self.config.random_buy)
-        #     and len(open_buys) > 0
-        #     and price > self.vwap.value
-        #     and tick.size > 1
-        # ):
-        #     for order in copy(open_buys):
-        #         if order.status != OrderStatus.SUBMITTED:
-        #             self.log.info(
-        #                 f"Canceling order {order.client_order_id}, tags {order.tags} because current price {price} is higher than vwap {self.vwap.value}"
-        #             )
-        #             self.cancel_open_order(order)
+                    self._rolling_tiered_take()
+            else:
+                if (
+                    self.open_sell_qty < position_qty
+                    # and price >= self.take_price
+                    and (self.clock.utc_now() - self.last_take_ts).total_seconds() > 1
+                ):
+                    if self.config.simple_take:
+                        self.sell(position_qty, limit_price=self.take_price, cancel_after_secs=None, tag="simple")
+                    elif (
+                        # price > self.vwap.upper
+                        # and price <= price_1ago
+                        tick.size > 1
+                    ):
+                        # and price > self.vwap.upper
+                        sell_qty = max(int(position_qty), int(self.config.trade_size / 10), 1)
+                        self.sell(sell_qty, limit_price=price, cancel_after_secs=10, tag="t")
+                        self.last_take_ts = self.clock.utc_now()
 
     def _rolling_tiered_take(self):
         self._last_tier_adjustment_ns = self.clock.timestamp_ns()
