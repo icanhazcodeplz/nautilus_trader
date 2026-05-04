@@ -35,7 +35,7 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     instrument_id: InstrumentId
     trade_size: int
     max_position_multiplier: int
-    stop_pct: float
+    stop_loss: float
 
     take_profit: float
     lower_scalar_multiplier: float
@@ -83,7 +83,7 @@ class MomoStrategy(BaseStrategy):
         if sum([self.config.trailing_buy_order, self.config.random_buy]) > 1:
             raise ValueError("Cannot use more than one of trailing_buy_order, random_buy")
         # FIXME: This is temporary
-        self.take_profit = self.config.take_profit if self.config.take_profit is not None else 0.0
+        self.take_profit = self.config.take_profit if self.config.take_profit is not None else self.config.stop_loss
         self.market_open_only = False  # TODO: remove this?
         # self.vwap = VWAPBands(
         self.vwap = VWAPBandsNew(

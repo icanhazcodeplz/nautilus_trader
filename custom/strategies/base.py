@@ -37,7 +37,7 @@ class BaseStrategyConfig(StrategyConfig, frozen=True):
     instrument_id: InstrumentId
     trade_size: int
     max_position_multiplier: int
-    stop_pct: float
+    stop_loss: float
     allow_trades: bool = True
     print_update_every_secs: int = None
 
@@ -267,7 +267,7 @@ class BaseStrategy(Strategy):
             self._tick_event_dt_adjusted = tick.ts_event
 
         if self.stop_loss is None:
-            self.stop_loss = self.config.stop_pct * float(tick.price)
+            self.stop_loss = self.config.stop_loss
 
         tick_data = {"price": float(tick.price), "size": int(tick.size)}
         if self.save_artifacts:
@@ -396,7 +396,7 @@ class BaseStrategy(Strategy):
         self._on_order_filled(order)
         if order.order_side == OrderSide.BUY:
             self._total_buy_qty += int(order.last_qty)
-            self.stop_loss = self.config.stop_pct * float(order.last_px)
+            self.stop_loss = self.config.stop_loss
         elif order.order_side == OrderSide.SELL:
             if self.save_artifacts:
                 realized_pnl = self.portfolio.realized_pnl(self.config.instrument_id)
