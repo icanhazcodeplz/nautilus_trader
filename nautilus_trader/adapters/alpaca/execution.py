@@ -1463,6 +1463,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
                     quantity = pending_qty if pending_qty is not None else order.quantity
                     price = pending_price if pending_price is not None else order.price
                 else:
+                    # FIXME: This path has never been tested
                     # Pending params already consumed by an earlier replacement in a rapid-modify chain,
                     # or this is an external replacement. Fall back to WS message data.
                     self._log.debug(
@@ -1513,6 +1514,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 )
 
                 if order.is_open and order.is_pending_cancel:
+                    # FIXME: This path has never been tested
                     current_venue_id = order.venue_order_id
                     if current_venue_id and current_venue_id != venue_order_id:
                         # If the cancel was rejected because the order was already replaced,

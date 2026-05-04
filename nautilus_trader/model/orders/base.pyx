@@ -1023,7 +1023,9 @@ cdef class Order:
         Condition.not_none(event, "event")
         Condition.equal(event.client_order_id, self.client_order_id, "event.client_order_id", "self.client_order_id")
         if self.venue_order_id is not None and event.venue_order_id is not None and not isinstance(event, OrderUpdated):
-            Condition.equal(self.venue_order_id, event.venue_order_id, "self.venue_order_id", "event.venue_order_id")
+            if self.venue_order_id != event.venue_order_id:
+                if event.venue_order_id not in self._venue_order_ids:
+                    Condition.equal(self.venue_order_id, event.venue_order_id, "self.venue_order_id", "event.venue_order_id")
 
         cdef OrderStatus previous_status = <OrderStatus>self._fsm.state
 

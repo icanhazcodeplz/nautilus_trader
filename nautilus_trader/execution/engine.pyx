@@ -75,6 +75,7 @@ from nautilus_trader.model.data cimport QuoteTick
 from nautilus_trader.model.data cimport TradeTick
 from nautilus_trader.model.events.order cimport OrderAccepted
 from nautilus_trader.model.events.order cimport OrderCanceled
+from nautilus_trader.model.events.order cimport OrderCancelRejected
 from nautilus_trader.model.events.order cimport OrderDenied
 from nautilus_trader.model.events.order cimport OrderEvent
 from nautilus_trader.model.events.order cimport OrderExpired
@@ -1552,6 +1553,8 @@ cdef class ExecutionEngine(Component):
                     LogColor.YELLOW,
                 )
                 self._cache.force_remove_from_own_order_book(order.client_order_id)
+            elif isinstance(event, OrderCancelRejected):
+                self._log.warning(f"No orderbook adjustment because a rejected cancel has no effect on order open status.")
             else:
                 own_book = self._cache.own_order_book(order.instrument_id)
                 # Only bypass should_handle check for closed orders (to ensure cleanup)
