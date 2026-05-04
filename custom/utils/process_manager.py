@@ -31,6 +31,7 @@ class ProcessManager:
 
         proc = Process(target=target, args=args or (), kwargs=kwargs or {}, name=name)
         proc.start()
+        print(f"Starting {name}. PID: {proc.pid}")
         self.procs[name] = _Process(proc, start_dt=datetime.now(), log_path=log_path)
 
     def remove_completed(self) -> Set[str]:

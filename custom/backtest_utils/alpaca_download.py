@@ -151,7 +151,7 @@ def get_quotes_and_save_to_catalog_if_needed(symbol, day_in_question: pd.Timesta
     BACKTESTING_CATALOG.write_data(quote_ticks)
 
 
-def prepare_alpaca_data(symbol, day_in_question, force=False):
+def prepare_alpaca_data(symbol, day_in_question: pd.Timestamp, force=False):
     print(f"\nGetting data for {symbol} on {day_in_question.date()}, force={force}")
     get_trades_and_save_to_catalog_if_needed(symbol, day_in_question, force=force)
     get_quotes_and_save_to_catalog_if_needed(symbol, day_in_question, force=force)
