@@ -32,3 +32,5 @@ if [[ "$choice" == "y" ]]; then
     sudo rm -rf /var/log/*
     echo "Deleted."
 fi
+
+# Check ~/Library/Application Support
