@@ -192,12 +192,7 @@ def download_matching_data_from_live_run(artifacts_dir):
     add_entry_to_catalog_options(key, symbol, data_start_dt, data_end_dt)
 
 
-if __name__ == "__main__":
-    # --------- DOWNLOAD MATCHING DATA FROM LIVE RUN ------------
-    # artifacts_dir = data_subdir("runs", "20260313_144138")
-    # artifacts_dir = data_subdir("paper_runs", "20260311_104208")
-    # download_matching_data_from_live_run(artifacts_dir)
-
+def _download_top_gainers():
     import os
     from pathlib import Path
 
@@ -233,6 +228,29 @@ if __name__ == "__main__":
             date_str = data_start_dt.strftime("%m%d")
             key = f"{date_str}_{symbol.lower()}"
             add_entry_to_catalog_options(key, symbol, data_start_dt, data_end_dt)
+
+
+if __name__ == "__main__":
+    # --------- DOWNLOAD MATCHING DATA FROM LIVE RUN ------------
+    # artifacts_dir = data_subdir("runs", "20260313_144138")
+    # artifacts_dir = data_subdir("paper_runs", "20260311_104208")
+    # download_matching_data_from_live_run(artifacts_dir)
+
+    symbol = "AAPL"
+    nasdaq_holidays_2026 = [
+        pd.Timestamp("2026-01-01"),  # New Year's Day
+        pd.Timestamp("2026-01-19"),  # MLK Day
+        pd.Timestamp("2026-02-16"),  # Presidents' Day
+        pd.Timestamp("2026-04-03"),  # Good Friday
+        pd.Timestamp("2026-05-25"),  # Memorial Day
+        pd.Timestamp("2026-07-03"),  # Independence Day (observed)
+        pd.Timestamp("2026-09-07"),  # Labor Day
+        pd.Timestamp("2026-11-26"),  # Thanksgiving
+        pd.Timestamp("2026-12-25"),  # Christmas
+    ]
+    trading_days = pd.bdate_range("2026-01-02", "2026-04-15", freq="C", holidays=nasdaq_holidays_2026)
+    for day in trading_days:
+        prepare_alpaca_data(symbol, day)
 
     if False:
         end_dt_str = pd.Timestamp(start_dt_str) + pd.Timedelta(days=1)
