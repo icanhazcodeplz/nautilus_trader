@@ -147,8 +147,10 @@ class MomoStrategy(BaseStrategy):
                     self.cancel_open_order(order)
 
                 self._last_stop_out_attempt = self.clock.timestamp_ns()
-                # TODO: HARDCODED to set stop price to 90% below current price
-                new_limit_price = self.instrument.make_price(float(tick.price) * 0.9)
+                # TODO: HARDCODED to set stop price to 90% below current price, but not more than
+                # 20 cents below current tick
+                new_price = max(float(tick.price) * 0.90, float(tick.price) - 0.20)
+                new_limit_price = self.instrument.make_price(new_price)
                 self.log.info(
                     f"Stop price {self.stop_price} reached, selling at {new_limit_price}", color=LogColor.YELLOW
                 )
