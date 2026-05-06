@@ -8,7 +8,6 @@ import torch
 from custom.nt_extensions.indicators import VWAPBandsNew
 from custom.strategies.base import BaseStrategy, BaseStrategyConfig
 from custom.strategies._tiers import Tiers
-from nautilus_trader.common.enums import LogColor
 from nautilus_trader.indicators.trend import MACDHistogram
 from nautilus_trader.model.data import Bar
 from nautilus_trader.model.data import TradeTick
@@ -76,7 +75,6 @@ def is_market_open(now_utc: pd.Timestamp) -> bool:
 
 class MomoStrategy(BaseStrategy):
     _ADJUST_TIERS_ONLY_EVERY_MS = 80
-    _ATTEMPT_STOP_OUT_EVERY_MS = 60  # TODO: Move stopout logic into BaseStrategy?
     _MAX_ALLOWED_SELL_DIFF_SECS = 5
 
     def __init__(self, config: MomoStrategyConfig) -> None:
@@ -126,7 +124,6 @@ class MomoStrategy(BaseStrategy):
         self.metrics = []
 
         self.last_take_ts = None
-        self._last_stop_out_attempt = 0
         self._sell_diff_start_ns: int | None = None
         self._last_tier_adjustment_ns = None
 
@@ -158,42 +155,6 @@ class MomoStrategy(BaseStrategy):
         if self._last_1m_bucket is not None and bucket_1m != self._last_1m_bucket:
             self._candle_1m_mids.append(mid)
         self._last_1m_bucket = bucket_1m
-
-    def stop_out_if_needed(self, tick: TradeTick):
-        if self.position_qty == 0:
-            self.stop_price = None
-            self._stopping_out = False
-            return
-
-        if self.clock.timestamp_ns() - self._last_stop_out_attempt < self._ATTEMPT_STOP_OUT_EVERY_MS * 1e6:
-            return
-
-        if self.position_qty > 0 and self.stop_price is None:
-            self.stop_price = tick.price - self.stop_loss
-            self.log.info(f"Setting stop price to {self.stop_price}")
-
-        if self.stop_price is not None:
-            if tick.price <= self.stop_price:
-                self._stopping_out = True
-                # First cancel any open buys
-                for order in self.open_buys:
-                    self.cancel_open_order(order)
-
-                self._last_stop_out_attempt = self.clock.timestamp_ns()
-                # TODO: HARDCODED to set stop price to 90% below current price, but not more than
-                # 20 cents below current tick
-                new_price = max(float(tick.price) * 0.90, float(tick.price) - 0.20)
-                new_limit_price = self.instrument.make_price(new_price)
-                self.log.info(
-                    f"Stop price {self.stop_price} reached, selling at {new_limit_price}", color=LogColor.YELLOW
-                )
-
-                # FIXME: sell_position_at_price is not a great solution. The fills for selling are more accurate during
-                #  backtesting if you use a single order, but during live running it is less buggy to modify existing
-                #  orders because trying to cancel existing orders runs async.
-                self.sell_position_at_price(new_limit_price)
-            else:
-                self._stopping_out = False
 
     def _on_trade_tick(self, tick: TradeTick) -> None:
         self.stop_out_if_needed(tick)
@@ -456,16 +417,7 @@ class MomoStrategy(BaseStrategy):
 
     def _on_order_filled(self, order_filled) -> None:
         if order_filled.is_buy:
-            # Set take and stop losses based on order fill price
             self.take_price = order_filled.last_px + self.take_profit
-            new_stop_price = order_filled.last_px - self.stop_loss
-            if self.stop_price is not None:
-                if new_stop_price > self.stop_price:
-                    self.log.info(f"Changing stop price from {self.stop_price} to {new_stop_price}")
-                    self.stop_price = new_stop_price
-            else:
-                self.log.info(f"Setting stop price to {new_stop_price}")
-                self.stop_price = new_stop_price
 
     def _on_bar(self, bar: Bar) -> None:
         pass

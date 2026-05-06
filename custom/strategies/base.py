@@ -47,6 +47,7 @@ class BaseStrategy(Strategy):
     _POSITION_DISCREPANCY_ALLOW_SECS = 10  # Raise if alpaca vs nt discrepancy lasts for longer than this
     _MODIFY_REJECT_COOLDOWN_SECS = 1  # Seconds to block retries after a ModifyRejected
     _RECONCILE_COOLDOWN_SECS = 3  # Minimum seconds between reconciliation attempts
+    _ATTEMPT_STOP_OUT_EVERY_MS = 60
 
     def __init__(self, config: BaseStrategyConfig) -> None:
         super().__init__(config)
@@ -87,6 +88,7 @@ class BaseStrategy(Strategy):
         self._total_buy_qty = 0
 
         self._stopping_out = False
+        self._last_stop_out_attempt = 0
         self._exec_engine = None  # Set by run_utils after node.build()
         self._force_reconcile_count = 0
         self._last_force_reconcile_ns = 0
@@ -207,6 +209,35 @@ class BaseStrategy(Strategy):
                     )
         if remaining_qty_to_sell > 0:
             self.sell(quantity=remaining_qty_to_sell, limit_price=new_limit_price, tag="s")
+
+    def stop_out_if_needed(self, tick: TradeTick):
+        if self.position_qty == 0:
+            self.stop_price = None
+            self._stopping_out = False
+            return
+
+        if self.clock.timestamp_ns() - self._last_stop_out_attempt < self._ATTEMPT_STOP_OUT_EVERY_MS * 1e6:
+            return
+
+        if self.position_qty > 0 and self.stop_price is None:
+            self.stop_price = tick.price - self.stop_loss
+            self.log.info(f"Setting stop price to {self.stop_price}")
+
+        if self.stop_price is not None:
+            if tick.price <= self.stop_price:
+                self._stopping_out = True
+                for order in self.open_buys:
+                    self.cancel_open_order(order)
+
+                self._last_stop_out_attempt = self.clock.timestamp_ns()
+                new_price = max(float(tick.price) * 0.90, float(tick.price) - 0.20)
+                new_limit_price = self.instrument.make_price(new_price)
+                self.log.info(
+                    f"Stop price {self.stop_price} reached, selling at {new_limit_price}", color=LogColor.YELLOW
+                )
+                self.sell_position_at_price(new_limit_price)
+            else:
+                self._stopping_out = False
 
     @property
     def max_position_allowed(self):
@@ -397,6 +428,14 @@ class BaseStrategy(Strategy):
         if order.order_side == OrderSide.BUY:
             self._total_buy_qty += int(order.last_qty)
             self.stop_loss = self.config.stop_loss
+            new_stop_price = float(order.last_px) - self.stop_loss
+            if self.stop_price is not None:
+                if new_stop_price > self.stop_price:
+                    self.log.info(f"Changing stop price from {self.stop_price} to {new_stop_price}")
+                    self.stop_price = new_stop_price
+            else:
+                self.log.info(f"Setting stop price to {new_stop_price}")
+                self.stop_price = new_stop_price
         elif order.order_side == OrderSide.SELL:
             if self.save_artifacts:
                 realized_pnl = self.portfolio.realized_pnl(self.config.instrument_id)
