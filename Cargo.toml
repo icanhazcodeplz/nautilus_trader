@@ -93,7 +93,7 @@ nautilus-trading = { path = "crates/trading", version = "0.56.0" }
 #
 # Note: default-features = false to control high-precision separately (not supported on Windows)
 # -----------------------------------------------------------------------------
-nautilus-alpaca = { path = "crates/adapters/alpaca", version = "0.53.0" }
+nautilus-alpaca = { path = "crates/adapters/alpaca", version = "0.56.0" }
 nautilus-architect-ax = { path = "crates/adapters/architect_ax", version = "0.56.0" }
 nautilus-binance = { path = "crates/adapters/binance", version = "0.56.0", default-features = false }
 nautilus-bitmex = { path = "crates/adapters/bitmex", version = "0.56.0", default-features = false }
@@ -169,6 +169,7 @@ futures-util = { version = "0.3.32", default-features = false, features = [
   "async-await",
   "sink",
 ] }
+hex = "0.4.3"
 http = "1.4.0"
 implied-vol = { version = "2.0.0" }
 indexmap = { version = "2.14.0", features = ["serde"] }

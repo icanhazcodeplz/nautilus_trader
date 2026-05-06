@@ -22,7 +22,12 @@ use std::sync::{
 
 use nautilus_common::live::get_runtime;
 use nautilus_core::consts::NAUTILUS_USER_AGENT;
-use nautilus_network::websocket::{WebSocketClient, WebSocketConfig, channel_message_handler};
+use nautilus_network::websocket::{
+    TransportBackend,
+    WebSocketClient,
+    WebSocketConfig,
+    channel_message_handler,
+};
 use serde_json::Value;
 use tokio::sync::RwLock;
 use tokio_tungstenite::tungstenite::Message;
@@ -116,6 +121,9 @@ impl AlpacaWebSocketClient {
             reconnect_backoff_factor: Some(1.5),
             reconnect_jitter_ms: Some(250),
             reconnect_max_attempts: None,
+            idle_timeout_ms: None,
+            backend: TransportBackend::default(),
+            proxy_url: None,
         };
 
         let client = WebSocketClient::connect(
