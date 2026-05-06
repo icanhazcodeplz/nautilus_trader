@@ -15,11 +15,14 @@
 
 use std::env;
 
-use nautilus_hyperliquid::http::{
-    client::HyperliquidHttpClient,
-    models::{
-        HyperliquidExecOrderKind, HyperliquidExecPlaceOrderRequest, HyperliquidExecTpSl,
-        HyperliquidExecTriggerParams,
+use nautilus_hyperliquid::{
+    common::enums::HyperliquidEnvironment,
+    http::{
+        client::HyperliquidHttpClient,
+        models::{
+            HyperliquidExecOrderKind, HyperliquidExecPlaceOrderRequest, HyperliquidExecTpSl,
+            HyperliquidExecTriggerParams,
+        },
     },
 };
 use rust_decimal_macros::dec;
@@ -29,31 +32,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     nautilus_common::logging::ensure_logging_initialized();
 
     let args: Vec<String> = env::args().collect();
-    let testnet = args.get(1).is_some_and(|s| s == "testnet");
+    let environment = if args.get(1).is_some_and(|s| s == "testnet") {
+        HyperliquidEnvironment::Testnet
+    } else {
+        HyperliquidEnvironment::Mainnet
+    };
     let test_conditional = args.get(1).is_some_and(|s| s == "conditional")
         || args.get(2).is_some_and(|s| s == "conditional");
 
     log::info!("Starting Hyperliquid HTTP private example");
-    if testnet {
-        log::info!(
-            "Testnet parameter provided - ensure HYPERLIQUID_TESTNET_PK environment variable is set"
-        );
-    } else {
-        log::info!("Mainnet mode - ensure HYPERLIQUID_PK environment variable is set");
+
+    match environment {
+        HyperliquidEnvironment::Testnet => {
+            log::info!("Testnet mode - ensure HYPERLIQUID_TESTNET_PK environment variable is set");
+        }
+        HyperliquidEnvironment::Mainnet => {
+            log::info!("Mainnet mode - ensure HYPERLIQUID_PK environment variable is set");
+        }
     }
+
     if test_conditional {
         log::info!("Conditional orders test mode enabled");
     }
 
     // Try to create authenticated client from environment
-    let client = match HyperliquidHttpClient::from_env() {
+    let client = match HyperliquidHttpClient::from_env(environment) {
         Ok(client) => {
-            log::info!("Testnet mode: {}", client.is_testnet());
+            log::info!("Environment: {environment:?}");
             client
         }
-        Err(_) => {
+        Err(e) => {
+            let (env_var, _) =
+                nautilus_hyperliquid::common::credential::credential_env_vars(environment);
             log::warn!(
-                "No credentials found in environment (HYPERLIQUID_PK). Skipping authenticated examples."
+                "No credentials found in environment ({env_var}): {e}, skipping authenticated examples"
             );
             return Ok(());
         }
@@ -194,14 +206,14 @@ async fn test_conditional_orders(
     log::info!("");
     log::info!("Example code:");
     log::info!(
-        r#"
+        "
     let action = HyperliquidExecAction::Order {{
         orders: vec![stop_market_buy],
         grouping: HyperliquidExecGrouping::Na,
         builder: None,
     }};
     let response = client.post_action(&action).await?;
-    "#
+    "
     );
 
     // Display the JSON serialization to show the exact API format

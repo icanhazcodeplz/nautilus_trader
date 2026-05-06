@@ -15,7 +15,7 @@
 
 //! Example demonstrating live execution testing with the OKX adapter.
 //!
-//! Run with: `cargo run --example okx-exec-tester --package nautilus-okx`
+//! Run with: `cargo run --example okx-exec-tester --package nautilus-okx --features examples`
 
 use nautilus_common::enums::Environment;
 use nautilus_live::node::LiveNode;
@@ -23,12 +23,14 @@ use nautilus_model::{
     identifiers::{AccountId, ClientId, InstrumentId, StrategyId, TraderId},
     types::Quantity,
 };
+use nautilus_network::websocket::TransportBackend;
 use nautilus_okx::{
-    common::enums::OKXInstrumentType,
+    common::enums::{OKXEnvironment, OKXInstrumentType},
     config::{OKXDataClientConfig, OKXExecClientConfig},
     factories::{OKXDataClientFactory, OKXExecutionClientFactory},
 };
 use nautilus_testkit::testers::{ExecTester, ExecTesterConfig};
+use nautilus_trading::strategy::StrategyConfig;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -44,9 +46,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let data_config = OKXDataClientConfig {
         api_key: None,        // Will use 'OKX_API_KEY' env var
         api_secret: None,     // Will use 'OKX_API_SECRET' env var
-        api_passphrase: None, // Will use 'OKX_PASSPHRASE' env var
+        api_passphrase: None, // Will use 'OKX_API_PASSPHRASE' env var
         instrument_types: vec![OKXInstrumentType::Spot, OKXInstrumentType::Swap],
-        is_demo: false,
+        environment: OKXEnvironment::Live,
+        transport_backend: TransportBackend::Sockudo,
         ..Default::default()
     };
 
@@ -55,9 +58,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         account_id,
         api_key: None,        // Will use 'OKX_API_KEY' env var
         api_secret: None,     // Will use 'OKX_API_SECRET' env var
-        api_passphrase: None, // Will use 'OKX_PASSPHRASE' env var
+        api_passphrase: None, // Will use 'OKX_API_PASSPHRASE' env var
         instrument_types: vec![OKXInstrumentType::Spot, OKXInstrumentType::Swap],
-        is_demo: false,
+        environment: OKXEnvironment::Live,
+        transport_backend: TransportBackend::Sockudo,
         ..Default::default()
     };
 
@@ -72,23 +76,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_delay_post_stop_secs(5)
         .build()?;
 
-    let mut tester_config = ExecTesterConfig::new(
-        StrategyId::from("EXEC_TESTER-001"),
-        instrument_id,
-        client_id,
-        Quantity::from("0.01"),
-    )
-    .with_log_data(false)
-    .with_use_post_only(true)
-    .with_cancel_orders_on_stop(true)
-    .with_close_positions_on_stop(true);
-
-    tester_config.base.external_order_claims = Some(vec![instrument_id]);
-
-    // Use UUIDs for unique client order IDs across restarts
-    tester_config.base.use_uuid_client_order_ids = true;
-    // OKX doesn't allow hyphens in client order IDs
-    tester_config.base.use_hyphens_in_client_order_ids = false;
+    let tester_config = ExecTesterConfig::builder()
+        .base(StrategyConfig {
+            strategy_id: Some(StrategyId::from("EXEC_TESTER-001")),
+            external_order_claims: Some(vec![instrument_id]),
+            // OKX doesn't allow hyphens in client order IDs
+            use_hyphens_in_client_order_ids: false,
+            ..Default::default()
+        })
+        .instrument_id(instrument_id)
+        .client_id(client_id)
+        .order_qty(Quantity::from("0.01"))
+        .log_data(false)
+        // .enable_limit_buys(false)
+        // .enable_limit_sells(false)
+        // .enable_stop_sells(true)
+        // .stop_order_type(OrderType::TrailingStopMarket)
+        // .trailing_offset(Decimal::from(100))
+        // .trailing_offset_type(TrailingOffsetType::BasisPoints)
+        // .stop_offset_ticks(50)
+        .build();
 
     let tester = ExecTester::new(tester_config);
 

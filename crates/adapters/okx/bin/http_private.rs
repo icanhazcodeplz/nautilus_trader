@@ -27,8 +27,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let account_id = AccountId::new("OKX-001");
 
     let inst_type = OKXInstrumentType::Swap;
-    let instruments = client.request_instruments(inst_type, None).await?;
-    client.cache_instruments(instruments);
+    let (instruments, _inst_id_codes) = client.request_instruments(inst_type, None).await?;
+    client.cache_instruments(&instruments);
 
     // Set position mode
     let resp = client.set_position_mode(OKXPositionMode::NetMode).await;
@@ -58,6 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             None,
         )
         .await;
+
     match result {
         Ok(reports) => log::debug!("{reports:?}"),
         Err(e) => log::error!("{e:?}"),
@@ -68,6 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let result = client
         .request_position_status_reports(account_id, Some(instrument_type), None)
         .await;
+
     match result {
         Ok(reports) => log::debug!("{reports:?}"),
         Err(e) => log::error!("{e:?}"),

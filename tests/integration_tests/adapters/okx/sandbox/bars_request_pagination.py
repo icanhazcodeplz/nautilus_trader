@@ -66,6 +66,7 @@ async def paginate_bars(
             end=end,
             limit=batch_limit,
         )
+
         if not batch:
             break
 
@@ -250,7 +251,7 @@ async def main(args: argparse.Namespace) -> None:
 
     # Cache instruments
     inst_type = nautilus_pyo3.OKXInstrumentType.SWAP
-    instruments = await http_client.request_instruments(inst_type, None)
+    instruments, _inst_id_codes = await http_client.request_instruments(inst_type, None)
     for inst in instruments:
         http_client.cache_instrument(inst)
     logger.info(f"Cached {len(instruments)} {inst_type} instruments")

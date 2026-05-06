@@ -18,12 +18,14 @@
 //! This module provides the main gRPC client for interacting with dYdX v4 validator nodes.
 //! It handles transaction signing, broadcasting, and querying account state.
 
+use cosmrs::Tx;
 use prost::Message as ProstMessage;
 use tonic::transport::Channel;
 
 use crate::{
     error::DydxError,
     proto::{
+        AccountAuthenticator, AccountPlusClient, GetAuthenticatorsRequest,
         cosmos_sdk_proto::cosmos::{
             auth::v1beta1::{
                 BaseAccount, QueryAccountRequest, query_client::QueryClient as AuthClient,
@@ -78,6 +80,7 @@ pub struct DydxGrpcClient {
     clob: ClobClient<Channel>,
     perpetuals: PerpetualsClient<Channel>,
     subaccounts: SubaccountsClient<Channel>,
+    accountplus: AccountPlusClient<Channel>,
     current_url: String,
 }
 
@@ -89,7 +92,9 @@ impl DydxGrpcClient {
     /// Returns an error if the gRPC connection cannot be established.
     pub async fn new(grpc_url: String) -> Result<Self, DydxError> {
         let mut endpoint = Channel::from_shared(grpc_url.clone())
-            .map_err(|e| DydxError::Config(format!("Invalid gRPC URL: {e}")))?;
+            .map_err(|e| DydxError::Config(format!("Invalid gRPC URL: {e}")))?
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30));
 
         // Enable TLS for HTTPS URLs (required for public gRPC nodes)
         if grpc_url.starts_with("https://") {
@@ -113,6 +118,7 @@ impl DydxGrpcClient {
             clob: ClobClient::new(channel.clone()),
             perpetuals: PerpetualsClient::new(channel.clone()),
             subaccounts: SubaccountsClient::new(channel.clone()),
+            accountplus: AccountPlusClient::new(channel.clone()),
             channel,
             current_url: grpc_url,
         })
@@ -198,7 +204,9 @@ impl DydxGrpcClient {
             let mut endpoint = match Channel::from_shared(url_str.to_string())
                 .map_err(|e| DydxError::Config(format!("Invalid gRPC URL: {e}")))
             {
-                Ok(ep) => ep,
+                Ok(ep) => ep
+                    .connect_timeout(std::time::Duration::from_secs(10))
+                    .timeout(std::time::Duration::from_secs(30)),
                 Err(e) => {
                     last_error = Some(e);
                     continue;
@@ -329,6 +337,25 @@ impl DydxGrpcClient {
         };
         let balances = self.bank.all_balances(req).await?.into_inner().balances;
         Ok(balances)
+    }
+
+    /// Query for authenticators registered for an account.
+    ///
+    /// Authenticators enable permissioned key trading, allowing API wallets
+    /// to sign transactions on behalf of a main account.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails.
+    pub async fn get_authenticators(
+        &mut self,
+        address: &str,
+    ) -> Result<Vec<AccountAuthenticator>, anyhow::Error> {
+        let req = GetAuthenticatorsRequest {
+            account: address.to_string(),
+        };
+        let resp = self.accountplus.get_authenticators(req).await?.into_inner();
+        Ok(resp.account_authenticators)
     }
 
     /// Query for node info.
@@ -473,7 +500,7 @@ impl DydxGrpcClient {
     /// # Errors
     ///
     /// Returns an error if the query fails.
-    pub async fn get_tx(&mut self, hash: &str) -> Result<cosmrs::Tx, anyhow::Error> {
+    pub async fn get_tx(&mut self, hash: &str) -> Result<Tx, anyhow::Error> {
         let req = GetTxRequest {
             hash: hash.to_string(),
         };
@@ -482,7 +509,7 @@ impl DydxGrpcClient {
         if let Some(tx) = response.tx {
             // Convert through bytes since the types are incompatible
             let tx_bytes = tx.encode_to_vec();
-            cosmrs::Tx::try_from(tx_bytes.as_slice()).map_err(|e| anyhow::anyhow!("{e}"))
+            Tx::try_from(tx_bytes.as_slice()).map_err(|e| anyhow::anyhow!("{e}"))
         } else {
             anyhow::bail!("Transaction not found")
         }

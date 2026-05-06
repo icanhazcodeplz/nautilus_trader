@@ -17,11 +17,11 @@
 
 use std::fmt::Display;
 
-use nautilus_model::enums::TimeInForce;
+use nautilus_model::enums::{MarketStatusAction, TimeInForce, TriggerType};
 use serde::{Deserialize, Serialize};
 use strum::{AsRefStr, Display as StrumDisplay, EnumIter, EnumString};
 
-/// Deribit instrument kind/type.
+/// Deribit product type.
 #[derive(
     Clone,
     Copy,
@@ -40,9 +40,19 @@ use strum::{AsRefStr, Display as StrumDisplay, EnumIter, EnumString};
 #[strum(serialize_all = "snake_case")]
 #[cfg_attr(
     feature = "python",
-    pyo3::pyclass(eq, eq_int, module = "nautilus_trader.core.nautilus_pyo3.deribit")
+    pyo3::pyclass(
+        eq,
+        eq_int,
+        module = "nautilus_trader.core.nautilus_pyo3.deribit",
+        from_py_object,
+        rename_all = "SCREAMING_SNAKE_CASE",
+    )
 )]
-pub enum DeribitInstrumentKind {
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.deribit")
+)]
+pub enum DeribitProductType {
     /// Future contract
     Future,
     /// Option contract
@@ -65,7 +75,17 @@ pub enum DeribitInstrumentKind {
 #[strum(serialize_all = "UPPERCASE")]
 #[cfg_attr(
     feature = "python",
-    pyo3::pyclass(eq, eq_int, module = "nautilus_trader.core.nautilus_pyo3.deribit")
+    pyo3::pyclass(
+        eq,
+        eq_int,
+        module = "nautilus_trader.core.nautilus_pyo3.deribit",
+        from_py_object,
+        rename_all = "SCREAMING_SNAKE_CASE",
+    )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.deribit")
 )]
 pub enum DeribitCurrency {
     /// Bitcoin
@@ -159,6 +179,18 @@ impl Display for DeribitInstrumentState {
     }
 }
 
+impl From<DeribitInstrumentState> for MarketStatusAction {
+    fn from(state: DeribitInstrumentState) -> Self {
+        match state {
+            DeribitInstrumentState::Created => Self::PreOpen,
+            DeribitInstrumentState::Started => Self::Trading,
+            DeribitInstrumentState::Settled => Self::Close,
+            DeribitInstrumentState::Closed => Self::Close,
+            DeribitInstrumentState::Terminated => Self::NotAvailableForTrading,
+        }
+    }
+}
+
 /// Deribit time in force values for order execution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -203,5 +235,78 @@ impl TryFrom<TimeInForce> for DeribitTimeInForce {
                 "TimeInForce::{tif} is not supported on Deribit (valid: GTC, IOC, FOK, GTD)"
             )),
         }
+    }
+}
+
+/// Deribit API environment.
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Default,
+    StrumDisplay,
+    PartialEq,
+    Eq,
+    Hash,
+    AsRefStr,
+    EnumIter,
+    EnumString,
+    Serialize,
+    Deserialize,
+)]
+#[serde(rename_all = "lowercase")]
+#[strum(ascii_case_insensitive, serialize_all = "lowercase")]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(
+        eq,
+        eq_int,
+        module = "nautilus_trader.core.nautilus_pyo3.deribit",
+        from_py_object,
+        rename_all = "SCREAMING_SNAKE_CASE",
+    )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.deribit")
+)]
+pub enum DeribitEnvironment {
+    /// Live trading environment.
+    #[default]
+    Mainnet,
+    /// Testnet environment.
+    Testnet,
+}
+
+/// Resolves an optional Nautilus trigger type to a Deribit trigger string.
+pub fn resolve_trigger_type(trigger_type: Option<TriggerType>) -> Option<String> {
+    trigger_type.and_then(|tt| match tt {
+        TriggerType::LastPrice | TriggerType::Default => Some("last_price".to_string()),
+        TriggerType::MarkPrice => Some("mark_price".to_string()),
+        TriggerType::IndexPrice => Some("index_price".to_string()),
+        _ => None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    #[case(DeribitInstrumentState::Created, MarketStatusAction::PreOpen)]
+    #[case(DeribitInstrumentState::Started, MarketStatusAction::Trading)]
+    #[case(DeribitInstrumentState::Settled, MarketStatusAction::Close)]
+    #[case(DeribitInstrumentState::Closed, MarketStatusAction::Close)]
+    #[case(
+        DeribitInstrumentState::Terminated,
+        MarketStatusAction::NotAvailableForTrading
+    )]
+    fn test_deribit_instrument_state_to_market_status_action(
+        #[case] state: DeribitInstrumentState,
+        #[case] expected: MarketStatusAction,
+    ) {
+        assert_eq!(MarketStatusAction::from(state), expected);
     }
 }

@@ -61,8 +61,13 @@ const MAX_PERIOD: usize = 1_024;
         eq,
         eq_int,
         hash,
-        module = "nautilus_trader.core.nautilus_pyo3.indicators"
+        module = "nautilus_trader.core.nautilus_pyo3.indicators",
+        from_py_object,
     )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.indicators")
 )]
 pub enum StochasticsDMethod {
     /// Ratio: Nautilus original method: `100 * SUM(close-LL) / SUM(HH-LL)` over `period_d`.
@@ -78,6 +83,10 @@ pub enum StochasticsDMethod {
 #[cfg_attr(
     feature = "python",
     pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.indicators")
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass(module = "nautilus_trader.indicators")
 )]
 pub struct Stochastics {
     /// The lookback period for %K calculation (highest high / lowest low).

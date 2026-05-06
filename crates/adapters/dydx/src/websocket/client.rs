@@ -40,8 +40,9 @@ pub static DYDX_RATE_LIMIT_KEY_SUBSCRIPTION: LazyLock<[Ustr; 1]> =
 pub const DYDX_WS_TOPIC_DELIMITER: char = ':';
 
 /// Default WebSocket quota for dYdX subscriptions (2 messages per second).
-pub static DYDX_WS_SUBSCRIPTION_QUOTA: LazyLock<Quota> =
-    LazyLock::new(|| Quota::per_second(NonZeroU32::new(2).expect("non-zero")));
+pub static DYDX_WS_SUBSCRIPTION_QUOTA: LazyLock<Quota> = LazyLock::new(|| {
+    Quota::per_second(NonZeroU32::new(2).expect("non-zero")).expect("valid constant")
+});
 
 use std::{
     num::NonZeroU32,
@@ -49,31 +50,38 @@ use std::{
         Arc, LazyLock,
         atomic::{AtomicBool, AtomicU8, Ordering},
     },
+    time::Duration,
 };
 
 use arc_swap::ArcSwap;
 use dashmap::DashMap;
 use nautilus_common::live::get_runtime;
 use nautilus_model::{
+    data::BarType,
     identifiers::{AccountId, InstrumentId},
-    instruments::{Instrument, InstrumentAny},
+    instruments::InstrumentAny,
 };
 use nautilus_network::{
     mode::ConnectionMode,
     ratelimiter::quota::Quota,
     websocket::{
-        AuthTracker, SubscriptionState, WebSocketClient, WebSocketConfig, channel_message_handler,
+        AuthTracker, SubscriptionState, TransportBackend, WebSocketClient, WebSocketConfig,
+        channel_message_handler,
     },
 };
 use ustr::Ustr;
 
 use super::{
-    enums::{DydxWsChannel, DydxWsOperation, NautilusWsMessage},
+    dispatch::DydxWsDispatchState,
+    enums::{DydxWsChannel, DydxWsOperation, DydxWsOutputMessage},
     error::{DydxWsError, DydxWsResult},
     handler::{FeedHandler, HandlerCommand},
     messages::DydxSubscription,
 };
-use crate::common::credential::DydxCredential;
+use crate::{
+    common::{credential::DydxCredential, instrument_cache::InstrumentCache},
+    execution::encoder::ClientOrderIdEncoder,
+};
 
 /// WebSocket client for dYdX v4 market data and account streams.
 ///
@@ -101,35 +109,32 @@ use crate::common::credential::DydxCredential;
 #[derive(Debug)]
 #[cfg_attr(
     feature = "python",
-    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.dydx")
+    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.dydx", from_py_object)
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass(module = "nautilus_trader.dydx")
 )]
 pub struct DydxWebSocketClient {
-    /// The WebSocket connection URL.
     url: String,
-    /// Optional credential for private channels (only wallet address is used).
     credential: Option<Arc<DydxCredential>>,
-    /// Whether authentication is required for this client.
     requires_auth: bool,
-    /// Authentication tracker for WebSocket connections.
     auth_tracker: AuthTracker,
-    /// Subscription state tracker for managing channel subscriptions.
     subscriptions: SubscriptionState,
-    /// Shared connection state (lock-free atomic).
     connection_mode: Arc<ArcSwap<AtomicU8>>,
-    /// Manual disconnect signal.
     signal: Arc<AtomicBool>,
-    /// Cached instruments for parsing market data (Python-accessible).
-    instruments_cache: Arc<DashMap<Ustr, InstrumentAny>>,
-    /// Optional account ID for account message parsing.
+    instrument_cache: Arc<InstrumentCache>,
     account_id: Option<AccountId>,
-    /// Optional heartbeat interval in seconds.
     heartbeat: Option<u64>,
-    /// Command channel sender to handler (wrapped in RwLock so updates are visible across clones).
     cmd_tx: Arc<tokio::sync::RwLock<tokio::sync::mpsc::UnboundedSender<HandlerCommand>>>,
-    /// Receiver for parsed Nautilus messages from handler.
-    out_rx: Option<tokio::sync::mpsc::UnboundedReceiver<NautilusWsMessage>>,
-    /// Background handler task handle.
-    handler_task: Option<tokio::task::JoinHandle<()>>,
+    out_rx: Option<tokio::sync::mpsc::UnboundedReceiver<DydxWsOutputMessage>>,
+    handler_task: Option<Arc<tokio::task::JoinHandle<()>>>,
+    encoder: Arc<ClientOrderIdEncoder>,
+    bar_types: Arc<DashMap<String, BarType>>,
+    bars_timestamp_on_close: Arc<AtomicBool>,
+    ws_dispatch_state: Arc<DydxWsDispatchState>,
+    transport_backend: TransportBackend,
+    proxy_url: Option<String>,
 }
 
 impl Clone for DydxWebSocketClient {
@@ -142,20 +147,49 @@ impl Clone for DydxWebSocketClient {
             subscriptions: self.subscriptions.clone(),
             connection_mode: self.connection_mode.clone(),
             signal: self.signal.clone(),
-            instruments_cache: self.instruments_cache.clone(),
+            instrument_cache: self.instrument_cache.clone(),
             account_id: self.account_id,
             heartbeat: self.heartbeat,
             cmd_tx: self.cmd_tx.clone(),
             out_rx: None,       // Cannot clone receiver - only one owner allowed
             handler_task: None, // Cannot clone task handle
+            encoder: self.encoder.clone(),
+            bar_types: self.bar_types.clone(),
+            bars_timestamp_on_close: self.bars_timestamp_on_close.clone(),
+            ws_dispatch_state: self.ws_dispatch_state.clone(),
+            transport_backend: self.transport_backend,
+            proxy_url: self.proxy_url.clone(),
         }
     }
 }
 
 impl DydxWebSocketClient {
     /// Creates a new public WebSocket client for market data.
+    ///
+    /// This creates a new independent instrument cache. To share a cache with
+    /// the HTTP client, use [`Self::new_public_with_cache`] instead.
     #[must_use]
-    pub fn new_public(url: String, _heartbeat: Option<u64>) -> Self {
+    pub fn new_public(url: String, heartbeat: Option<u64>, proxy_url: Option<String>) -> Self {
+        Self::new_public_with_cache(
+            url,
+            Arc::new(InstrumentCache::new()),
+            heartbeat,
+            TransportBackend::default(),
+            proxy_url,
+        )
+    }
+
+    /// Creates a new public WebSocket client with a shared instrument cache.
+    ///
+    /// Use this when you want to share instrument data with the HTTP client.
+    #[must_use]
+    pub fn new_public_with_cache(
+        url: String,
+        instrument_cache: Arc<InstrumentCache>,
+        heartbeat: Option<u64>,
+        transport_backend: TransportBackend,
+        proxy_url: Option<String>,
+    ) -> Self {
         // Create dummy command channel (will be replaced on connect)
         let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::unbounded_channel::<HandlerCommand>();
 
@@ -169,22 +203,56 @@ impl DydxWebSocketClient {
                 ConnectionMode::Closed as u8,
             ))),
             signal: Arc::new(AtomicBool::new(false)),
-            instruments_cache: Arc::new(DashMap::new()),
+            instrument_cache,
             account_id: None,
-            heartbeat: _heartbeat,
+            heartbeat,
             cmd_tx: Arc::new(tokio::sync::RwLock::new(cmd_tx)),
             out_rx: None,
             handler_task: None,
+            encoder: Arc::new(ClientOrderIdEncoder::new()),
+            bar_types: Arc::new(DashMap::new()),
+            bars_timestamp_on_close: Arc::new(AtomicBool::new(true)),
+            ws_dispatch_state: Arc::new(DydxWsDispatchState::default()),
+            transport_backend,
+            proxy_url,
         }
     }
 
     /// Creates a new private WebSocket client for account updates.
+    ///
+    /// This creates a new independent instrument cache. To share a cache with
+    /// the HTTP client, use [`Self::new_private_with_cache`] instead.
     #[must_use]
     pub fn new_private(
         url: String,
         credential: DydxCredential,
         account_id: AccountId,
-        _heartbeat: Option<u64>,
+        heartbeat: Option<u64>,
+        proxy_url: Option<String>,
+    ) -> Self {
+        Self::new_private_with_cache(
+            url,
+            credential,
+            account_id,
+            Arc::new(InstrumentCache::new()),
+            heartbeat,
+            TransportBackend::default(),
+            proxy_url,
+        )
+    }
+
+    /// Creates a new private WebSocket client with a shared instrument cache.
+    ///
+    /// Use this when you want to share instrument data with the HTTP client.
+    #[must_use]
+    pub fn new_private_with_cache(
+        url: String,
+        credential: DydxCredential,
+        account_id: AccountId,
+        instrument_cache: Arc<InstrumentCache>,
+        heartbeat: Option<u64>,
+        transport_backend: TransportBackend,
+        proxy_url: Option<String>,
     ) -> Self {
         // Create dummy command channel (will be replaced on connect)
         let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::unbounded_channel::<HandlerCommand>();
@@ -199,12 +267,18 @@ impl DydxWebSocketClient {
                 ConnectionMode::Closed as u8,
             ))),
             signal: Arc::new(AtomicBool::new(false)),
-            instruments_cache: Arc::new(DashMap::new()),
+            instrument_cache,
             account_id: Some(account_id),
-            heartbeat: _heartbeat,
+            heartbeat,
             cmd_tx: Arc::new(tokio::sync::RwLock::new(cmd_tx)),
             out_rx: None,
             handler_task: None,
+            encoder: Arc::new(ClientOrderIdEncoder::new()),
+            bar_types: Arc::new(DashMap::new()),
+            bars_timestamp_on_close: Arc::new(AtomicBool::new(true)),
+            ws_dispatch_state: Arc::new(DydxWsDispatchState::default()),
+            transport_backend,
+            proxy_url,
         }
     }
 
@@ -250,20 +324,20 @@ impl DydxWebSocketClient {
         self.account_id
     }
 
+    /// Replaces the instrument cache with an externally shared one.
+    ///
+    /// Use this to share the HTTP client's cache (which includes CLOB pair ID
+    /// and market ticker indices) with the WebSocket client. Must be called
+    /// before `connect()`.
+    pub fn set_instrument_cache(&mut self, cache: Arc<InstrumentCache>) {
+        self.instrument_cache = cache;
+    }
+
     /// Caches a single instrument.
     ///
     /// Any existing instrument with the same ID will be replaced.
     pub fn cache_instrument(&self, instrument: InstrumentAny) {
-        let symbol = instrument.id().symbol.inner();
-        self.instruments_cache.insert(symbol, instrument.clone());
-
-        // Before connect() the handler isn't running; this send will fail and that's expected
-        // because connect() replays the instruments via InitializeInstruments
-        if let Ok(cmd_tx) = self.cmd_tx.try_read()
-            && let Err(e) = cmd_tx.send(HandlerCommand::UpdateInstrument(Box::new(instrument)))
-        {
-            log::debug!("Failed to send UpdateInstrument command to handler: {e}");
-        }
+        self.instrument_cache.insert_instrument_only(instrument);
     }
 
     /// Caches multiple instruments.
@@ -274,47 +348,107 @@ impl DydxWebSocketClient {
             "Caching {} instruments in WebSocket client",
             instruments.len()
         );
-        for instrument in &instruments {
-            self.instruments_cache
-                .insert(instrument.id().symbol.inner(), instrument.clone());
-        }
-
-        // Before connect() the handler isn't running; this send will fail and that's expected
-        // because connect() replays the instruments via InitializeInstruments
-        if !instruments.is_empty()
-            && let Ok(cmd_tx) = self.cmd_tx.try_read()
-            && let Err(e) = cmd_tx.send(HandlerCommand::InitializeInstruments(instruments))
-        {
-            log::debug!("Failed to send InitializeInstruments command to handler: {e}");
-        }
+        self.instrument_cache.insert_instruments_only(instruments);
     }
 
-    /// Returns a reference to the instruments cache.
+    /// Returns a reference to the shared instrument cache.
     #[must_use]
-    pub fn instruments(&self) -> &Arc<DashMap<Ustr, InstrumentAny>> {
-        &self.instruments_cache
+    pub fn instrument_cache(&self) -> &Arc<InstrumentCache> {
+        &self.instrument_cache
     }
 
-    /// Retrieves an instrument from the cache by symbol.
+    /// Returns a reference to the shared client order ID encoder.
+    #[must_use]
+    pub fn encoder(&self) -> &Arc<ClientOrderIdEncoder> {
+        &self.encoder
+    }
+
+    /// Returns a reference to the bar type registrations map.
+    #[must_use]
+    pub fn bar_types(&self) -> &Arc<DashMap<String, BarType>> {
+        &self.bar_types
+    }
+
+    /// Returns a reference to the shared WebSocket dispatch state.
+    pub fn ws_dispatch_state(&self) -> &Arc<DydxWsDispatchState> {
+        &self.ws_dispatch_state
+    }
+
+    /// Sets whether bar timestamps use the close time.
+    pub fn set_bars_timestamp_on_close(&self, value: bool) {
+        self.bars_timestamp_on_close.store(value, Ordering::Relaxed);
+    }
+
+    /// Returns whether bar timestamps use the close time.
+    #[must_use]
+    pub fn bars_timestamp_on_close(&self) -> bool {
+        self.bars_timestamp_on_close.load(Ordering::Relaxed)
+    }
+
+    /// Returns all cached instruments.
+    ///
+    /// This is a snapshot of the current cache contents.
+    #[must_use]
+    pub fn all_instruments(&self) -> Vec<InstrumentAny> {
+        self.instrument_cache.all_instruments()
+    }
+
+    /// Returns the number of cached instruments.
+    #[must_use]
+    pub fn cached_instruments_count(&self) -> usize {
+        self.instrument_cache.len()
+    }
+
+    /// Retrieves an instrument from the cache by InstrumentId.
     ///
     /// Returns `None` if the instrument is not found.
     #[must_use]
-    pub fn get_instrument(&self, symbol: &Ustr) -> Option<InstrumentAny> {
-        self.instruments_cache.get(symbol).map(|r| r.clone())
+    pub fn get_instrument(&self, instrument_id: &InstrumentId) -> Option<InstrumentAny> {
+        self.instrument_cache.get(instrument_id)
     }
 
-    /// Takes ownership of the inbound typed message receiver.
+    /// Retrieves an instrument from the cache by market ticker (e.g., "BTC-USD").
+    ///
+    /// Returns `None` if the instrument is not found.
+    #[must_use]
+    pub fn get_instrument_by_market(&self, ticker: &str) -> Option<InstrumentAny> {
+        self.instrument_cache.get_by_market(ticker)
+    }
+
+    /// Takes ownership of the inbound message receiver.
     /// Returns None if the receiver has already been taken or not connected.
     pub fn take_receiver(
         &mut self,
-    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<NautilusWsMessage>> {
+    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<DydxWsOutputMessage>> {
         self.out_rx.take()
+    }
+
+    /// Returns a stream of venue-specific WebSocket messages.
+    ///
+    /// Takes ownership of the message receiver and returns it as a `Stream`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the receiver has already been taken.
+    pub fn stream(
+        &mut self,
+    ) -> impl futures_util::Stream<Item = DydxWsOutputMessage> + Send + 'static {
+        let mut rx = self
+            .out_rx
+            .take()
+            .expect("Message stream receiver already taken or not connected");
+
+        async_stream::stream! {
+            while let Some(msg) = rx.recv().await {
+                yield msg;
+            }
+        }
     }
 
     /// Connects the websocket client in handler mode with automatic reconnection.
     ///
     /// Spawns a background handler task that owns the WebSocketClient and processes
-    /// raw messages into typed [`NautilusWsMessage`] values.
+    /// raw messages into venue-specific [`DydxWsOutputMessage`] values.
     ///
     /// # Errors
     ///
@@ -325,7 +459,7 @@ impl DydxWebSocketClient {
         }
 
         // Reset stop signal from any previous disconnect
-        self.signal.store(false, Ordering::Relaxed);
+        self.signal.store(false, Ordering::Release);
 
         let (message_handler, raw_rx) = channel_message_handler();
 
@@ -340,6 +474,9 @@ impl DydxWebSocketClient {
             reconnect_backoff_factor: Some(2.0),
             reconnect_jitter_ms: Some(200),
             reconnect_max_attempts: None,
+            idle_timeout_ms: None,
+            backend: self.transport_backend,
+            proxy_url: self.proxy_url.clone(),
         };
 
         let client = WebSocketClient::connect(
@@ -358,7 +495,7 @@ impl DydxWebSocketClient {
 
         // Create fresh channels for this connection
         let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<HandlerCommand>();
-        let (out_tx, out_rx) = tokio::sync::mpsc::unbounded_channel::<NautilusWsMessage>();
+        let (out_tx, out_rx) = tokio::sync::mpsc::unbounded_channel::<DydxWsOutputMessage>();
 
         // Update the shared cmd_tx so all clones see the new sender
         {
@@ -367,77 +504,69 @@ impl DydxWebSocketClient {
         }
         self.out_rx = Some(out_rx);
 
-        // Replay cached instruments to the new handler
-        if self.instruments_cache.is_empty() {
-            log::warn!("No cached instruments to replay to WebSocket handler");
-        } else {
-            let cached_instruments: Vec<InstrumentAny> = self
-                .instruments_cache
-                .iter()
-                .map(|entry| entry.value().clone())
-                .collect();
-            log::debug!(
-                "Replaying {} cached instruments to WebSocket handler",
-                cached_instruments.len()
-            );
-            let cmd_tx_guard = self.cmd_tx.read().await;
-            if let Err(e) =
-                cmd_tx_guard.send(HandlerCommand::InitializeInstruments(cached_instruments))
-            {
-                log::error!("Failed to replay instruments to handler: {e}");
-            }
-        }
-
         // Spawn handler task
-        let account_id = self.account_id;
         let signal = self.signal.clone();
         let subscriptions = self.subscriptions.clone();
 
         let handler_task = get_runtime().spawn(async move {
-            let mut handler = FeedHandler::new(
-                account_id,
-                cmd_rx,
-                out_tx,
-                raw_rx,
-                client,
-                signal,
-                subscriptions,
-            );
+            let mut handler =
+                FeedHandler::new(cmd_rx, out_tx, raw_rx, client, signal, subscriptions);
             handler.run().await;
         });
 
-        self.handler_task = Some(handler_task);
+        self.handler_task = Some(Arc::new(handler_task));
         log::info!("Connected dYdX WebSocket: {}", self.url);
         Ok(())
     }
 
-    /// Disconnects the websocket client.
+    /// Disconnects the websocket client gracefully.
+    ///
+    /// Sends a disconnect command to the handler, sets the stop signal, then
+    /// awaits the handler task with a timeout before aborting.
     ///
     /// # Errors
     ///
     /// Returns an error if the underlying client cannot be accessed.
     pub async fn disconnect(&mut self) -> DydxWsResult<()> {
-        // Set stop signal
-        self.signal.store(true, Ordering::Relaxed);
+        // 1. Send disconnect command so the handler can close the WS connection
+        if let Err(e) = self.cmd_tx.read().await.send(HandlerCommand::Disconnect) {
+            log::debug!("Failed to send disconnect command: {e}");
+        }
 
-        // Reset connection mode to Closed so is_connected() returns false
-        // and subsequent connect() calls will create new channels
+        // 2. Set stop signal with Release ordering
+        self.signal.store(true, Ordering::Release);
+
+        // 3. Await handler task with timeout, abort if stuck
+        if let Some(task_handle) = self.handler_task.take() {
+            match Arc::try_unwrap(task_handle) {
+                Ok(handle) => {
+                    let abort_handle = handle.abort_handle();
+                    match tokio::time::timeout(Duration::from_secs(2), handle).await {
+                        Ok(Ok(())) => log::debug!("Handler task completed"),
+                        Ok(Err(e)) => log::error!("Handler task error: {e:?}"),
+                        Err(_) => {
+                            log::warn!("Timeout waiting for handler task, aborting");
+                            abort_handle.abort();
+                        }
+                    }
+                }
+                Err(arc_handle) => {
+                    log::debug!("Cannot unwrap task handle, aborting");
+                    arc_handle.abort();
+                }
+            }
+        }
+
+        // Reset connection mode to Closed
         self.connection_mode
             .store(Arc::new(AtomicU8::new(ConnectionMode::Closed as u8)));
 
-        // Abort handler task if it exists
-        if let Some(handle) = self.handler_task.take() {
-            handle.abort();
-        }
-
-        // Drop receiver to stop any consumers
         self.out_rx = None;
 
-        log::info!("Disconnected dYdX WebSocket");
+        log::debug!("Disconnected dYdX WebSocket");
         Ok(())
     }
 
-    /// Sends a text message via the handler.
     async fn send_text_inner(&self, text: &str) -> DydxWsResult<()> {
         self.cmd_tx
             .read()

@@ -32,8 +32,8 @@ use serde::{self, Deserialize, Serialize};
 
 use crate::{
     common::enums::{
-        OKXInstrumentType, OKXOrderStatus, OKXOrderType, OKXPositionMode, OKXPositionSide,
-        OKXTradeMode,
+        OKXAlgoOrderType, OKXInstrumentType, OKXOrderStatus, OKXOrderType, OKXPositionMode,
+        OKXPositionSide, OKXTradeMode,
     },
     http::error::BuildError,
 };
@@ -96,6 +96,19 @@ pub struct GetInstrumentsParams {
     /// Instrument ID, e.g. BTC-USD-SWAP.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inst_id: Option<String>,
+}
+
+/// Parameters for the GET /api/v5/public/opt-summary endpoint.
+#[derive(Clone, Debug, Deserialize, Serialize, Default, Builder)]
+#[builder(default)]
+#[builder(setter(into, strip_option))]
+#[serde(rename_all = "camelCase")]
+pub struct GetOptionSummaryParams {
+    /// Instrument family. Only applicable to OPTION.
+    pub inst_family: String,
+    /// Contract expiry date in YYMMDD format, e.g. "250328".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exp_time: Option<String>,
 }
 
 /// Parameters for the GET /api/v5/market/history-trades endpoint.
@@ -285,6 +298,38 @@ pub struct GetIndexTickerParams {
     pub quote_ccy: Option<String>,
 }
 
+/// Parameters for the GET /api/v5/market/books endpoint.
+#[derive(Clone, Debug, Deserialize, Serialize, Default, Builder)]
+#[builder(default)]
+#[builder(setter(into, strip_option))]
+#[serde(rename_all = "camelCase")]
+pub struct GetOrderBookParams {
+    /// Instrument ID, e.g. "BTC-USDT-SWAP".
+    pub inst_id: String,
+    /// Order book depth per side. Maximum 400, default 1.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sz: Option<u32>,
+}
+
+/// Parameters for the GET /api/v5/public/funding-rate-history endpoint.
+#[derive(Clone, Debug, Deserialize, Serialize, Default, Builder)]
+#[builder(default)]
+#[builder(setter(into, strip_option))]
+#[serde(rename_all = "camelCase")]
+pub struct GetFundingRateHistoryParams {
+    /// Instrument ID, e.g. "BTC-USDT-SWAP".
+    pub inst_id: String,
+    /// Pagination: records newer than this timestamp (ms).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before: Option<String>,
+    /// Pagination: records older than this timestamp (ms).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after: Option<String>,
+    /// Number of results per request (default 100, max 100).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
 /// Parameters for the GET /api/v5/trade/order-history endpoint.
 #[derive(Clone, Debug, Deserialize, Serialize, Default, Builder)]
 #[builder(default)]
@@ -367,7 +412,7 @@ pub struct GetAlgoOrdersParams {
     pub inst_id: Option<String>,
     /// Order type filter (optional).
     #[serde(rename = "ordType", skip_serializing_if = "Option::is_none")]
-    pub ord_type: Option<OKXOrderType>,
+    pub ord_type: Option<OKXAlgoOrderType>,
     /// State filter (optional).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<OKXOrderStatus>,

@@ -247,11 +247,11 @@ cdef class Quantity:
     def __neg__(self) -> decimal.Decimal:
         return self.as_decimal().__neg__()
 
-    def __pos__(self) -> decimal.Decimal:
-        return self.as_decimal().__pos__()
+    def __pos__(self) -> Quantity:
+        return self
 
-    def __abs__(self) -> decimal.Decimal:
-        return abs(self.as_decimal())
+    def __abs__(self) -> Quantity:
+        return self
 
     def __round__(self, ndigits = None) -> decimal.Decimal:
         return round(self.as_decimal(), ndigits)
@@ -364,6 +364,27 @@ cdef class Quantity:
         cdef Quantity quantity = Quantity.__new__(Quantity)
         quantity._mem = quantity_from_raw(raw, precision)
         return quantity
+
+    @staticmethod
+    cdef Quantity from_decimal_c(amount, uint8_t precision):
+        if precision > FIXED_PRECISION:
+            raise ValueError(
+                f"invalid `precision` greater than max {FIXED_PRECISION}, was {precision}"
+            )
+        if amount < 0:
+            raise ValueError(
+                f"invalid negative quantity, was {amount}"
+            )
+        cdef uint8_t precision_diff = FIXED_PRECISION - precision
+        scaled = amount * (10 ** precision)
+        integral = scaled.to_integral_value(rounding=decimal.ROUND_HALF_EVEN)
+        raw_py = int(integral) * (10 ** precision_diff)
+        if raw_py > QUANTITY_RAW_MAX:
+            raise ValueError(
+                f"invalid raw quantity value exceeds max {QUANTITY_RAW_MAX}, was {raw_py}"
+            )
+        cdef QuantityRaw raw = <QuantityRaw>(raw_py)
+        return Quantity.from_raw_c(raw, precision)
 
     @staticmethod
     cdef object _extract_decimal(object obj):
@@ -588,7 +609,13 @@ cdef class Quantity:
         """
         Condition.not_none(value, "value")
 
-        return Quantity.from_str_c(str(value))
+        sign, digits, exponent = value.as_tuple()
+        precision_int = max(0, -exponent)
+        if precision_int > FIXED_PRECISION:
+            raise ValueError(
+                f"invalid `precision` greater than max {FIXED_PRECISION}, was {precision_int}"
+            )
+        return Quantity.from_decimal_c(value, <uint8_t>precision_int)
 
     cpdef str to_formatted_str(self):
         """
@@ -774,14 +801,16 @@ cdef class Price:
             return float(a) % float(b)
         return Price._extract_decimal(a) % Price._extract_decimal(b)
 
-    def __neg__(self) -> decimal.Decimal:
-        return self.as_decimal().__neg__()
+    def __neg__(self) -> Price:
+        return Price.from_raw_c(-self._mem.raw, self._mem.precision)
 
-    def __pos__(self) -> decimal.Decimal:
-        return self.as_decimal().__pos__()
+    def __pos__(self) -> Price:
+        return self
 
-    def __abs__(self) -> decimal.Decimal:
-        return abs(self.as_decimal())
+    def __abs__(self) -> Price:
+        if self._mem.raw < 0:
+            return Price.from_raw_c(-self._mem.raw, self._mem.precision)
+        return self
 
     def __round__(self, ndigits = None) -> decimal.Decimal:
         return round(self.as_decimal(), ndigits)
@@ -836,6 +865,23 @@ cdef class Price:
         cdef Price price = Price.__new__(Price)
         price._mem = price_from_raw(raw, precision)
         return price
+
+    @staticmethod
+    cdef Price from_decimal_c(amount, uint8_t precision):
+        if precision > FIXED_PRECISION:
+            raise ValueError(
+                f"invalid `precision` greater than max {FIXED_PRECISION}, was {precision}"
+            )
+        cdef uint8_t precision_diff = FIXED_PRECISION - precision
+        scaled = amount * (10 ** precision)
+        integral = scaled.to_integral_value(rounding=decimal.ROUND_HALF_EVEN)
+        raw_py = int(integral) * (10 ** precision_diff)
+        if raw_py < PRICE_RAW_MIN or raw_py > PRICE_RAW_MAX:
+            raise ValueError(
+                f"invalid raw price value outside range [{PRICE_RAW_MIN}, {PRICE_RAW_MAX}], was {raw_py}"
+            )
+        cdef PriceRaw raw = <PriceRaw>(raw_py)
+        return Price.from_raw_c(raw, precision)
 
     @staticmethod
     cdef object _extract_decimal(object obj):
@@ -1074,7 +1120,13 @@ cdef class Price:
         """
         Condition.not_none(value, "value")
 
-        return Price.from_str_c(str(value))
+        sign, digits, exponent = value.as_tuple()
+        precision_int = max(0, -exponent)
+        if precision_int > FIXED_PRECISION:
+            raise ValueError(
+                f"invalid `precision` greater than max {FIXED_PRECISION}, was {precision_int}"
+            )
+        return Price.from_decimal_c(value, <uint8_t>precision_int)
 
     cpdef str to_formatted_str(self):
         """
@@ -1257,14 +1309,16 @@ cdef class Money:
             return float(a) % float(b)
         return Money._extract_decimal(a) % Money._extract_decimal(b)
 
-    def __neg__(self) -> decimal.Decimal:
-        return self.as_decimal().__neg__()
+    def __neg__(self) -> Money:
+        return Money.from_raw_c(-self._mem.raw, self.currency)
 
-    def __pos__(self) -> decimal.Decimal:
-        return self.as_decimal().__pos__()
+    def __pos__(self) -> Money:
+        return self
 
-    def __abs__(self) -> decimal.Decimal:
-        return abs(self.as_decimal())
+    def __abs__(self) -> Money:
+        if self._mem.raw < 0:
+            return Money.from_raw_c(-self._mem.raw, self.currency)
+        return self
 
     def __round__(self, ndigits = None) -> decimal.Decimal:
         return round(self.as_decimal(), ndigits)
@@ -1317,6 +1371,20 @@ cdef class Money:
         cdef Money money = Money.__new__(Money)
         money._mem = money_from_raw(raw, currency._mem)
         return money
+
+    @staticmethod
+    cdef Money from_decimal_c(amount, Currency currency):
+        cdef uint8_t precision = currency._mem.precision
+        cdef uint8_t precision_diff = FIXED_PRECISION - precision
+        scaled = amount * (10 ** precision)
+        integral = scaled.to_integral_value(rounding=decimal.ROUND_HALF_EVEN)
+        raw_py = int(integral) * (10 ** precision_diff)
+        if raw_py < MONEY_RAW_MIN or raw_py > MONEY_RAW_MAX:
+            raise ValueError(
+                f"invalid raw money value outside range [{MONEY_RAW_MIN}, {MONEY_RAW_MAX}], was {raw_py}"
+            )
+        cdef MoneyRaw raw = <MoneyRaw>(raw_py)
+        return Money.from_raw_c(raw, currency)
 
     @staticmethod
     cdef object _extract_decimal(object obj):
@@ -1476,7 +1544,7 @@ cdef class Money:
         Condition.not_none(amount, "amount")
         Condition.not_none(currency, "currency")
 
-        return Money.from_str_c(f"{amount} {currency.code}")
+        return Money.from_decimal_c(amount, currency)
 
     cpdef str to_formatted_str(self):
         """

@@ -82,13 +82,18 @@ cdef class AccountsManager:
         AccountState
 
         """
+        cdef list margins = []
+        if account.is_margin_account:
+            margins = list(account.margins().values())
+            margins.extend(account.account_margins().values())
+
         return AccountState(
             account_id=account.id,
             account_type=account.type,
             base_currency=account.base_currency,
             reported=False,
             balances=list(account.balances().values()),
-            margins=list(account.margins().values()) if account.is_margin_account else [],
+            margins=margins,
             info={},
             event_id=UUID4(),
             ts_event=ts_event,
@@ -557,7 +562,7 @@ cdef class AccountsManager:
                 if (
                     pnl.is_positive()
                     or fill.order_type == OrderType.MARKET
-                    or instrument.instrument_class in [InstrumentClass.SPORTS_BETTING]
+                    or (instrument is not None and instrument.instrument_class in [InstrumentClass.SPORTS_BETTING])
                 ):
                     new_free = new_free.add(pnl)
                 else:

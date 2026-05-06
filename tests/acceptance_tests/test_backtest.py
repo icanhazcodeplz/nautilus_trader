@@ -79,6 +79,8 @@ from nautilus_trader.model.enums import AccountType
 from nautilus_trader.model.enums import BookType
 from nautilus_trader.model.enums import OmsType
 from nautilus_trader.model.enums import OrderSide
+from nautilus_trader.model.events import OrderAccepted
+from nautilus_trader.model.events import OrderFilled
 from nautilus_trader.model.events import PositionClosed
 from nautilus_trader.model.events import PositionEvent
 from nautilus_trader.model.events import PositionOpened
@@ -860,6 +862,7 @@ class TestBacktestAcceptanceTestsMarketMaking:
             oms_type=OmsType.NETTING,
             starting_balances=[Money(10_000, GBP)],
             book_type=BookType.L2_MBP,
+            trade_execution=False,
         )
 
         data = BetfairDataProvider.betfair_feed_parsed(market_id="1-166811431")
@@ -896,13 +899,13 @@ class TestBacktestAcceptanceTestsMarketMaking:
         self.engine.run()
 
         # Assert
-        assert self.engine.kernel.msgbus.sent_count == 23_688
-        assert self.engine.kernel.msgbus.pub_count == 26_806
+        assert self.engine.kernel.msgbus.sent_count == 23_679
+        assert self.engine.kernel.msgbus.pub_count == 26_797
         assert self.engine.iteration == 8_198
         account = self.engine.portfolio.account(self.venue)
         assert account is not None
-        assert account.event_count == 3_530
-        assert account.balance_total(GBP) == Money(-19_351.96, GBP)
+        assert account.event_count == 3_526
+        assert account.balance_total(GBP) == Money(-19_351.21, GBP)
 
 
 class StratTestConfig(StrategyConfig):  # type: ignore [misc]
@@ -1526,6 +1529,7 @@ class TestBacktestPnLAlignmentAcceptance:
         from decimal import Decimal
 
         position_report_sum = Decimal(0)
+
         if not positions_report.empty:
             for pnl_str in positions_report["realized_pnl"]:
                 pnl_money = Money.from_str(pnl_str)
@@ -1559,6 +1563,319 @@ class TestBacktestPnLAlignmentAcceptance:
         # We don't assert equality here since portfolio calculation has different behavior
 
 
+class TestBacktestCommandSettling:
+    """
+    Tests that the engine settle loop processes cascading commands within the same tick.
+    """
+
+    def test_cascading_stop_loss_on_fill_processed_same_tick(self):
+        """
+        Strategy submits stop-loss in on_order_filled; verify it's accepted on the same
+        tick.
+        """
+
+        # Arrange
+        class CascadingStopStrategy(Strategy):
+            def __init__(self):
+                super().__init__()
+                self.instrument_id = InstrumentId.from_str("AUD/USD.SIM")
+                self.entry_filled = False
+                self.stop_order = None
+                self.tick_count = 0
+
+            def on_start(self):
+                self.subscribe_quote_ticks(self.instrument_id)
+
+            def on_quote_tick(self, tick: QuoteTick):
+                self.tick_count += 1
+
+                if self.tick_count == 1:
+                    order = self.order_factory.market(
+                        instrument_id=self.instrument_id,
+                        order_side=OrderSide.BUY,
+                        quantity=Quantity.from_int(100_000),
+                    )
+                    self.submit_order(order)
+
+            def on_event(self, event):
+                if isinstance(event, OrderFilled) and not self.entry_filled:
+                    self.entry_filled = True
+
+                    self.stop_order = self.order_factory.stop_market(
+                        instrument_id=self.instrument_id,
+                        order_side=OrderSide.SELL,
+                        quantity=Quantity.from_int(100_000),
+                        trigger_price=Price.from_str("0.69950"),
+                    )
+                    self.submit_order(self.stop_order)
+
+        config = BacktestEngineConfig(
+            logging=LoggingConfig(bypass_logging=True),
+        )
+        engine = BacktestEngine(config=config)
+        engine.add_venue(
+            venue=Venue("SIM"),
+            oms_type=OmsType.HEDGING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+        )
+
+        instrument = TestInstrumentProvider.default_fx_ccy("AUD/USD", venue=Venue("SIM"))
+        engine.add_instrument(instrument)
+
+        timestamps = pd.date_range(start="2020-01-01", periods=3, freq="1min")
+        quotes = []
+
+        for i, ts in enumerate(timestamps):
+            bid = 0.70000 + (i * 0.00001)
+            quote = QuoteTick(
+                instrument_id=instrument.id,
+                bid_price=Price.from_str(f"{bid:.5f}"),
+                ask_price=Price.from_str(f"{bid + 0.00002:.5f}"),
+                bid_size=Quantity.from_int(1_000_000),
+                ask_size=Quantity.from_int(1_000_000),
+                ts_event=pd.Timestamp(ts).value,
+                ts_init=pd.Timestamp(ts).value,
+            )
+            quotes.append(quote)
+
+        engine.add_data(quotes)
+        strategy = CascadingStopStrategy()
+        engine.add_strategy(strategy)
+
+        # Act
+        engine.run()
+
+        # Assert
+        assert strategy.entry_filled
+        assert strategy.stop_order is not None
+
+        # Stop-loss must be accepted on the same tick as the fill,
+        # not stranded until the next data point
+        stop_from_cache = engine.cache.order(strategy.stop_order.client_order_id)
+        assert stop_from_cache is not None
+
+        entry_fill_ts = engine.cache.orders()[0].ts_last
+        stop_accept_ts = stop_from_cache.ts_last
+        assert stop_accept_ts == entry_fill_ts
+
+        engine.dispose()
+
+    def test_multi_level_cascade_all_settled_same_tick(self):
+        """
+        Fill triggers stop-loss submission, stop-loss acceptance triggers a second
+        order; verify all processed in the same tick.
+        """
+
+        class MultiCascadeStrategy(Strategy):
+            def __init__(self):
+                super().__init__()
+                self.instrument_id = InstrumentId.from_str("AUD/USD.SIM")
+                self.tick_count = 0
+                self.entry_order = None
+                self.stop_order = None
+                self.limit_order = None
+                self.entry_filled = False
+                self.stop_accepted = False
+
+            def on_start(self):
+                self.subscribe_quote_ticks(self.instrument_id)
+
+            def on_quote_tick(self, tick: QuoteTick):
+                self.tick_count += 1
+
+                if self.tick_count == 1:
+                    self.entry_order = self.order_factory.market(
+                        instrument_id=self.instrument_id,
+                        order_side=OrderSide.BUY,
+                        quantity=Quantity.from_int(100_000),
+                    )
+                    self.submit_order(self.entry_order)
+
+            def on_event(self, event):
+                # Level 1: entry fill → submit stop-loss
+                if isinstance(event, OrderFilled) and not self.entry_filled:
+                    self.entry_filled = True
+                    self.stop_order = self.order_factory.stop_market(
+                        instrument_id=self.instrument_id,
+                        order_side=OrderSide.SELL,
+                        quantity=Quantity.from_int(100_000),
+                        trigger_price=Price.from_str("0.69950"),
+                    )
+                    self.submit_order(self.stop_order)
+
+                # Level 2: stop accepted → submit passive limit
+                if (
+                    isinstance(event, OrderAccepted)
+                    and self.stop_order is not None
+                    and event.client_order_id == self.stop_order.client_order_id
+                    and not self.stop_accepted
+                ):
+                    self.stop_accepted = True
+                    self.limit_order = self.order_factory.limit(
+                        instrument_id=self.instrument_id,
+                        order_side=OrderSide.SELL,
+                        quantity=Quantity.from_int(100_000),
+                        price=Price.from_str("0.70100"),
+                    )
+                    self.submit_order(self.limit_order)
+
+        config = BacktestEngineConfig(
+            logging=LoggingConfig(bypass_logging=True),
+        )
+        engine = BacktestEngine(config=config)
+        engine.add_venue(
+            venue=Venue("SIM"),
+            oms_type=OmsType.HEDGING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+        )
+
+        instrument = TestInstrumentProvider.default_fx_ccy("AUD/USD", venue=Venue("SIM"))
+        engine.add_instrument(instrument)
+
+        timestamps = pd.date_range(start="2020-01-01", periods=3, freq="1min")
+        quotes = []
+
+        for i, ts in enumerate(timestamps):
+            bid = 0.70000 + (i * 0.00001)
+            quote = QuoteTick(
+                instrument_id=instrument.id,
+                bid_price=Price.from_str(f"{bid:.5f}"),
+                ask_price=Price.from_str(f"{bid + 0.00002:.5f}"),
+                bid_size=Quantity.from_int(1_000_000),
+                ask_size=Quantity.from_int(1_000_000),
+                ts_event=pd.Timestamp(ts).value,
+                ts_init=pd.Timestamp(ts).value,
+            )
+            quotes.append(quote)
+
+        engine.add_data(quotes)
+        strategy = MultiCascadeStrategy()
+        engine.add_strategy(strategy)
+
+        # Act
+        engine.run()
+
+        # Assert - all three orders submitted and processed on the same tick
+        assert strategy.entry_filled
+        assert strategy.stop_accepted
+        assert strategy.limit_order is not None
+
+        entry_ts = engine.cache.order(strategy.entry_order.client_order_id).ts_last
+        stop_ts = engine.cache.order(strategy.stop_order.client_order_id).ts_last
+        limit_ts = engine.cache.order(strategy.limit_order.client_order_id).ts_last
+
+        assert stop_ts == entry_ts
+        assert limit_ts == entry_ts
+
+        # All three orders should exist: entry filled, stop + limit open
+        assert engine.cache.orders_open_count() == 2
+        assert engine.cache.orders_total_count() == 3
+
+        engine.dispose()
+
+    def test_all_same_timestamp_timer_commands_settled(self):
+        """
+        Two timer callbacks at the same timestamp both submit market orders.
+
+        All orders must be settled at the timer's timestamp, not deferred to the next
+        data point.
+
+        """
+
+        # Arrange
+        class DualTimerStrategy(Strategy):
+            def __init__(self):
+                super().__init__()
+                self.instrument_id = InstrumentId.from_str("AUD/USD.SIM")
+                self.orders_submitted = []
+
+            def on_start(self):
+                self.subscribe_quote_ticks(self.instrument_id)
+                timer_time = pd.Timestamp("2020-01-01 00:00:30", tz="UTC")
+                self.clock.set_time_alert(
+                    "timer_a",
+                    timer_time,
+                    self._on_timer_a,
+                )
+                self.clock.set_time_alert(
+                    "timer_b",
+                    timer_time,
+                    self._on_timer_b,
+                )
+
+            def _on_timer_a(self, event):
+                order = self.order_factory.market(
+                    instrument_id=self.instrument_id,
+                    order_side=OrderSide.BUY,
+                    quantity=Quantity.from_int(100_000),
+                )
+                self.orders_submitted.append(order)
+                self.submit_order(order)
+
+            def _on_timer_b(self, event):
+                order = self.order_factory.market(
+                    instrument_id=self.instrument_id,
+                    order_side=OrderSide.SELL,
+                    quantity=Quantity.from_int(100_000),
+                )
+                self.orders_submitted.append(order)
+                self.submit_order(order)
+
+        config = BacktestEngineConfig(
+            logging=LoggingConfig(bypass_logging=True),
+        )
+        engine = BacktestEngine(config=config)
+        engine.add_venue(
+            venue=Venue("SIM"),
+            oms_type=OmsType.HEDGING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+        )
+
+        instrument = TestInstrumentProvider.default_fx_ccy("AUD/USD", venue=Venue("SIM"))
+        engine.add_instrument(instrument)
+
+        # Data spans timer time so the timer fires between data points
+        timestamps = pd.date_range(start="2020-01-01", periods=3, freq="1min")
+        quotes = []
+
+        for ts in timestamps:
+            quote = QuoteTick(
+                instrument_id=instrument.id,
+                bid_price=Price.from_str("0.70000"),
+                ask_price=Price.from_str("0.70002"),
+                bid_size=Quantity.from_int(1_000_000),
+                ask_size=Quantity.from_int(1_000_000),
+                ts_event=pd.Timestamp(ts).value,
+                ts_init=pd.Timestamp(ts).value,
+            )
+            quotes.append(quote)
+
+        engine.add_data(quotes)
+        strategy = DualTimerStrategy()
+        engine.add_strategy(strategy)
+
+        # Act
+        engine.run()
+
+        # Assert - both orders submitted and filled
+        assert len(strategy.orders_submitted) == 2
+
+        timer_ts = pd.Timestamp("2020-01-01 00:00:30", tz="UTC").value
+
+        for order in strategy.orders_submitted:
+            cached = engine.cache.order(order.client_order_id)
+            assert cached.is_closed
+            assert cached.ts_last == timer_ts
+
+        engine.dispose()
+
+
 @pytest.mark.xdist_group(name="databento_catalog")
 class TestBacktestNodeWithBacktestDataIterator:
     @pytest.fixture(autouse=True)
@@ -1567,6 +1884,7 @@ class TestBacktestNodeWithBacktestDataIterator:
         catalog_data_path = (
             PACKAGE_ROOT / "tests" / "test_data" / "databento" / "options_catalog" / "data"
         )
+
         if catalog_data_path.exists():
             shutil.rmtree(catalog_data_path)
 
@@ -1596,17 +1914,19 @@ class TestBacktestNodeWithBacktestDataIterator:
 
         # Assert
         expected_order_filled_messages = [
-            "Order filled: ESM4 P5230.XCME, qty=10, price=97.25, trade_id=XCME-1-001",
-            "Order filled: ESM4 P5250.XCME, qty=10, price=108.50, trade_id=XCME-2-001",
-            "Order filled: ESM4.XCME, qty=1, price=5199.75, trade_id=XCME-3-002",
+            "Order filled: ESM4 P5230.XCME, qty=10, price=97.25, trade_id=T-d47be5ca9f6901ab-001",
+            "Order filled: ESM4 P5250.XCME, qty=10, price=108.50, trade_id=T-7f8e274f85bbdd3e-001",
+            "Order filled: ESM4.XCME, qty=1, price=5199.75, trade_id=T-75d12aa71a6bb07d-004",
             "Order filled: ((1))ESM4 P5230___(1)ESM4 P5250.XCME, qty=5, price=10.75, "
-            "trade_id=XCME-5-001",
-            "Order filled: ESM4 P5230.XCME, qty=5, price=97.62, trade_id=XCME-5-001-0",
-            "Order filled: ESM4 P5250.XCME, qty=5, price=108.38, trade_id=XCME-5-001-1",
-            "Order filled: ((1))ESM4___(1)NQM4.XCME, qty=2, price=12930.50, trade_id=XCME-6-001",
-            "Order filled: ((1))ESM4___(1)NQM4.XCME, qty=3, price=12930.75, trade_id=XCME-6-002",
-            "Order filled: ESM4.XCME, qty=2, price=5199.62, trade_id=XCME-6-002-0",
-            "Order filled: NQM4.XCME, qty=2, price=18130.12, trade_id=XCME-6-002-1",
+            "trade_id=T-75c4107db8ae4ad7-001",
+            "Order filled: ESM4 P5230.XCME, qty=5, price=97.62, trade_id=T-75c4107db8ae4ad7-001-0",
+            "Order filled: ESM4 P5250.XCME, qty=5, price=108.38, trade_id=T-75c4107db8ae4ad7-001-1",
+            "Order filled: ((1))ESM4___(1)NQM4.XCME, qty=2, price=12930.50, "
+            "trade_id=T-8ba53c03fcdf19ba-001",
+            "Order filled: ((1))ESM4___(1)NQM4.XCME, qty=3, price=12930.75, "
+            "trade_id=T-8ba53c03fcdf19ba-002",
+            "Order filled: ESM4.XCME, qty=2, price=5199.62, trade_id=T-8ba53c03fcdf19ba-002-0",
+            "Order filled: NQM4.XCME, qty=2, price=18130.12, trade_id=T-8ba53c03fcdf19ba-002-1",
         ]
         assert order_filled_messages == expected_order_filled_messages
 
@@ -1630,8 +1950,8 @@ class TestBacktestNodeWithBacktestDataIterator:
         expected_spread_bar_messages = [
             "Historical Bar: ((1))ESM4___(1)NQM4.XCME-2-MINUTE-ASK-INTERNAL,12928.25,12928.25,12927.25,12927.25,4,1715248560000000000, ts=2024-05-09T09:56:00.000000000Z",
             "Historical Bar: ((1))ESM4___(1)NQM4.XCME-2-MINUTE-ASK-INTERNAL,12927.50,12928.00,12927.50,12928.00,3,1715248680000000000, ts=2024-05-09T09:58:00.000000000Z",
-            "Bar: ((1))ESM4___(1)NQM4.XCME-2-MINUTE-ASK-INTERNAL,12930.25,12930.25,12930.25,12930.25,1,1715248800000000000, ts=2024-05-09T10:00:00.000000000Z",
-            "Bar: ((1))ESM4___(1)NQM4.XCME-2-MINUTE-ASK-INTERNAL,12930.50,12931.75,12930.25,12931.75,10,1715248920000000000, ts=2024-05-09T10:02:00.000000000Z",
+            "Bar: ((1))ESM4___(1)NQM4.XCME-2-MINUTE-ASK-INTERNAL,12930.25,12930.50,12930.25,12930.50,3,1715248800000000000, ts=2024-05-09T10:00:00.000000000Z",
+            "Bar: ((1))ESM4___(1)NQM4.XCME-2-MINUTE-ASK-INTERNAL,12930.25,12931.75,12930.25,12931.75,8,1715248920000000000, ts=2024-05-09T10:02:00.000000000Z",
             "Bar: ((1))ESM4___(1)NQM4.XCME-2-MINUTE-ASK-INTERNAL,12933.00,12933.00,12932.50,12932.50,4,1715249040000000000, ts=2024-05-09T10:04:00.000000000Z",
         ]
         assert spread_bar_messages == expected_spread_bar_messages
@@ -1779,6 +2099,7 @@ def run_backtest(test_callback=None, with_data=True, log_path=None):
 
     # Create and write custom data to catalog (every minute between 10:00 and 10:05)
     custom_data_list = []
+
     for minute in range(6):  # 0, 1, 2, 3, 4, 5 (10:00 to 10:05)
         timestamp_str = f"2024-05-09T10:0{minute}:00"
         ts_nanos = dt_to_unix_nanos(time_object_to_dt(timestamp_str))
@@ -1933,6 +2254,7 @@ def run_backtest(test_callback=None, with_data=True, log_path=None):
             start=backtest_start_time,
             end=end_time,
             raise_exception=True,
+            dispose_on_completion=False,
         ),
     ]
 
@@ -2019,8 +2341,7 @@ class OptionStrategy(Strategy):
         self.request_quote_ticks(
             self.config.spread_id2,
             start=time_object_to_dt(self.config.start_time),
-            # Note: we need to request up to 10:00 so the spread quote at 9:59 is produced
-            end=self.clock.utc_now() - pd.Timedelta(minutes=0),
+            end=self.clock.utc_now() - pd.Timedelta(minutes=1),
             params=self.default_data_params,
         )
 
@@ -2028,8 +2349,7 @@ class OptionStrategy(Strategy):
         self.request_aggregated_bars(
             [self.bar_type_3],
             start=time_object_to_dt(self.config.start_time),
-            # Note: we need to request up to 10:00 so the spread quote at 9:59 is produced
-            end=self.clock.utc_now() - pd.Timedelta(minutes=0),
+            end=self.clock.utc_now() - pd.Timedelta(minutes=1),
             update_subscriptions=True,
             params=self.default_data_params,
         )

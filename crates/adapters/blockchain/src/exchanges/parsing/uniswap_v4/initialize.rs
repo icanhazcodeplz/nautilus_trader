@@ -14,6 +14,7 @@
 // -------------------------------------------------------------------------------------------------
 
 use alloy::{dyn_abi::SolType, primitives::Address, sol};
+use nautilus_core::hex;
 use nautilus_model::defi::{PoolIdentifier, rpc::RpcLog};
 use ustr::Ustr;
 
@@ -67,7 +68,7 @@ sol! {
 ///
 /// # Panics
 ///
-/// Panics if the block number is not set in the log.
+/// Panics if the log address is not set.
 pub fn parse_initialize_event_hypersync(log: HypersyncLog) -> anyhow::Result<PoolCreatedEvent> {
     validate_event_signature_hash("InitializeEvent", INITIALIZE_EVENT_SIGNATURE_HASH, &log)?;
 
@@ -89,7 +90,7 @@ pub fn parse_initialize_event_hypersync(log: HypersyncLog) -> anyhow::Result<Poo
     let topics = &log.topics;
     if topics.len() < 4 {
         anyhow::bail!(
-            "Initialize event missing topics: expected 4, got {}",
+            "Initialize event missing topics: expected 4, was {}",
             topics.len()
         );
     }
@@ -99,7 +100,7 @@ pub fn parse_initialize_event_hypersync(log: HypersyncLog) -> anyhow::Result<Poo
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("Missing poolId topic"))?
         .as_ref();
-    let pool_identifier = Ustr::from(format!("0x{}", hex::encode(pool_id_bytes)).as_str());
+    let pool_identifier = Ustr::from(&hex::encode_prefixed(pool_id_bytes));
 
     let currency0 = Address::from_slice(
         topics[2]
@@ -125,7 +126,7 @@ pub fn parse_initialize_event_hypersync(log: HypersyncLog) -> anyhow::Result<Poo
         // Validate minimum data length (5 fields × 32 bytes = 160 bytes)
         if data_bytes.len() < 160 {
             anyhow::bail!(
-                "Initialize event data too short: expected at least 160 bytes, got {}",
+                "Initialize event data too short: expected at least 160 bytes, was {}",
                 data_bytes.len()
             );
         }
@@ -173,14 +174,14 @@ pub fn parse_initialize_event_rpc(log: &RpcLog) -> anyhow::Result<PoolCreatedEve
     // topics[3] = currency1 (indexed)
     if log.topics.len() < 4 {
         anyhow::bail!(
-            "Initialize event missing topics: expected 4, got {}",
+            "Initialize event missing topics: expected 4, was {}",
             log.topics.len()
         );
     }
 
     // Extract Pool ID from topics[1] - this is the unique identifier for V4 pools
     let pool_id_bytes = rpc_helpers::decode_hex(&log.topics[1])?;
-    let pool_identifier = Ustr::from(format!("0x{}", hex::encode(pool_id_bytes)).as_str());
+    let pool_identifier = Ustr::from(&hex::encode_prefixed(pool_id_bytes));
 
     let currency0_bytes = rpc_helpers::decode_hex(&log.topics[2])?;
     let currency0 = Address::from_slice(&currency0_bytes[12..32]);
@@ -194,7 +195,7 @@ pub fn parse_initialize_event_rpc(log: &RpcLog) -> anyhow::Result<PoolCreatedEve
     // Validate minimum data length (5 fields × 32 bytes = 160 bytes)
     if data_bytes.len() < 160 {
         anyhow::bail!(
-            "Initialize event data too short: expected at least 160 bytes, got {}",
+            "Initialize event data too short: expected at least 160 bytes, was {}",
             data_bytes.len()
         );
     }

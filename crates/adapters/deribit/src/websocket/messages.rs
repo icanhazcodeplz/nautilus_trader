@@ -15,8 +15,14 @@
 
 //! Data structures for Deribit WebSocket JSON-RPC messages.
 
+use std::str::FromStr;
+
+use nautilus_core::serialization::{deserialize_decimal, deserialize_optional_decimal};
 use nautilus_model::{
-    data::{Data, FundingRateUpdate, OrderBookDeltas},
+    data::{
+        Data, FundingRateUpdate, InstrumentStatus, OrderBookDeltas, greeks::OptionGreekValues,
+        option_chain::OptionGreeks,
+    },
     events::{
         AccountState, OrderAccepted, OrderCancelRejected, OrderCanceled, OrderExpired,
         OrderModifyRejected, OrderRejected, OrderUpdated,
@@ -24,8 +30,8 @@ use nautilus_model::{
     instruments::InstrumentAny,
     reports::{FillReport, OrderStatusReport},
 };
-use rust_decimal::Decimal;
-use serde::{Deserialize, Serialize};
+use rust_decimal::{Decimal, prelude::ToPrimitive};
+use serde::{Deserialize, Deserializer, Serialize, de};
 use ustr::Ustr;
 
 use super::enums::{DeribitBookAction, DeribitBookMsgType, DeribitHeartbeatType};
@@ -138,9 +144,11 @@ pub struct DeribitTradeMsg {
     /// Instrument name.
     pub instrument_name: Ustr,
     /// Trade price.
-    pub price: f64,
+    #[serde(deserialize_with = "deserialize_decimal")]
+    pub price: Decimal,
     /// Trade amount (contracts).
-    pub amount: f64,
+    #[serde(deserialize_with = "deserialize_decimal")]
+    pub amount: Decimal,
     /// Trade direction ("buy" or "sell").
     pub direction: String,
     /// Trade timestamp in milliseconds.
@@ -150,26 +158,32 @@ pub struct DeribitTradeMsg {
     /// Tick direction (0-3).
     pub tick_direction: i8,
     /// Index price at trade time.
-    pub index_price: f64,
+    #[serde(deserialize_with = "deserialize_decimal")]
+    pub index_price: Decimal,
     /// Mark price at trade time.
-    pub mark_price: f64,
+    #[serde(deserialize_with = "deserialize_decimal")]
+    pub mark_price: Decimal,
     /// IV (for options).
-    pub iv: Option<f64>,
+    #[serde(default, deserialize_with = "deserialize_optional_decimal")]
+    pub iv: Option<Decimal>,
     /// Liquidation indicator.
     pub liquidation: Option<String>,
     /// Combo trade ID (if part of combo).
-    pub combo_trade_id: Option<i64>,
+    pub combo_trade_id: Option<String>,
     /// Block trade ID.
     pub block_trade_id: Option<String>,
     /// Combo ID.
     pub combo_id: Option<String>,
 }
 
-/// Order book data from book.{instrument}.raw channel.
+/// Order book data from book.{instrument}.{interval} or book.{instrument}.{group}.{depth}.{interval} channels.
+///
+/// Note: The grouped book channel (`book.{instrument}.{group}.{depth}.{interval}`) does not include
+/// a `type` field since it always sends complete snapshots. We default to `Snapshot` when not present.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DeribitBookMsg {
-    /// Message type (snapshot or change).
-    #[serde(rename = "type")]
+    /// Message type (snapshot or change). Defaults to Snapshot for grouped channels.
+    #[serde(rename = "type", default = "default_book_msg_type")]
     pub msg_type: DeribitBookMsgType,
     /// Instrument name.
     pub instrument_name: Ustr,
@@ -185,13 +199,18 @@ pub struct DeribitBookMsg {
     pub asks: Vec<Vec<serde_json::Value>>,
 }
 
+/// Default book message type for grouped channels (always snapshot).
+fn default_book_msg_type() -> DeribitBookMsgType {
+    DeribitBookMsgType::Snapshot
+}
+
 /// Parsed order book level.
 #[derive(Debug, Clone)]
 pub struct DeribitBookLevel {
     /// Price level.
-    pub price: f64,
+    pub price: Decimal,
     /// Amount at this level.
-    pub amount: f64,
+    pub amount: Decimal,
     /// Action for delta updates.
     pub action: Option<DeribitBookAction>,
 }
@@ -204,46 +223,70 @@ pub struct DeribitTickerMsg {
     /// Timestamp in milliseconds.
     pub timestamp: u64,
     /// Best bid price.
-    pub best_bid_price: Option<f64>,
+    #[serde(default, deserialize_with = "deserialize_optional_decimal")]
+    pub best_bid_price: Option<Decimal>,
     /// Best bid amount.
-    pub best_bid_amount: Option<f64>,
+    #[serde(default, deserialize_with = "deserialize_optional_decimal")]
+    pub best_bid_amount: Option<Decimal>,
     /// Best ask price.
-    pub best_ask_price: Option<f64>,
+    #[serde(default, deserialize_with = "deserialize_optional_decimal")]
+    pub best_ask_price: Option<Decimal>,
     /// Best ask amount.
-    pub best_ask_amount: Option<f64>,
+    #[serde(default, deserialize_with = "deserialize_optional_decimal")]
+    pub best_ask_amount: Option<Decimal>,
     /// Last trade price.
-    pub last_price: Option<f64>,
+    #[serde(default, deserialize_with = "deserialize_optional_decimal")]
+    pub last_price: Option<Decimal>,
     /// Mark price.
-    pub mark_price: f64,
+    #[serde(deserialize_with = "deserialize_decimal")]
+    pub mark_price: Decimal,
     /// Index price.
-    pub index_price: f64,
+    #[serde(deserialize_with = "deserialize_decimal")]
+    pub index_price: Decimal,
     /// Open interest.
-    pub open_interest: f64,
+    #[serde(deserialize_with = "deserialize_decimal")]
+    pub open_interest: Decimal,
     /// Current funding rate (perpetuals).
-    #[serde(default, with = "rust_decimal::serde::float_option")]
+    #[serde(default, deserialize_with = "deserialize_optional_decimal")]
     pub current_funding: Option<Decimal>,
     /// Funding 8h rate (perpetuals).
-    #[serde(default, with = "rust_decimal::serde::float_option")]
+    #[serde(default, deserialize_with = "deserialize_optional_decimal")]
     pub funding_8h: Option<Decimal>,
     /// Settlement price (expired instruments).
-    pub settlement_price: Option<f64>,
+    #[serde(default, deserialize_with = "deserialize_optional_decimal")]
+    pub settlement_price: Option<Decimal>,
     /// 24h volume.
-    pub volume: Option<f64>,
+    #[serde(default, deserialize_with = "deserialize_optional_decimal")]
+    pub volume: Option<Decimal>,
     /// 24h volume in USD.
-    pub volume_usd: Option<f64>,
+    #[serde(default, deserialize_with = "deserialize_optional_decimal")]
+    pub volume_usd: Option<Decimal>,
     /// 24h high.
-    pub high: Option<f64>,
+    #[serde(default, deserialize_with = "deserialize_optional_decimal")]
+    pub high: Option<Decimal>,
     /// 24h low.
-    pub low: Option<f64>,
+    #[serde(default, deserialize_with = "deserialize_optional_decimal")]
+    pub low: Option<Decimal>,
     /// 24h price change.
-    pub price_change: Option<f64>,
+    #[serde(default, deserialize_with = "deserialize_optional_decimal")]
+    pub price_change: Option<Decimal>,
     /// State of the instrument.
     pub state: String,
     // Options-specific fields
     /// Greeks (options).
     pub greeks: Option<DeribitGreeks>,
+    /// Mark implied volatility (options).
+    #[serde(default, deserialize_with = "deserialize_optional_decimal")]
+    pub mark_iv: Option<Decimal>,
+    /// Bid implied volatility (options).
+    #[serde(default, deserialize_with = "deserialize_optional_decimal")]
+    pub bid_iv: Option<Decimal>,
+    /// Ask implied volatility (options).
+    #[serde(default, deserialize_with = "deserialize_optional_decimal")]
+    pub ask_iv: Option<Decimal>,
     /// Underlying price (options).
-    pub underlying_price: Option<f64>,
+    #[serde(default, deserialize_with = "deserialize_optional_decimal")]
+    pub underlying_price: Option<Decimal>,
     /// Underlying index (options).
     pub underlying_index: Option<String>,
 }
@@ -251,11 +294,29 @@ pub struct DeribitTickerMsg {
 /// Greeks for options.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DeribitGreeks {
-    pub delta: f64,
-    pub gamma: f64,
-    pub vega: f64,
-    pub theta: f64,
-    pub rho: f64,
+    #[serde(deserialize_with = "deserialize_decimal")]
+    pub delta: Decimal,
+    #[serde(deserialize_with = "deserialize_decimal")]
+    pub gamma: Decimal,
+    #[serde(deserialize_with = "deserialize_decimal")]
+    pub vega: Decimal,
+    #[serde(deserialize_with = "deserialize_decimal")]
+    pub theta: Decimal,
+    #[serde(deserialize_with = "deserialize_decimal")]
+    pub rho: Decimal,
+}
+
+impl DeribitGreeks {
+    /// Converts Deribit Greeks (Decimal) to Nautilus `OptionGreekValues` (f64).
+    pub fn to_greek_values(&self) -> OptionGreekValues {
+        OptionGreekValues {
+            delta: self.delta.to_f64().unwrap_or(0.0),
+            gamma: self.gamma.to_f64().unwrap_or(0.0),
+            vega: self.vega.to_f64().unwrap_or(0.0),
+            theta: self.theta.to_f64().unwrap_or(0.0),
+            rho: self.rho.to_f64().unwrap_or(0.0),
+        }
+    }
 }
 
 /// Quote data from quote.{instrument} channel.
@@ -266,13 +327,17 @@ pub struct DeribitQuoteMsg {
     /// Timestamp in milliseconds.
     pub timestamp: u64,
     /// Best bid price.
-    pub best_bid_price: f64,
+    #[serde(deserialize_with = "deserialize_decimal")]
+    pub best_bid_price: Decimal,
     /// Best bid amount.
-    pub best_bid_amount: f64,
+    #[serde(deserialize_with = "deserialize_decimal")]
+    pub best_bid_amount: Decimal,
     /// Best ask price.
-    pub best_ask_price: f64,
+    #[serde(deserialize_with = "deserialize_decimal")]
+    pub best_ask_price: Decimal,
     /// Best ask amount.
-    pub best_ask_amount: f64,
+    #[serde(deserialize_with = "deserialize_decimal")]
+    pub best_ask_amount: Decimal,
 }
 
 /// Instrument state notification from `instrument.state.{kind}.{currency}` channel.
@@ -297,9 +362,10 @@ pub struct DeribitInstrumentStateMsg {
 #[derive(Debug, Clone, Deserialize)]
 pub struct DeribitPerpetualMsg {
     /// Current index price.
-    pub index_price: f64,
+    #[serde(deserialize_with = "deserialize_decimal")]
+    pub index_price: Decimal,
     /// Current interest rate (funding rate).
-    #[serde(with = "rust_decimal::serde::float")]
+    #[serde(deserialize_with = "deserialize_decimal")]
     pub interest: Decimal,
     /// Timestamp in milliseconds since Unix epoch.
     pub timestamp: u64,
@@ -458,6 +524,78 @@ pub struct DeribitGetOrderStateParams {
     pub order_id: String,
 }
 
+// Deribit returns the literal string `"market_price"` for the price of trigger
+// market orders (`stop_market`, `take_market`) since they have no limit price.
+// Such values are mapped to `None`; other inputs delegate to the standard
+// optional decimal deserialization.
+fn deserialize_optional_decimal_or_market<'de, D>(
+    deserializer: D,
+) -> Result<Option<Decimal>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct Visitor;
+
+    impl<'de> de::Visitor<'de> for Visitor {
+        type Value = Option<Decimal>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str(
+                "null, a decimal as string/integer/float, or the literal \"market_price\"",
+            )
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+            if v.is_empty() || v == "market_price" {
+                return Ok(None);
+            }
+
+            if v.contains('e') || v.contains('E') {
+                Decimal::from_scientific(v).map(Some).map_err(E::custom)
+            } else {
+                Decimal::from_str(v).map(Some).map_err(E::custom)
+            }
+        }
+
+        fn visit_string<E: de::Error>(self, v: String) -> Result<Self::Value, E> {
+            self.visit_str(&v)
+        }
+
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> {
+            Ok(Some(Decimal::from(v)))
+        }
+
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> {
+            Ok(Some(Decimal::from(v)))
+        }
+
+        fn visit_i128<E: de::Error>(self, v: i128) -> Result<Self::Value, E> {
+            Ok(Some(Decimal::from(v)))
+        }
+
+        fn visit_u128<E: de::Error>(self, v: u128) -> Result<Self::Value, E> {
+            Ok(Some(Decimal::from(v)))
+        }
+
+        fn visit_f64<E: de::Error>(self, v: f64) -> Result<Self::Value, E> {
+            if v.is_nan() || v.is_infinite() {
+                return Err(E::invalid_value(de::Unexpected::Float(v), &self));
+            }
+            Decimal::try_from(v).map(Some).map_err(E::custom)
+        }
+
+        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+    }
+
+    deserializer.deserialize_any(Visitor)
+}
+
 /// Order response from buy/sell/edit operations.
 ///
 /// Contains the order details and any trades that resulted from the order.
@@ -487,11 +625,9 @@ pub struct DeribitOrderMsg {
     pub order_type: String,
     /// Order state: "open", "filled", "rejected", "cancelled", "untriggered".
     pub order_state: String,
-    /// Limit price (None for market orders).
-    #[serde(
-        default,
-        deserialize_with = "nautilus_core::serialization::deserialize_optional_decimal_flexible"
-    )]
+    /// Limit price (None for market orders, or when Deribit returns the
+    /// literal `"market_price"` for trigger market orders).
+    #[serde(default, deserialize_with = "deserialize_optional_decimal_or_market")]
     pub price: Option<Decimal>,
     /// Original order amount in contracts.
     #[serde(deserialize_with = "nautilus_core::serialization::deserialize_decimal")]
@@ -502,7 +638,7 @@ pub struct DeribitOrderMsg {
     /// Average fill price.
     #[serde(
         default,
-        deserialize_with = "nautilus_core::serialization::deserialize_optional_decimal_flexible"
+        deserialize_with = "nautilus_core::serialization::deserialize_optional_decimal"
     )]
     pub average_price: Option<Decimal>,
     /// Order creation timestamp in milliseconds.
@@ -526,7 +662,7 @@ pub struct DeribitOrderMsg {
     /// Trigger price for stop/take orders.
     #[serde(
         default,
-        deserialize_with = "nautilus_core::serialization::deserialize_optional_decimal_flexible"
+        deserialize_with = "nautilus_core::serialization::deserialize_optional_decimal"
     )]
     pub trigger_price: Option<Decimal>,
     /// Trigger type: "last_price", "index_price", "mark_price".
@@ -534,7 +670,7 @@ pub struct DeribitOrderMsg {
     /// Max show quantity for iceberg orders.
     #[serde(
         default,
-        deserialize_with = "nautilus_core::serialization::deserialize_optional_decimal_flexible"
+        deserialize_with = "nautilus_core::serialization::deserialize_optional_decimal"
     )]
     pub max_show: Option<Decimal>,
     /// API request flag.
@@ -611,11 +747,14 @@ pub struct DeribitUserTradeMsg {
     /// Post-only flag.
     #[serde(default)]
     pub post_only: bool,
+    /// Liquidation indicator for trades caused by liquidation.
+    #[serde(default)]
+    pub liquidation: Option<String>,
     /// Profit/loss for this trade.
     #[serde(
         default,
         serialize_with = "nautilus_core::serialization::serialize_optional_decimal",
-        deserialize_with = "nautilus_core::serialization::deserialize_optional_decimal_flexible"
+        deserialize_with = "nautilus_core::serialization::deserialize_optional_decimal"
     )]
     pub profit_loss: Option<Decimal>,
 }
@@ -692,6 +831,8 @@ pub enum NautilusWsMessage {
     Instrument(Box<InstrumentAny>),
     /// Funding rate updates (for perpetual instruments).
     FundingRates(Vec<FundingRateUpdate>),
+    /// Exchange-provided option Greeks from ticker data.
+    OptionGreeks(OptionGreeks),
     /// Order status reports (for reconciliation, not real-time events).
     OrderStatusReports(Vec<OrderStatusReport>),
     /// Fill reports from user.trades subscription or order responses.
@@ -712,6 +853,8 @@ pub enum NautilusWsMessage {
     OrderUpdated(OrderUpdated),
     /// Account state update from user.portfolio subscription.
     AccountState(AccountState),
+    /// Instrument status change.
+    InstrumentStatus(InstrumentStatus),
     /// Error from venue.
     Error(DeribitWsError),
     /// Unhandled/raw message for debugging.
@@ -720,6 +863,8 @@ pub enum NautilusWsMessage {
     Reconnected,
     /// Authentication succeeded with tokens.
     Authenticated(Box<DeribitAuthResult>),
+    /// Authentication failed with reason.
+    AuthenticationFailed(String),
 }
 
 /// Parses a raw JSON message into a DeribitWsMessage.
@@ -834,7 +979,7 @@ mod tests {
                 assert_eq!(error.code, 10028);
                 assert_eq!(error.message, "too_many_requests");
             }
-            _ => panic!("Expected Response with error, got {msg:?}"),
+            _ => panic!("Expected Response with error, was {msg:?}"),
         }
     }
 

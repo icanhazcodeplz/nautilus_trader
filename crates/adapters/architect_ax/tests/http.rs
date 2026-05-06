@@ -29,6 +29,7 @@ use rstest::rstest;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde_json::{Value, json};
+use ustr::Ustr;
 
 /// Wait for the test server to be ready by polling a health endpoint.
 async fn wait_for_server(addr: SocketAddr, path: &str) {
@@ -135,15 +136,14 @@ async fn test_raw_http_get_instruments_returns_data() {
     let addr = start_test_server().await;
     let base_url = format!("http://{addr}");
 
-    let client =
-        AxRawHttpClient::new(Some(base_url), None, Some(60), None, None, None, None).unwrap();
+    let client = AxRawHttpClient::new(Some(base_url), None, 60, 3, 1000, 10_000, None).unwrap();
 
     let response = client.get_instruments().await.unwrap();
 
     assert_eq!(response.instruments.len(), 3);
-    assert_eq!(response.instruments[0].symbol.as_str(), "BTC-PERP");
-    assert_eq!(response.instruments[1].symbol.as_str(), "ETH-PERP");
-    assert_eq!(response.instruments[2].symbol.as_str(), "SOL-PERP");
+    assert_eq!(response.instruments[0].symbol.as_str(), "EURUSD-PERP");
+    assert_eq!(response.instruments[1].symbol.as_str(), "XAU-PERP");
+    assert_eq!(response.instruments[2].symbol.as_str(), "NVDA-PERP");
 }
 
 #[rstest]
@@ -152,13 +152,16 @@ async fn test_raw_http_get_instrument_returns_data() {
     let addr = start_test_server().await;
     let base_url = format!("http://{addr}");
 
-    let client =
-        AxRawHttpClient::new(Some(base_url), None, Some(60), None, None, None, None).unwrap();
+    let client = AxRawHttpClient::new(Some(base_url), None, 60, 3, 1000, 10_000, None).unwrap();
 
-    let instrument = client.get_instrument("BTC-PERP").await.unwrap();
+    // Mock server returns first instrument from list (EURUSD-PERP)
+    let instrument = client
+        .get_instrument(Ustr::from("EURUSD-PERP"))
+        .await
+        .unwrap();
 
-    assert_eq!(instrument.symbol.as_str(), "BTC-PERP");
-    assert_eq!(instrument.tick_size, dec!(0.5));
+    assert_eq!(instrument.symbol.as_str(), "EURUSD-PERP");
+    assert_eq!(instrument.tick_size, dec!(0.0001));
 }
 
 #[rstest]
@@ -172,10 +175,10 @@ async fn test_raw_http_get_balances_returns_data() {
         "test_api_secret".to_string(),
         Some(base_url),
         None,
-        Some(60),
-        None,
-        None,
-        None,
+        60,
+        3,
+        1000,
+        10_000,
         None,
     )
     .unwrap();
@@ -183,7 +186,13 @@ async fn test_raw_http_get_balances_returns_data() {
 
     let response = client.get_balances().await.unwrap();
 
-    assert!(!response.balances.is_empty());
+    assert_eq!(response.balances.len(), 3);
+    assert_eq!(response.balances[0].symbol.as_str(), "USD");
+    assert_eq!(response.balances[0].amount, dec!(100000.50));
+    assert_eq!(response.balances[1].symbol.as_str(), "BTC");
+    assert_eq!(response.balances[1].amount, dec!(1.25));
+    assert_eq!(response.balances[2].symbol.as_str(), "ETH");
+    assert_eq!(response.balances[2].amount, dec!(15.5));
 }
 
 #[rstest]
@@ -197,10 +206,10 @@ async fn test_raw_http_get_positions_returns_data() {
         "test_api_secret".to_string(),
         Some(base_url),
         None,
-        Some(60),
-        None,
-        None,
-        None,
+        60,
+        3,
+        1000,
+        10_000,
         None,
     )
     .unwrap();
@@ -208,7 +217,12 @@ async fn test_raw_http_get_positions_returns_data() {
 
     let response = client.get_positions().await.unwrap();
 
-    assert!(!response.positions.is_empty());
+    assert_eq!(response.positions.len(), 2);
+    assert_eq!(response.positions[0].symbol.as_str(), "BTC-PERP");
+    assert_eq!(response.positions[0].signed_quantity, 2);
+    assert_eq!(response.positions[0].signed_notional, dec!(90000.00));
+    assert_eq!(response.positions[1].symbol.as_str(), "ETH-PERP");
+    assert_eq!(response.positions[1].signed_quantity, -5);
 }
 
 #[rstest]
@@ -222,10 +236,10 @@ async fn test_raw_http_get_tickers_returns_data() {
         "test_api_secret".to_string(),
         Some(base_url),
         None,
-        Some(60),
-        None,
-        None,
-        None,
+        60,
+        3,
+        1000,
+        10_000,
         None,
     )
     .unwrap();
@@ -233,8 +247,13 @@ async fn test_raw_http_get_tickers_returns_data() {
 
     let response = client.get_tickers().await.unwrap();
 
-    assert!(!response.tickers.is_empty());
-    assert_eq!(response.tickers[0].symbol.as_str(), "BTC-PERP");
+    assert_eq!(response.tickers.len(), 1);
+    let ticker = &response.tickers[0];
+    assert_eq!(ticker.symbol.as_str(), "BTC-PERP");
+    assert_eq!(ticker.bid, Some(dec!(45000.00)));
+    assert_eq!(ticker.ask, Some(dec!(45001.00)));
+    assert_eq!(ticker.last, Some(dec!(45000.50)));
+    assert_eq!(ticker.mark, Some(dec!(45000.25)));
 }
 
 #[rstest]
@@ -248,16 +267,16 @@ async fn test_raw_http_get_ticker_returns_data() {
         "test_api_secret".to_string(),
         Some(base_url),
         None,
-        Some(60),
-        None,
-        None,
-        None,
+        60,
+        3,
+        1000,
+        10_000,
         None,
     )
     .unwrap();
     client.set_session_token("test_session_token".to_string());
 
-    let ticker = client.get_ticker("BTC-PERP").await.unwrap();
+    let ticker = client.get_ticker(Ustr::from("BTC-PERP")).await.unwrap();
 
     assert_eq!(ticker.symbol.as_str(), "BTC-PERP");
     assert_eq!(ticker.bid, Some(dec!(45000.00)));
@@ -270,15 +289,14 @@ async fn test_domain_http_request_instruments_returns_nautilus_types() {
     let addr = start_test_server().await;
     let base_url = format!("http://{addr}");
 
-    let client = AxHttpClient::new(Some(base_url), None, Some(60), None, None, None, None).unwrap();
+    let client = AxHttpClient::new(Some(base_url), None, 60, 3, 1000, 10_000, None).unwrap();
 
     let instruments = client
         .request_instruments(Some(Decimal::new(2, 4)), Some(Decimal::new(5, 4)))
         .await
         .unwrap();
 
-    // Should have 2 instruments (SOL-PERP is suspended and skipped)
-    assert_eq!(instruments.len(), 2);
+    assert_eq!(instruments.len(), 3);
 }
 
 #[rstest]
@@ -287,19 +305,25 @@ async fn test_domain_http_request_instrument_returns_nautilus_type() {
     let addr = start_test_server().await;
     let base_url = format!("http://{addr}");
 
-    let client = AxHttpClient::new(Some(base_url), None, Some(60), None, None, None, None).unwrap();
+    let client = AxHttpClient::new(Some(base_url), None, 60, 3, 1000, 10_000, None).unwrap();
 
+    // Mock server returns first instrument (EURUSD-PERP) regardless of request
     let instrument = client
-        .request_instrument("BTC-PERP", None, None)
+        .request_instrument(Ustr::from("EURUSD-PERP"), None, None)
         .await
         .unwrap();
 
     match instrument {
-        InstrumentAny::CryptoPerpetual(perp) => {
-            assert_eq!(perp.id.symbol.as_str(), "BTC-PERP");
+        InstrumentAny::PerpetualContract(perp) => {
+            assert_eq!(perp.id.symbol.as_str(), "EURUSD-PERP");
             assert_eq!(perp.id.venue.as_str(), "AX");
+            assert_eq!(perp.price_precision, 4);
+            assert_eq!(perp.price_increment.as_decimal(), dec!(0.0001));
+            assert_eq!(perp.quote_currency.code.as_str(), "USD");
+            assert_eq!(perp.margin_init, dec!(8.0));
+            assert_eq!(perp.margin_maint, dec!(4.0));
         }
-        _ => panic!("Expected CryptoPerpetual instrument"),
+        _ => panic!("Expected PerpetualContract instrument"),
     }
 }
 
@@ -309,19 +333,20 @@ async fn test_domain_http_cache_instruments() {
     let addr = start_test_server().await;
     let base_url = format!("http://{addr}");
 
-    let client = AxHttpClient::new(Some(base_url), None, Some(60), None, None, None, None).unwrap();
+    let client = AxHttpClient::new(Some(base_url), None, 60, 3, 1000, 10_000, None).unwrap();
 
     assert!(!client.is_initialized());
 
     let instruments = client.request_instruments(None, None).await.unwrap();
-    client.cache_instruments(instruments);
+    client.cache_instruments(&instruments);
 
     assert!(client.is_initialized());
 
     let cached_symbols = client.get_cached_symbols();
-    assert_eq!(cached_symbols.len(), 2);
-    assert!(cached_symbols.contains(&"BTC-PERP".to_string()));
-    assert!(cached_symbols.contains(&"ETH-PERP".to_string()));
+    assert_eq!(cached_symbols.len(), 3);
+    assert!(cached_symbols.contains(&"EURUSD-PERP".to_string()));
+    assert!(cached_symbols.contains(&"XAU-PERP".to_string()));
+    assert!(cached_symbols.contains(&"NVDA-PERP".to_string()));
 }
 
 #[rstest]
@@ -330,20 +355,20 @@ async fn test_domain_http_get_cached_instrument() {
     let addr = start_test_server().await;
     let base_url = format!("http://{addr}");
 
-    let client = AxHttpClient::new(Some(base_url), None, Some(60), None, None, None, None).unwrap();
+    let client = AxHttpClient::new(Some(base_url), None, 60, 3, 1000, 10_000, None).unwrap();
 
     let instruments = client.request_instruments(None, None).await.unwrap();
-    client.cache_instruments(instruments);
+    client.cache_instruments(&instruments);
 
-    let btc_symbol = ustr::Ustr::from("BTC-PERP");
-    let cached = client.get_instrument(&btc_symbol);
+    let eurusd_symbol = Ustr::from("EURUSD-PERP");
+    let cached = client.get_instrument(&eurusd_symbol);
     assert!(cached.is_some());
 
-    let eth_symbol = ustr::Ustr::from("ETH-PERP");
-    let cached = client.get_instrument(&eth_symbol);
+    let xau_symbol = Ustr::from("XAU-PERP");
+    let cached = client.get_instrument(&xau_symbol);
     assert!(cached.is_some());
 
-    let unknown_symbol = ustr::Ustr::from("UNKNOWN-PERP");
+    let unknown_symbol = Ustr::from("UNKNOWN-PERP");
     let cached = client.get_instrument(&unknown_symbol);
     assert!(cached.is_none());
 }
@@ -355,8 +380,7 @@ async fn test_domain_http_get_cached_instrument() {
 async fn test_http_network_error_invalid_port() {
     let base_url = "http://127.0.0.1:1".to_string();
 
-    let client =
-        AxRawHttpClient::new(Some(base_url), None, Some(1), Some(0), None, None, None).unwrap();
+    let client = AxRawHttpClient::new(Some(base_url), None, 1, 0, 1000, 10_000, None).unwrap();
 
     let result = client.get_instruments().await;
 
@@ -394,8 +418,7 @@ async fn test_http_500_internal_server_error() {
     wait_for_server(addr, "/instruments").await;
 
     let base_url = format!("http://{addr}");
-    let client =
-        AxRawHttpClient::new(Some(base_url), None, Some(60), Some(0), None, None, None).unwrap();
+    let client = AxRawHttpClient::new(Some(base_url), None, 60, 0, 1000, 10_000, None).unwrap();
 
     let result = client.get_instruments().await;
 
@@ -425,8 +448,7 @@ async fn test_http_malformed_json_response() {
     wait_for_server(addr, "/instruments").await;
 
     let base_url = format!("http://{addr}");
-    let client =
-        AxRawHttpClient::new(Some(base_url), None, Some(60), None, None, None, None).unwrap();
+    let client = AxRawHttpClient::new(Some(base_url), None, 60, 3, 1000, 10_000, None).unwrap();
 
     let result = client.get_instruments().await;
 
@@ -461,8 +483,7 @@ async fn test_http_empty_instruments_response() {
     wait_for_server(addr, "/instruments").await;
 
     let base_url = format!("http://{addr}");
-    let client =
-        AxRawHttpClient::new(Some(base_url), None, Some(60), None, None, None, None).unwrap();
+    let client = AxRawHttpClient::new(Some(base_url), None, 60, 3, 1000, 10_000, None).unwrap();
 
     let result = client.get_instruments().await.unwrap();
 

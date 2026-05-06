@@ -60,8 +60,6 @@ pub struct BlockchainExecutionClient {
     wallet_balance: WalletBalance,
     /// Contract interface for ERC-20 token interactions.
     erc20_contract: Erc20Contract,
-    /// Whether the client is currently connected.
-    connected: bool,
     /// HTTP RPC client for blockchain queries.
     http_rpc_client: Arc<BlockchainHttpRpcClient>,
 }
@@ -81,12 +79,14 @@ impl BlockchainExecutionClient {
         let http_rpc_client = Arc::new(BlockchainHttpRpcClient::new(
             config.http_rpc_url.clone(),
             config.rpc_requests_per_second,
+            None,
         ));
         let wallet_address = validate_address(config.wallet_address.as_str())?;
         let erc20_contract = Erc20Contract::new(http_rpc_client.clone(), true);
 
         // Initialize token universe, so we can fetch them from the blockchain later.
         let mut token_universe = HashSet::new();
+
         if let Some(specified_tokens) = config.tokens {
             for token in specified_tokens {
                 let token_address = validate_address(token.as_str())?;
@@ -97,7 +97,6 @@ impl BlockchainExecutionClient {
 
         Ok(Self {
             core: core_client,
-            connected: false,
             wallet_balance,
             chain,
             cache,
@@ -174,6 +173,7 @@ impl BlockchainExecutionClient {
                 .clone()
                 .into_iter()
                 .collect();
+
             for token in tokens {
                 if let Ok(token_balance) = self.fetch_token_balance(&token).await {
                     log::info!("Adding token balance to the wallet: {token_balance}");
@@ -191,7 +191,7 @@ impl BlockchainExecutionClient {
 #[async_trait(?Send)]
 impl ExecutionClient for BlockchainExecutionClient {
     fn is_connected(&self) -> bool {
-        self.connected
+        self.core.is_connected()
     }
 
     fn client_id(&self) -> ClientId {
@@ -232,40 +232,40 @@ impl ExecutionClient for BlockchainExecutionClient {
         todo!("implement stop")
     }
 
-    fn submit_order(&self, _cmd: &SubmitOrder) -> anyhow::Result<()> {
+    fn submit_order(&self, _cmd: SubmitOrder) -> anyhow::Result<()> {
         todo!("implement submit_order")
     }
 
-    fn submit_order_list(&self, _cmd: &SubmitOrderList) -> anyhow::Result<()> {
+    fn submit_order_list(&self, _cmd: SubmitOrderList) -> anyhow::Result<()> {
         todo!("implement submit_order_list")
     }
 
-    fn modify_order(&self, _cmd: &ModifyOrder) -> anyhow::Result<()> {
+    fn modify_order(&self, _cmd: ModifyOrder) -> anyhow::Result<()> {
         todo!("implement modify_order")
     }
 
-    fn cancel_order(&self, _cmd: &CancelOrder) -> anyhow::Result<()> {
+    fn cancel_order(&self, _cmd: CancelOrder) -> anyhow::Result<()> {
         todo!("implement cancel_order")
     }
 
-    fn cancel_all_orders(&self, _cmd: &CancelAllOrders) -> anyhow::Result<()> {
+    fn cancel_all_orders(&self, _cmd: CancelAllOrders) -> anyhow::Result<()> {
         todo!("implement cancel_all_orders")
     }
 
-    fn batch_cancel_orders(&self, _cmd: &BatchCancelOrders) -> anyhow::Result<()> {
+    fn batch_cancel_orders(&self, _cmd: BatchCancelOrders) -> anyhow::Result<()> {
         todo!("implement batch_cancel_orders")
     }
 
-    fn query_account(&self, _cmd: &QueryAccount) -> anyhow::Result<()> {
+    fn query_account(&self, _cmd: QueryAccount) -> anyhow::Result<()> {
         todo!("implement query_account")
     }
 
-    fn query_order(&self, _cmd: &QueryOrder) -> anyhow::Result<()> {
+    fn query_order(&self, _cmd: QueryOrder) -> anyhow::Result<()> {
         todo!("implement query_order")
     }
 
     async fn connect(&mut self) -> anyhow::Result<()> {
-        if self.connected {
+        if self.core.is_connected() {
             log::warn!("Blockchain execution client already connected");
             return Ok(());
         }
@@ -277,7 +277,7 @@ impl ExecutionClient for BlockchainExecutionClient {
 
         self.refresh_wallet_balances().await?;
 
-        self.connected = true;
+        self.core.set_connected();
         log::info!(
             "Blockchain execution client connected on chain {}",
             self.chain.name
@@ -286,7 +286,7 @@ impl ExecutionClient for BlockchainExecutionClient {
     }
 
     async fn disconnect(&mut self) -> anyhow::Result<()> {
-        self.connected = false;
+        self.core.set_disconnected();
         Ok(())
     }
 

@@ -59,6 +59,9 @@ pub enum AxHttpError {
     /// Error variant when credentials are missing but the request is authenticated.
     #[error("Missing credentials for authenticated request")]
     MissingCredentials,
+    /// Error variant when session token is not set (not yet authenticated).
+    #[error("Session token not set (not authenticated)")]
+    MissingSessionToken,
     /// Errors returned directly by AX Exchange API.
     #[error("AX Exchange API error: {message}")]
     ApiError { message: String },
@@ -120,6 +123,7 @@ impl AxHttpError {
             Self::NetworkError(_) => true,
             Self::UnexpectedStatus { status, .. } => *status == 429 || *status >= 500,
             Self::MissingCredentials
+            | Self::MissingSessionToken
             | Self::ApiError { .. }
             | Self::JsonError(_)
             | Self::ValidationError(_)
@@ -184,5 +188,25 @@ mod tests {
             http_error.to_string(),
             "AX Exchange API error: Invalid parameter"
         );
+    }
+
+    #[rstest]
+    #[case(AxHttpError::NetworkError("boom".to_string()), true)]
+    #[case(AxHttpError::UnexpectedStatus { status: 500, body: String::new() }, true)]
+    #[case(AxHttpError::UnexpectedStatus { status: 502, body: String::new() }, true)]
+    #[case(AxHttpError::UnexpectedStatus { status: 503, body: String::new() }, true)]
+    #[case(AxHttpError::UnexpectedStatus { status: 429, body: String::new() }, true)]
+    #[case(AxHttpError::UnexpectedStatus { status: 400, body: String::new() }, false)]
+    #[case(AxHttpError::UnexpectedStatus { status: 401, body: String::new() }, false)]
+    #[case(AxHttpError::UnexpectedStatus { status: 404, body: String::new() }, false)]
+    #[case(AxHttpError::MissingCredentials, false)]
+    #[case(AxHttpError::MissingSessionToken, false)]
+    #[case(AxHttpError::ApiError { message: "bad".to_string() }, false)]
+    #[case(AxHttpError::JsonError("bad".to_string()), false)]
+    #[case(AxHttpError::ValidationError("bad".to_string()), false)]
+    #[case(AxHttpError::BuildError(AxBuildError::MissingSymbol), false)]
+    #[case(AxHttpError::Canceled("shutdown".to_string()), false)]
+    fn test_is_retryable(#[case] error: AxHttpError, #[case] expected: bool) {
+        assert_eq!(error.is_retryable(), expected);
     }
 }

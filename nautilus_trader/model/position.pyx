@@ -67,7 +67,7 @@ cdef class Position:
 
         self._events: list[OrderFilled] = []
         self._adjustments: list = []
-        self._trade_ids: list[TradeId] = []
+        self._trade_ids: set[TradeId] = set()
         self._buy_qty = Quantity.zero_c(precision=instrument.size_precision)
         self._sell_qty = Quantity.zero_c(precision=instrument.size_precision)
         self._commissions = {}
@@ -571,7 +571,7 @@ cdef class Position:
             self.realized_pnl = None
 
         self._events.append(fill)
-        self._trade_ids.append(fill.trade_id)
+        self._trade_ids.add(fill.trade_id)
 
         # Accumulate commission in its currency
         cdef Currency currency = fill.commission.currency
@@ -602,7 +602,7 @@ cdef class Position:
                 self.id,
                 self.account_id,
                 PositionAdjustmentType.COMMISSION,
-                fill.commission.as_decimal(),
+                -fill.commission.as_decimal(),
                 None,
                 str(fill.client_order_id),
                 UUID4(),
@@ -616,18 +616,19 @@ cdef class Position:
         if self.quantity._mem.raw > self.peak_qty._mem.raw:
             self.peak_qty = self.quantity
 
-        if self.signed_qty > 0.0:
+        if self.quantity._mem.raw == 0 or self.signed_qty == 0.0:
+            # Position closed
+            self.side = PositionSide.FLAT
+            self.signed_qty = 0.0  # Normalize
+            self.closing_order_id = fill.client_order_id
+            self.ts_closed = fill.ts_event
+            self.duration_ns = self.ts_closed - self.ts_opened
+        elif self.signed_qty > 0.0:
             self.entry = OrderSide.BUY
             self.side = PositionSide.LONG
         elif self.signed_qty < 0.0:
             self.entry = OrderSide.SELL
             self.side = PositionSide.SHORT
-        else:
-            # Position closed
-            self.side = PositionSide.FLAT
-            self.closing_order_id = fill.client_order_id
-            self.ts_closed = fill.ts_event
-            self.duration_ns = self.ts_closed - self.ts_opened
 
         self.ts_last = fill.ts_event
 
@@ -653,6 +654,7 @@ cdef class Position:
         # Apply quantity change if present
         if adjustment.quantity_change is not None:
             self.signed_qty += float(adjustment.quantity_change)
+            self.signed_qty = round(self.signed_qty, self.size_precision)
 
             self.quantity = Quantity(abs(self.signed_qty), self.size_precision)
 
@@ -670,7 +672,10 @@ cdef class Position:
             )
 
         # Update position state based on new signed quantity
-        if self.signed_qty > 0.0:
+        if self.quantity._mem.raw == 0:
+            self.side = PositionSide.FLAT
+            self.signed_qty = 0.0  # Normalize
+        elif self.signed_qty > 0.0:
             self.side = PositionSide.LONG
             if self.entry == OrderSide.NO_ORDER_SIDE:
                 self.entry = OrderSide.BUY
@@ -868,7 +873,11 @@ cdef class Position:
         return list(self._commissions.values())
 
     cdef void _check_duplicate_trade_id(self, OrderFilled fill):
-        # Check all previous fills for matching trade ID and composite key
+        # Fast path: trade_id not seen before, no need to scan events
+        if fill.trade_id not in self._trade_ids:
+            return
+
+        # Trade ID collision: scan events for composite key match
         cdef:
             OrderFilled p_fill
         for p_fill in self._events:

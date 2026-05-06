@@ -16,8 +16,7 @@
 use std::fmt::Display;
 
 use derive_builder::Builder;
-use indexmap::IndexMap;
-use nautilus_core::{UUID4, UnixNanos};
+use nautilus_core::{Params, UUID4, UnixNanos};
 use nautilus_model::{
     identifiers::{ClientId, ClientOrderId, InstrumentId, StrategyId, TraderId, VenueOrderId},
     types::{Price, Quantity},
@@ -38,12 +37,12 @@ pub struct ModifyOrder {
     pub trigger_price: Option<Price>,
     pub command_id: UUID4,
     pub ts_init: UnixNanos,
-    pub params: Option<IndexMap<String, String>>,
+    pub params: Option<Params>,
 }
 
 impl ModifyOrder {
     /// Creates a new [`ModifyOrder`] instance.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     #[must_use]
     pub fn new(
         trader_id: TraderId,
@@ -57,7 +56,7 @@ impl ModifyOrder {
         trigger_price: Option<Price>,
         command_id: UUID4,
         ts_init: UnixNanos,
-        params: Option<IndexMap<String, String>>,
+        params: Option<Params>,
     ) -> Self {
         Self {
             trader_id,

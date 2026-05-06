@@ -23,6 +23,9 @@ use ustr::Ustr;
 pub const AX: &str = "AX";
 pub static AX_VENUE: LazyLock<Venue> = LazyLock::new(|| Venue::new(Ustr::from(AX)));
 
+/// Order tag identifying orders placed by NautilusTrader.
+pub const AX_NAUTILUS_TAG: &str = "Nautilus";
+
 // HTTP endpoints
 pub const AX_HTTP_URL: &str = "https://gateway.architect.exchange/api";
 pub const AX_HTTP_SANDBOX_URL: &str = "https://gateway.sandbox.architect.exchange/api";
@@ -38,3 +41,16 @@ pub const AX_WS_SANDBOX_PUBLIC_URL: &str = "wss://gateway.sandbox.architect.exch
 // Orders WebSocket endpoints (requires Bearer token authentication)
 pub const AX_WS_PRIVATE_URL: &str = "wss://gateway.architect.exchange/orders/ws";
 pub const AX_WS_SANDBOX_PRIVATE_URL: &str = "wss://gateway.sandbox.architect.exchange/orders/ws";
+
+// Authentication token TTL (seconds)
+pub const AX_AUTH_TOKEN_TTL_DATA_SECS: i32 = 86_400;
+pub const AX_AUTH_TOKEN_TTL_EXEC_SECS: i32 = 3_600;
+
+/// Timeout for awaiting account registration during execution client connect.
+pub const AX_ACCOUNT_REGISTRATION_TIMEOUT_SECS: f64 = 30.0;
+
+/// Default lookback for funding rate polling (days).
+pub const AX_FUNDING_RATE_LOOKBACK_DAYS: i64 = 7;
+
+// Error message substrings for detecting specific rejection reasons
+pub const AX_POST_ONLY_REJECT: &str = "Order may participate but not initiate in the market";

@@ -24,12 +24,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Request instruments
     let inst_type = OKXInstrumentType::Swap;
-    let instruments = client.request_instruments(inst_type, None).await?;
-    client.cache_instruments(instruments);
+    let (instruments, _inst_id_codes) = client.request_instruments(inst_type, None).await?;
+    client.cache_instruments(&instruments);
 
     let inst_type = OKXInstrumentType::Spot;
-    let instruments = client.request_instruments(inst_type, None).await?;
-    client.cache_instruments(instruments);
+    let (instruments, _inst_id_codes) = client.request_instruments(inst_type, None).await?;
+    client.cache_instruments(&instruments);
 
     // Request mark price
     let instrument_id = InstrumentId::from("BTC-USDT-SWAP.OKX");

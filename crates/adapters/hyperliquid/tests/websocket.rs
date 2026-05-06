@@ -37,12 +37,13 @@ use axum::{
 use futures_util::StreamExt;
 use nautilus_common::testing::wait_until_async;
 use nautilus_hyperliquid::{
-    common::HyperliquidProductType, websocket::client::HyperliquidWebSocketClient,
+    common::enums::HyperliquidEnvironment, websocket::client::HyperliquidWebSocketClient,
 };
 use nautilus_model::{
     data::BarType,
     identifiers::{AccountId, InstrumentId},
 };
+use nautilus_network::websocket::TransportBackend;
 use rstest::rstest;
 use serde_json::{Value, json};
 
@@ -255,6 +256,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<TestServerState>) {
                             state.ping_count.fetch_add(1, Ordering::Relaxed);
                             // HyperLiquid expects a pong response
                             let pong_response = json!({"channel": "pong"});
+
                             if socket
                                 .send(Message::Text(pong_response.to_string().into()))
                                 .await
@@ -269,6 +271,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<TestServerState>) {
             }
             Message::Ping(payload) => {
                 state.ping_count.fetch_add(1, Ordering::Relaxed);
+
                 if socket.send(Message::Pong(payload)).await.is_err() {
                     break;
                 }
@@ -314,9 +317,10 @@ async fn start_ws_server(state: Arc<TestServerState>) -> SocketAddr {
 async fn connect_client(ws_url: &str, account_id: Option<AccountId>) -> HyperliquidWebSocketClient {
     let mut client = HyperliquidWebSocketClient::new(
         Some(ws_url.to_string()),
-        false,
-        HyperliquidProductType::Perp,
+        HyperliquidEnvironment::Mainnet,
         account_id,
+        TransportBackend::default(),
+        None,
     );
     cache_test_instruments(&mut client);
     client
@@ -356,6 +360,7 @@ fn cache_test_instruments(client: &mut HyperliquidWebSocketClient) {
             3, // size_precision
             Price::from("0.01"),
             Quantity::from("0.001"),
+            None,
             None,
             None,
             None,

@@ -21,15 +21,15 @@
 //! Usage:
 //! ```bash
 //! # Test against testnet (default)
-//! DYDX_MNEMONIC="your mnemonic" cargo run --bin dydx-http-private -p nautilus-dydx
+//! DYDX_TESTNET_PRIVATE_KEY="your hex private key" cargo run --bin dydx-http-private -p nautilus-dydx
 //!
 //! # Test against mainnet
-//! DYDX_MNEMONIC="your mnemonic" \
+//! DYDX_PRIVATE_KEY="your hex private key" \
 //! DYDX_HTTP_URL=https://indexer.dydx.trade \
 //! cargo run --bin dydx-http-private -p nautilus-dydx -- --mainnet
 //!
 //! # With custom subaccount and market filter
-//! DYDX_MNEMONIC="your mnemonic" cargo run --bin dydx-http-private -p nautilus-dydx -- \
+//! DYDX_PRIVATE_KEY="your hex private key" cargo run --bin dydx-http-private -p nautilus-dydx -- \
 //!   --subaccount 1 \
 //!   --market BTC-USD
 //! ```
@@ -37,7 +37,13 @@
 use std::env;
 
 use nautilus_dydx::{
-    common::consts::DYDX_TESTNET_HTTP_URL, grpc::wallet::Wallet, http::client::DydxHttpClient,
+    common::{
+        consts::DYDX_TESTNET_HTTP_URL,
+        credential::{credential_env_vars, resolve_wallet_address},
+        enums::DydxNetwork,
+    },
+    execution::wallet::Wallet,
+    http::client::DydxHttpClient,
 };
 
 const DEFAULT_SUBACCOUNT: u32 = 0;
@@ -61,7 +67,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|i| args.get(i + 1))
         .map(|s| s.as_str());
 
-    let mnemonic = env::var("DYDX_MNEMONIC").expect("DYDX_MNEMONIC environment variable not set");
+    let network = if is_mainnet {
+        DydxNetwork::Mainnet
+    } else {
+        DydxNetwork::Testnet
+    };
+    let (pk_var, _) = credential_env_vars(network);
+    let private_key =
+        env::var(pk_var).map_err(|_| format!("{pk_var} environment variable not set"))?;
+
+    // Allow overriding wallet address (for permissioned key setups)
+    let wallet_address_override = resolve_wallet_address(None, network);
 
     let http_url = if is_mainnet {
         env::var("DYDX_HTTP_URL").unwrap_or_else(|_| "https://indexer.dydx.trade".to_string())
@@ -75,18 +91,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if is_mainnet { "MAINNET" } else { "TESTNET" }
     );
     log::info!("Subaccount: {subaccount_number}");
+
     if let Some(market) = market_filter {
         log::info!("Market filter: {market}");
     }
     log::info!("");
 
-    let wallet = Wallet::from_mnemonic(&mnemonic)?;
-    let account = wallet.account_offline(subaccount_number)?;
-    let wallet_address = account.address.clone();
-    log::info!("Wallet address: {wallet_address}");
+    let wallet = Wallet::from_private_key(&private_key)?;
+    let account = wallet.account_offline()?;
+    let derived_address = account.address.clone();
+
+    // Use override address if provided (for API/permissioned key setups)
+    let wallet_address = wallet_address_override.unwrap_or_else(|| derived_address.clone());
+
+    log::info!("Derived address (from private key): {derived_address}");
+    if wallet_address == derived_address {
+        log::info!("Wallet address: {wallet_address}");
+    } else {
+        log::info!("Using override address (DYDX_WALLET_ADDRESS): {wallet_address}");
+    }
     log::info!("");
 
-    let client = DydxHttpClient::new(Some(http_url), Some(30), None, !is_mainnet, None)?;
+    let client = DydxHttpClient::new(Some(http_url), 30, None, network, None)?;
 
     log::info!("Fetching subaccount info...");
     let start = std::time::Instant::now();
@@ -110,6 +136,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "   Free collateral: {}",
         subaccount.subaccount.free_collateral
     );
+
     if subaccount.subaccount.open_perpetual_positions.is_empty() {
         log::info!("   Open positions: 0");
     } else {
@@ -117,6 +144,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "   Open positions: {}",
             subaccount.subaccount.open_perpetual_positions.len()
         );
+
         for pos in subaccount
             .subaccount
             .open_perpetual_positions
@@ -147,6 +175,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         orders.len(),
         elapsed.as_secs_f64()
     );
+
     if !orders.is_empty() {
         log::info!("   Sample orders:");
         for order in orders.iter().take(5) {
@@ -159,6 +188,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 order.status
             );
         }
+
         if orders.len() > 5 {
             log::info!("   ... and {} more", orders.len() - 5);
         }
@@ -178,6 +208,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         fills.fills.len(),
         elapsed.as_secs_f64()
     );
+
     if !fills.fills.is_empty() {
         log::info!("   Recent fills:");
         for fill in fills.fills.iter().take(5) {
@@ -190,6 +221,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 fill.fee
             );
         }
+
         if fills.fills.len() > 5 {
             log::info!("   ... and {} more", fills.fills.len() - 5);
         }

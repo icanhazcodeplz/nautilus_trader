@@ -18,7 +18,7 @@ from nautilus_trader.adapters.polymarket import POLYMARKET
 from nautilus_trader.adapters.polymarket import PolymarketDataClientConfig
 from nautilus_trader.adapters.polymarket import PolymarketLiveDataClientFactory
 from nautilus_trader.adapters.polymarket import get_polymarket_instrument_id
-from nautilus_trader.config import InstrumentProviderConfig
+from nautilus_trader.adapters.polymarket.providers import PolymarketInstrumentProviderConfig
 from nautilus_trader.config import LiveExecEngineConfig
 from nautilus_trader.config import LoggingConfig
 from nautilus_trader.config import TradingNodeConfig
@@ -52,8 +52,8 @@ filters = {
 }
 
 load_ids = [str(x) for x in instrument_ids]
-instrument_provider_config = InstrumentProviderConfig(load_ids=frozenset(load_ids))
-# instrument_provider_config = InstrumentProviderConfig(load_all=True, filters=filters)
+instrument_provider_config = PolymarketInstrumentProviderConfig(load_ids=frozenset(load_ids))
+# instrument_provider_config = PolymarketInstrumentProviderConfig(load_all=True, filters=filters)
 
 # Configure the trading node
 config_node = TradingNodeConfig(
@@ -64,12 +64,8 @@ config_node = TradingNodeConfig(
     ),
     data_clients={
         POLYMARKET: PolymarketDataClientConfig(
-            private_key=None,  # 'POLYMARKET_PK' env var
-            api_key=None,  # 'POLYMARKET_API_KEY' env var
-            api_secret=None,  # 'POLYMARKET_API_SECRET' env var
-            passphrase=None,  # 'POLYMARKET_PASSPHRASE' env var
-            # signature_type=2,  # Uncomment if you're using the proxy wallet (Polymarket UI)
-            instrument_provider=instrument_provider_config,
+            signature_type=2,  # Browser wallet proxy (Polymarket UI); requires funder address
+            instrument_config=instrument_provider_config,
             compute_effective_deltas=True,
         ),
     },

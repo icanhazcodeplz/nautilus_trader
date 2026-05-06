@@ -32,7 +32,7 @@ use crate::enums::ComponentState;
 #[serde(tag = "type")]
 #[cfg_attr(
     feature = "python",
-    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.model")
+    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.model", from_py_object)
 )]
 pub struct ComponentStateChanged {
     /// The trader ID associated with the event.
@@ -55,7 +55,7 @@ pub struct ComponentStateChanged {
 
 impl ComponentStateChanged {
     /// Creates a new [`ComponentStateChanged`] instance.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     #[must_use]
     pub fn new(
         trader_id: TraderId,

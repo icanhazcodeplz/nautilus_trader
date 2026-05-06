@@ -98,6 +98,7 @@ use nautilus_model::{
     data::{
         Bar, Data, FundingRateUpdate, GreeksData, IndexPriceUpdate, MarkPriceUpdate,
         OrderBookDeltas, OrderBookDepth10, QuoteTick, TradeTick,
+        option_chain::{OptionChainSlice, OptionGreeks},
     },
     events::{AccountState, OrderEventAny, PositionEvent},
     identifiers::TraderId,
@@ -239,6 +240,8 @@ pub struct MessageBus {
     pub(crate) router_orders: TopicRouter<OrderAny>,
     pub(crate) router_positions: TopicRouter<Position>,
     pub(crate) router_greeks: TopicRouter<GreeksData>,
+    pub(crate) router_option_greeks: TopicRouter<OptionGreeks>,
+    pub(crate) router_option_chain: TopicRouter<OptionChainSlice>,
     #[cfg(feature = "defi")]
     pub(crate) router_defi_blocks: TopicRouter<nautilus_model::defi::Block>, // nautilus-import-ok
     #[cfg(feature = "defi")]
@@ -308,6 +311,8 @@ impl MessageBus {
             router_orders: TopicRouter::new(),
             router_positions: TopicRouter::new(),
             router_greeks: TopicRouter::new(),
+            router_option_greeks: TopicRouter::new(),
+            router_option_chain: TopicRouter::new(),
             #[cfg(feature = "defi")]
             router_defi_blocks: TopicRouter::new(),
             #[cfg(feature = "defi")]
@@ -370,6 +375,58 @@ impl MessageBus {
             .expect("EndpointMap type mismatch - this is a bug")
     }
 
+    /// Disposes of the message bus, clearing all subscriptions, endpoints,
+    /// and handler references.
+    pub fn dispose(&mut self) {
+        self.subscriptions.clear();
+        self.topics.clear();
+        self.endpoints.clear();
+        self.correlation_index.clear();
+
+        self.router_quotes.clear();
+        self.router_trades.clear();
+        self.router_bars.clear();
+        self.router_deltas.clear();
+        self.router_depth10.clear();
+        self.router_book_snapshots.clear();
+        self.router_mark_prices.clear();
+        self.router_index_prices.clear();
+        self.router_funding_rates.clear();
+        self.router_order_events.clear();
+        self.router_position_events.clear();
+        self.router_account_state.clear();
+        self.router_orders.clear();
+        self.router_positions.clear();
+        self.router_greeks.clear();
+        self.router_option_greeks.clear();
+        self.router_option_chain.clear();
+
+        #[cfg(feature = "defi")]
+        {
+            self.router_defi_blocks.clear();
+            self.router_defi_pools.clear();
+            self.router_defi_swaps.clear();
+            self.router_defi_liquidity.clear();
+            self.router_defi_collects.clear();
+            self.router_defi_flash.clear();
+            self.endpoints_defi_data.clear();
+        }
+
+        self.endpoints_quotes.clear();
+        self.endpoints_trades.clear();
+        self.endpoints_bars.clear();
+        self.endpoints_account_state.clear();
+        self.endpoints_trading_commands.clear();
+        self.endpoints_data_commands.clear();
+        self.endpoints_data_responses.clear();
+        self.endpoints_exec_reports.clear();
+        self.endpoints_order_events.clear();
+        self.endpoints_data.clear();
+
+        self.routers_typed.clear();
+        self.endpoints_typed.clear();
+    }
+
     /// Returns the memory address of this instance as a hexadecimal string.
     #[must_use]
     pub fn mem_address(&self) -> String {
@@ -406,7 +463,7 @@ impl MessageBus {
     ///
     /// # Panics
     ///
-    /// Returns an error if the topic is not valid.
+    /// Panics if the `topic` is not a valid topic string.
     #[must_use]
     pub fn subscriptions_count<T: AsRef<str>>(&self, topic: T) -> usize {
         let topic = MStr::<Topic>::topic(topic).expect(FAILED);
@@ -434,7 +491,7 @@ impl MessageBus {
     ///
     /// # Panics
     ///
-    /// Returns an error if the endpoint is not valid topic string.
+    /// Panics if the `endpoint` conversion to `MStr<Endpoint>` fails.
     #[must_use]
     pub fn is_registered<T: Into<MStr<Endpoint>>>(&self, endpoint: T) -> bool {
         let endpoint: MStr<Endpoint> = endpoint.into();
@@ -549,7 +606,7 @@ impl MessageBus {
 
 #[cfg(test)]
 mod tests {
-    use rand::{Rng, SeedableRng, rngs::StdRng};
+    use rand::{RngExt, SeedableRng, rngs::StdRng};
     use rstest::rstest;
     use ustr::Ustr;
 
@@ -693,7 +750,7 @@ mod tests {
         let handler = get_stub_shareable_handler(None);
 
         msgbus::subscribe_any(topic.into(), handler.clone(), None);
-        msgbus::unsubscribe_any(topic.into(), handler);
+        msgbus::unsubscribe_any(topic.into(), &handler);
 
         assert!(!msgbus.borrow().has_subscribers(topic));
         assert!(msgbus.borrow().patterns().is_empty());
@@ -875,7 +932,7 @@ mod tests {
                             .unwrap();
 
                         // Apply to message bus
-                        msgbus::unsubscribe_any(pattern.as_str().into(), handler.clone());
+                        msgbus::unsubscribe_any(pattern.as_str().into(), &handler);
 
                         assert_eq!(
                             model.subscription_count(),
@@ -948,11 +1005,9 @@ mod tests {
                 pattern.push('*');
             } else if val < 0.3 {
                 pattern.push('?');
-            } else if val < 0.5 {
-                continue;
-            } else {
+            } else if val >= 0.5 {
                 pattern.push(c);
-            };
+            }
         }
 
         pattern

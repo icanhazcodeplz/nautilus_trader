@@ -15,6 +15,11 @@
 
 //! Python bindings from [PyO3](https://pyo3.rs).
 
+#![expect(
+    clippy::missing_errors_doc,
+    reason = "errors documented on underlying Rust methods"
+)]
+
 pub mod average;
 pub mod book;
 pub mod momentum;
@@ -58,6 +63,7 @@ pub fn indicators(_: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<crate::momentum::vhf::VerticalHorizontalFilter>()?;
     m.add_class::<crate::momentum::kvo::KlingerVolumeOscillator>()?;
     m.add_class::<crate::momentum::dm::DirectionalMovement>()?;
+    m.add_class::<crate::momentum::ichimoku::IchimokuCloud>()?;
     m.add_class::<crate::momentum::amat::ArcherMovingAveragesTrends>()?;
     m.add_class::<crate::momentum::swings::Swings>()?;
     m.add_class::<crate::momentum::bb::BollingerBands>()?;

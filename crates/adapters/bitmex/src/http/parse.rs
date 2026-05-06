@@ -17,10 +17,11 @@
 
 use std::str::FromStr;
 
-use nautilus_core::{UnixNanos, time::get_atomic_clock_realtime, uuid::UUID4};
+use dashmap::DashMap;
+use nautilus_core::{UnixNanos, uuid::UUID4};
 use nautilus_model::{
     data::{Bar, BarType, TradeTick},
-    enums::{ContingencyType, OrderSide, OrderStatus, OrderType, TimeInForce, TriggerType},
+    enums::{ContingencyType, OrderSide, OrderStatus, OrderType, TimeInForce, TrailingOffsetType},
     identifiers::{AccountId, ClientOrderId, OrderListId, Symbol, TradeId, VenueOrderId},
     instruments::{CryptoFuture, CryptoPerpetual, CurrencyPair, Instrument, InstrumentAny},
     reports::{FillReport, OrderStatusReport, PositionStatusReport},
@@ -28,19 +29,21 @@ use nautilus_model::{
 };
 use rust_decimal::Decimal;
 use ustr::Ustr;
-use uuid::Uuid;
 
 use super::models::{
     BitmexExecution, BitmexInstrument, BitmexOrder, BitmexPosition, BitmexTrade, BitmexTradeBin,
 };
 use crate::common::{
-    enums::{BitmexExecInstruction, BitmexExecType, BitmexInstrumentState, BitmexInstrumentType},
+    enums::{
+        BitmexExecInstruction, BitmexExecType, BitmexInstrumentState, BitmexInstrumentType,
+        BitmexOrderType, BitmexPegPriceType,
+    },
     parse::{
         clean_reason, convert_contract_quantity, derive_contract_decimal_and_increment,
-        map_bitmex_currency, normalize_trade_bin_prices, normalize_trade_bin_volume,
-        parse_aggressor_side, parse_contracts_quantity, parse_instrument_id, parse_liquidity_side,
-        parse_optional_datetime_to_unix_nanos, parse_position_side,
-        parse_signed_contracts_quantity,
+        derive_trade_id, extract_trigger_type, map_bitmex_currency, normalize_trade_bin_prices,
+        normalize_trade_bin_volume, parse_aggressor_side, parse_contracts_quantity,
+        parse_instrument_id, parse_liquidity_side, parse_optional_datetime_to_unix_nanos,
+        parse_position_side, parse_signed_contracts_quantity,
     },
 };
 
@@ -218,6 +221,7 @@ pub fn parse_index_instrument(
         None, // margin_maint
         None, // maker_fee
         None, // taker_fee
+        None, // info
         ts_init,
         ts_init,
     )))
@@ -283,7 +287,9 @@ pub fn parse_spot_instrument(
     let max_price = definition
         .max_price
         .map(|price| Price::from(price.to_string()));
-    let min_price = None;
+    let min_price = definition
+        .min_price
+        .map(|price| Price::from(price.to_string()));
     let ts_event = UnixNanos::from(definition.timestamp);
 
     let instrument = CurrencyPair::new(
@@ -307,6 +313,7 @@ pub fn parse_spot_instrument(
         Some(margin_maint),
         Some(maker_fee),
         Some(taker_fee),
+        None, // info
         ts_event,
         ts_init,
     );
@@ -376,7 +383,9 @@ pub fn parse_perpetual_instrument(
     let max_price = definition
         .max_price
         .map(|price| Price::from(price.to_string()));
-    let min_price = None;
+    let min_price = definition
+        .min_price
+        .map(|price| Price::from(price.to_string()));
     let ts_event = UnixNanos::from(definition.timestamp);
 
     let instrument = CryptoPerpetual::new(
@@ -402,6 +411,7 @@ pub fn parse_perpetual_instrument(
         Some(margin_maint),
         Some(maker_fee),
         Some(taker_fee),
+        None, // info
         ts_event,
         ts_init,
     );
@@ -478,7 +488,9 @@ pub fn parse_futures_instrument(
     let max_price = definition
         .max_price
         .map(|price| Price::from(price.to_string()));
-    let min_price = None;
+    let min_price = definition
+        .min_price
+        .map(|price| Price::from(price.to_string()));
     let instrument = CryptoFuture::new(
         instrument_id,
         raw_symbol,
@@ -504,6 +516,7 @@ pub fn parse_futures_instrument(
         Some(margin_maint),
         Some(maker_fee),
         Some(taker_fee),
+        None, // info
         ts_event,
         ts_init,
     );
@@ -518,20 +531,25 @@ pub fn parse_futures_instrument(
 /// Currently this function does not return errors as all fields are handled gracefully,
 /// but returns `Result` for future error handling compatibility.
 pub fn parse_trade(
-    trade: BitmexTrade,
-    price_precision: u8,
+    trade: &BitmexTrade,
+    instrument: &InstrumentAny,
     ts_init: UnixNanos,
 ) -> anyhow::Result<TradeTick> {
     let instrument_id = parse_instrument_id(trade.symbol);
-    let price = Price::new(trade.price, price_precision);
-    let size = Quantity::from(trade.size);
+    let price = Price::new(trade.price, instrument.price_precision());
+    let size = parse_contracts_quantity(trade.size as u64, instrument);
     let aggressor_side = parse_aggressor_side(&trade.side);
-    let trade_id = TradeId::new(
-        trade
-            .trd_match_id
-            .map_or_else(|| Uuid::new_v4().to_string(), |uuid| uuid.to_string()),
-    );
     let ts_event = UnixNanos::from(trade.timestamp);
+    let trade_id = match trade.trd_match_id {
+        Some(uuid) => TradeId::new(uuid.to_string()),
+        None => derive_trade_id(
+            trade.symbol,
+            ts_event.as_u64(),
+            trade.price,
+            trade.size,
+            trade.side,
+        ),
+    };
 
     Ok(TradeTick::new(
         instrument_id,
@@ -549,13 +567,8 @@ pub fn parse_trade(
 /// # Errors
 ///
 /// Returns an error when required OHLC fields are missing from the payload.
-///
-/// # Panics
-///
-/// Panics if the bar type or price precision cannot be determined for the instrument, which
-/// indicates the instrument cache was not hydrated prior to parsing.
 pub fn parse_trade_bin(
-    bin: BitmexTradeBin,
+    bin: &BitmexTradeBin,
     instrument: &InstrumentAny,
     bar_type: &BarType,
     ts_init: UnixNanos,
@@ -609,13 +622,10 @@ pub fn parse_trade_bin(
 /// - Order is missing `ord_status` and status cannot be inferred from quantity fields.
 /// - Order is missing `order_qty` and cannot be reconstructed from `cum_qty` + `leaves_qty`.
 ///
-/// # Panics
-///
-/// Panics if:
-/// - Unsupported `ExecInstruction` type is encountered (other than `ParticipateDoNotInitiate` or `ReduceOnly`)
 pub fn parse_order_status_report(
     order: &BitmexOrder,
     instrument: &InstrumentAny,
+    order_type_cache: &DashMap<ClientOrderId, OrderType>,
     ts_init: UnixNanos,
 ) -> anyhow::Result<OrderStatusReport> {
     let instrument_id = instrument.id();
@@ -625,9 +635,56 @@ pub fn parse_order_status_report(
         .side
         .map_or(OrderSide::NoOrderSide, |side| side.into());
 
-    // BitMEX may not include ord_type in cancel responses,
-    // for robustness default to LIMIT if not provided.
-    let order_type: OrderType = order.ord_type.map_or(OrderType::Limit, |t| t.into());
+    // BitMEX omits ord_type in some responses (e.g. cancels, fills),
+    // first try cache lookup, then infer from price/stop_px fields.
+    let order_type: OrderType = order.ord_type.map_or_else(
+        || {
+            if let Some(cl_ord_id) = &order.cl_ord_id {
+                let client_order_id = ClientOrderId::new(cl_ord_id);
+                if let Some(cached_type) = order_type_cache.get(&client_order_id) {
+                    log::debug!(
+                        "Using cached ord_type={:?} for order {}",
+                        *cached_type,
+                        order.order_id,
+                    );
+                    return *cached_type;
+                }
+            }
+
+            let inferred = if order.stop_px.is_some() {
+                if order.price.is_some() {
+                    OrderType::StopLimit
+                } else {
+                    OrderType::StopMarket
+                }
+            } else if order.price.is_some() {
+                OrderType::Limit
+            } else {
+                OrderType::Market
+            };
+            log::debug!(
+                "Inferred ord_type={inferred:?} for order {} (price={:?}, stop_px={:?})",
+                order.order_id,
+                order.price,
+                order.stop_px,
+            );
+            inferred
+        },
+        |t| {
+            // Pegged orders with TrailingStopPeg are trailing stop orders
+            if t == BitmexOrderType::Pegged
+                && order.peg_price_type == Some(BitmexPegPriceType::TrailingStopPeg)
+            {
+                if order.price.is_some() {
+                    OrderType::TrailingStopLimit
+                } else {
+                    OrderType::TrailingStopMarket
+                }
+            } else {
+                t.into()
+            }
+        },
+    );
 
     // BitMEX may not include time_in_force in cancel responses,
     // for robustness default to GTC if not provided.
@@ -721,14 +778,8 @@ pub fn parse_order_status_report(
         );
     };
     let report_id = UUID4::new();
-    let ts_accepted = order.transact_time.map_or_else(
-        || get_atomic_clock_realtime().get_time_ns(),
-        UnixNanos::from,
-    );
-    let ts_last = order.timestamp.map_or_else(
-        || get_atomic_clock_realtime().get_time_ns(),
-        UnixNanos::from,
-    );
+    let ts_accepted = order.transact_time.map_or(ts_init, UnixNanos::from);
+    let ts_last = order.timestamp.map_or(ts_init, UnixNanos::from);
 
     let mut report = OrderStatusReport::new(
         account_id,
@@ -768,7 +819,24 @@ pub fn parse_order_status_report(
     if let Some(trigger_price) = order.stop_px {
         report = report
             .with_trigger_price(Price::new(trigger_price, price_precision))
-            .with_trigger_type(TriggerType::Default);
+            .with_trigger_type(extract_trigger_type(order.exec_inst.as_ref()));
+    }
+
+    // Populate trailing offset for trailing stop orders
+    if matches!(
+        order_type,
+        OrderType::TrailingStopMarket | OrderType::TrailingStopLimit
+    ) && let Some(peg_offset) = order.peg_offset_value
+    {
+        let trailing_offset = Decimal::try_from(peg_offset.abs())
+            .unwrap_or_else(|_| Decimal::new(peg_offset.abs() as i64, 0));
+        report = report
+            .with_trailing_offset(trailing_offset)
+            .with_trailing_offset_type(TrailingOffsetType::Price);
+
+        if order.stop_px.is_none() {
+            report = report.with_trigger_type(extract_trigger_type(order.exec_inst.as_ref()));
+        }
     }
 
     if let Some(exec_instructions) = &order.exec_inst {
@@ -852,16 +920,11 @@ pub fn parse_order_status_report(
 ///
 /// Parse a BitMEX execution into a Nautilus `FillReport` using instrument scaling.
 ///
-/// # Panics
-///
-/// Panics if:
-/// - Execution is missing required fields: `symbol`, `order_id`, `trd_match_id`, `last_qty`, `last_px`, or `transact_time`
-///
 /// # Errors
 ///
 /// Returns an error when the execution does not represent a trade or lacks required identifiers.
 pub fn parse_fill_report(
-    exec: BitmexExecution,
+    exec: &BitmexExecution,
     instrument: &InstrumentAny,
     ts_init: UnixNanos,
 ) -> anyhow::Result<FillReport> {
@@ -902,10 +965,7 @@ pub fn parse_fill_report(
     let liquidity_side = parse_liquidity_side(&exec.last_liquidity_ind);
     let client_order_id = exec.cl_ord_id.map(ClientOrderId::new);
     let venue_position_id = None; // Not applicable on BitMEX
-    let ts_event = exec.transact_time.map_or_else(
-        || get_atomic_clock_realtime().get_time_ns(),
-        UnixNanos::from,
-    );
+    let ts_event = exec.transact_time.map_or(ts_init, UnixNanos::from);
 
     Ok(FillReport::new(
         account_id,
@@ -932,7 +992,7 @@ pub fn parse_fill_report(
 /// Currently this function does not return errors as all fields are handled gracefully,
 /// but returns `Result` for future error handling compatibility.
 pub fn parse_position_report(
-    position: BitmexPosition,
+    position: &BitmexPosition,
     instrument: &InstrumentAny,
     ts_init: UnixNanos,
 ) -> anyhow::Result<PositionStatusReport> {
@@ -1109,6 +1169,34 @@ mod tests {
     }
 
     #[rstest]
+    fn test_parse_trade_derives_trade_id_when_trd_match_id_missing() {
+        let json_data = load_test_json("http_get_trades.json");
+        let mut trades: Vec<BitmexTrade> = serde_json::from_str(&json_data).unwrap();
+        trades[0].trd_match_id = None;
+        trades[1] = trades[0].clone();
+        trades[2] = trades[0].clone();
+        trades[2].price += 1.0;
+
+        let instrument =
+            parse_perpetual_instrument(&create_test_perpetual_instrument(), UnixNanos::default())
+                .unwrap();
+
+        let tick_a = parse_trade(&trades[0], &instrument, UnixNanos::from(1)).unwrap();
+        let tick_b = parse_trade(&trades[1], &instrument, UnixNanos::from(1)).unwrap();
+        let tick_c = parse_trade(&trades[2], &instrument, UnixNanos::from(1)).unwrap();
+
+        assert_eq!(
+            tick_a.trade_id, tick_b.trade_id,
+            "derivation must be stable"
+        );
+        assert_eq!(tick_a.trade_id.as_str().len(), 16);
+        assert_ne!(
+            tick_a.trade_id, tick_c.trade_id,
+            "distinct price must distinguish"
+        );
+    }
+
+    #[rstest]
     fn test_parse_wallet() {
         let json_data = load_test_json("http_get_wallet.json");
         let wallets: Vec<BitmexWallet> = serde_json::from_str(&json_data).unwrap();
@@ -1155,13 +1243,13 @@ mod tests {
         let ts_init = UnixNanos::from(1u64);
         let instrument_any = match parse_instrument_any(&instrument, ts_init) {
             InstrumentParseResult::Ok(inst) => inst,
-            other => panic!("Expected Ok, got {other:?}"),
+            other => panic!("Expected Ok, was {other:?}"),
         };
 
         let spec = BarSpecification::new(1, BarAggregation::Minute, PriceType::Last);
         let bar_type = BarType::new(instrument_any.id(), spec, AggregationSource::External);
 
-        let bar = parse_trade_bin(bins[0].clone(), &instrument_any, &bar_type, ts_init).unwrap();
+        let bar = parse_trade_bin(&bins[0], &instrument_any, &bar_type, ts_init).unwrap();
 
         let precision = instrument_any.price_precision();
         let expected_open =
@@ -1184,7 +1272,7 @@ mod tests {
         let ts_init = UnixNanos::from(1u64);
         let instrument_any = match parse_instrument_any(&instrument, ts_init) {
             InstrumentParseResult::Ok(inst) => inst,
-            other => panic!("Expected Ok, got {other:?}"),
+            other => panic!("Expected Ok, was {other:?}"),
         };
 
         let spec = BarSpecification::new(1, BarAggregation::Minute, PriceType::Last);
@@ -1208,7 +1296,7 @@ mod tests {
             foreign_notional: None,
         };
 
-        let bar = parse_trade_bin(bin, &instrument_any, &bar_type, ts_init).unwrap();
+        let bar = parse_trade_bin(&bin, &instrument_any, &bar_type, ts_init).unwrap();
 
         let precision = instrument_any.price_precision();
         let expected_high =
@@ -1274,7 +1362,9 @@ mod tests {
         let instrument =
             parse_perpetual_instrument(&create_test_perpetual_instrument(), UnixNanos::default())
                 .unwrap();
-        let report = parse_order_status_report(&order, &instrument, UnixNanos::from(1)).unwrap();
+        let report =
+            parse_order_status_report(&order, &instrument, &DashMap::default(), UnixNanos::from(1))
+                .unwrap();
 
         assert_eq!(report.account_id.to_string(), "BITMEX-123456");
         assert_eq!(report.instrument_id.to_string(), "XBTUSD.BITMEX");
@@ -1340,7 +1430,9 @@ mod tests {
         instrument_def.quote_currency = Ustr::from("USD");
         instrument_def.settl_currency = Some(Ustr::from("USDt"));
         let instrument = parse_perpetual_instrument(&instrument_def, UnixNanos::default()).unwrap();
-        let report = parse_order_status_report(&order, &instrument, UnixNanos::from(1)).unwrap();
+        let report =
+            parse_order_status_report(&order, &instrument, &DashMap::default(), UnixNanos::from(1))
+                .unwrap();
 
         assert_eq!(report.account_id.to_string(), "BITMEX-0");
         assert_eq!(report.instrument_id.to_string(), "ETHUSD.BITMEX");
@@ -1403,7 +1495,9 @@ mod tests {
         let instrument =
             parse_perpetual_instrument(&create_test_perpetual_instrument(), UnixNanos::default())
                 .unwrap();
-        let report = parse_order_status_report(&order, &instrument, UnixNanos::from(1)).unwrap();
+        let report =
+            parse_order_status_report(&order, &instrument, &DashMap::default(), UnixNanos::from(1))
+                .unwrap();
 
         // Verify order_qty was reconstructed from cum_qty + leaves_qty
         assert_eq!(report.quantity.as_f64(), 100.0); // 75 + 25
@@ -1457,7 +1551,9 @@ mod tests {
         let instrument =
             parse_perpetual_instrument(&create_test_perpetual_instrument(), UnixNanos::default())
                 .unwrap();
-        let report = parse_order_status_report(&order, &instrument, UnixNanos::from(1)).unwrap();
+        let report =
+            parse_order_status_report(&order, &instrument, &DashMap::default(), UnixNanos::from(1))
+                .unwrap();
 
         // Verify order_qty was used directly (not reconstructed)
         assert_eq!(report.quantity.as_f64(), 150.0);
@@ -1513,7 +1609,8 @@ mod tests {
                 .unwrap();
 
         // Should fail because we cannot reconstruct order_qty
-        let result = parse_order_status_report(&order, &instrument, UnixNanos::from(1));
+        let result =
+            parse_order_status_report(&order, &instrument, &DashMap::default(), UnixNanos::from(1));
         assert!(result.is_err());
         assert!(
             result
@@ -1569,7 +1666,9 @@ mod tests {
         let instrument =
             parse_perpetual_instrument(&create_test_perpetual_instrument(), UnixNanos::default())
                 .unwrap();
-        let report = parse_order_status_report(&order, &instrument, UnixNanos::from(1)).unwrap();
+        let report =
+            parse_order_status_report(&order, &instrument, &DashMap::default(), UnixNanos::from(1))
+                .unwrap();
 
         // For canceled orders with missing quantities, parser uses 0 (will be reconciled from cache)
         assert_eq!(report.order_status, OrderStatus::Canceled);
@@ -1623,7 +1722,9 @@ mod tests {
         let instrument =
             parse_perpetual_instrument(&create_test_perpetual_instrument(), UnixNanos::default())
                 .unwrap();
-        let report = parse_order_status_report(&order, &instrument, UnixNanos::from(1)).unwrap();
+        let report =
+            parse_order_status_report(&order, &instrument, &DashMap::default(), UnixNanos::from(1))
+                .unwrap();
 
         assert_eq!(report.order_status, OrderStatus::Rejected);
         assert_eq!(
@@ -1678,7 +1779,9 @@ mod tests {
         let instrument =
             parse_perpetual_instrument(&create_test_perpetual_instrument(), UnixNanos::default())
                 .unwrap();
-        let report = parse_order_status_report(&order, &instrument, UnixNanos::from(1)).unwrap();
+        let report =
+            parse_order_status_report(&order, &instrument, &DashMap::default(), UnixNanos::from(1))
+                .unwrap();
 
         assert_eq!(report.order_status, OrderStatus::Rejected);
         assert_eq!(
@@ -1733,7 +1836,9 @@ mod tests {
         let instrument =
             parse_perpetual_instrument(&create_test_perpetual_instrument(), UnixNanos::default())
                 .unwrap();
-        let report = parse_order_status_report(&order, &instrument, UnixNanos::from(1)).unwrap();
+        let report =
+            parse_order_status_report(&order, &instrument, &DashMap::default(), UnixNanos::from(1))
+                .unwrap();
 
         assert_eq!(report.order_status, OrderStatus::Rejected);
         assert_eq!(report.cancel_reason, None);
@@ -1796,7 +1901,7 @@ mod tests {
             parse_perpetual_instrument(&create_test_perpetual_instrument(), UnixNanos::default())
                 .unwrap();
 
-        let report = parse_fill_report(exec, &instrument, UnixNanos::from(1)).unwrap();
+        let report = parse_fill_report(&exec, &instrument, UnixNanos::from(1)).unwrap();
 
         assert_eq!(report.account_id.to_string(), "BITMEX-654321");
         assert_eq!(report.instrument_id.to_string(), "XBTUSD.BITMEX");
@@ -1876,7 +1981,7 @@ mod tests {
         instrument_def.settl_currency = Some(Ustr::from("USDt"));
         let instrument = parse_perpetual_instrument(&instrument_def, UnixNanos::default()).unwrap();
 
-        let report = parse_fill_report(exec, &instrument, UnixNanos::from(1)).unwrap();
+        let report = parse_fill_report(&exec, &instrument, UnixNanos::from(1)).unwrap();
 
         assert_eq!(report.account_id.to_string(), "BITMEX-111111");
         assert_eq!(report.instrument_id.to_string(), "ETHUSD.BITMEX");
@@ -1989,7 +2094,7 @@ mod tests {
             parse_perpetual_instrument(&create_test_perpetual_instrument(), UnixNanos::default())
                 .unwrap();
 
-        let report = parse_position_report(position, &instrument, UnixNanos::from(1)).unwrap();
+        let report = parse_position_report(&position, &instrument, UnixNanos::from(1)).unwrap();
 
         assert_eq!(report.account_id.to_string(), "BITMEX-789012");
         assert_eq!(report.instrument_id.to_string(), "XBTUSD.BITMEX");
@@ -2099,7 +2204,7 @@ mod tests {
         instrument_def.settl_currency = Some(Ustr::from("USD"));
         let instrument = parse_futures_instrument(&instrument_def, UnixNanos::default()).unwrap();
 
-        let report = parse_position_report(position, &instrument, UnixNanos::from(1)).unwrap();
+        let report = parse_position_report(&position, &instrument, UnixNanos::from(1)).unwrap();
 
         assert_eq!(report.position_side.as_position_side(), PositionSide::Short);
         assert_eq!(report.quantity.as_f64(), 500.0); // Should be absolute value
@@ -2206,7 +2311,7 @@ mod tests {
         instrument_def.quote_currency = Ustr::from("USD");
         let instrument = parse_spot_instrument(&instrument_def, UnixNanos::default()).unwrap();
 
-        let report = parse_position_report(position, &instrument, UnixNanos::from(1)).unwrap();
+        let report = parse_position_report(&position, &instrument, UnixNanos::from(1)).unwrap();
 
         assert_eq!(report.position_side.as_position_side(), PositionSide::Flat);
         assert_eq!(report.quantity.as_f64(), 0.0);
@@ -2313,7 +2418,7 @@ mod tests {
         instrument_def.quote_currency = Ustr::from("USD");
         let instrument = parse_spot_instrument(&instrument_def, UnixNanos::default()).unwrap();
 
-        let report = parse_position_report(position, &instrument, UnixNanos::from(1)).unwrap();
+        let report = parse_position_report(&position, &instrument, UnixNanos::from(1)).unwrap();
 
         assert_eq!(report.position_side.as_position_side(), PositionSide::Long);
         assert!((report.quantity.as_f64() - 0.1).abs() < 1e-9);
@@ -2358,6 +2463,7 @@ mod tests {
             // Set other fields to reasonable defaults
             max_order_qty: Some(10000000.0),
             max_price: Some(1000000.0),
+            min_price: None,
             settlement_fee: Some(0.0),
             mark_price: Some(50500.0),
             last_price: Some(50500.0),
@@ -2470,6 +2576,7 @@ mod tests {
             // Set other fields
             max_order_qty: Some(10000000.0),
             max_price: Some(1000000.0),
+            min_price: None,
             settlement_fee: Some(0.0),
             mark_price: Some(50500.01),
             last_price: Some(50500.0),
@@ -2600,6 +2707,7 @@ mod tests {
             // Set other fields
             max_order_qty: Some(10000000.0),
             max_price: Some(1000000.0),
+            min_price: None,
             mark_price: Some(55500.0),
             last_price: Some(55500.0),
             bid_price: Some(55499.5),
@@ -2795,7 +2903,9 @@ mod tests {
         let instrument =
             parse_perpetual_instrument(&create_test_perpetual_instrument(), UnixNanos::default())
                 .unwrap();
-        let report = parse_order_status_report(&order, &instrument, UnixNanos::from(1)).unwrap();
+        let report =
+            parse_order_status_report(&order, &instrument, &DashMap::default(), UnixNanos::from(1))
+                .unwrap();
 
         assert_eq!(report.order_status, OrderStatus::Filled);
         assert_eq!(report.account_id.to_string(), "BITMEX-123456");
@@ -2848,7 +2958,9 @@ mod tests {
         let instrument =
             parse_perpetual_instrument(&create_test_perpetual_instrument(), UnixNanos::default())
                 .unwrap();
-        let report = parse_order_status_report(&order, &instrument, UnixNanos::from(1)).unwrap();
+        let report =
+            parse_order_status_report(&order, &instrument, &DashMap::default(), UnixNanos::from(1))
+                .unwrap();
 
         assert_eq!(report.order_status, OrderStatus::Canceled);
         assert_eq!(report.account_id.to_string(), "BITMEX-123456");
@@ -2906,7 +3018,8 @@ mod tests {
         let instrument =
             parse_perpetual_instrument(&create_test_perpetual_instrument(), UnixNanos::default())
                 .unwrap();
-        let result = parse_order_status_report(&order, &instrument, UnixNanos::from(1));
+        let result =
+            parse_order_status_report(&order, &instrument, &DashMap::default(), UnixNanos::from(1));
 
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
@@ -2960,11 +3073,286 @@ mod tests {
         let instrument =
             parse_perpetual_instrument(&create_test_perpetual_instrument(), UnixNanos::default())
                 .unwrap();
-        let result = parse_order_status_report(&order, &instrument, UnixNanos::from(1));
+        let result =
+            parse_order_status_report(&order, &instrument, &DashMap::default(), UnixNanos::from(1));
 
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("missing ord_status"));
         assert!(err_msg.contains("cannot infer"));
+    }
+
+    #[rstest]
+    fn test_parse_order_status_report_infers_market_order_type() {
+        // Missing ord_type, no price, no stop_px -> Market
+        let order = BitmexOrder {
+            account: 123456,
+            symbol: Some(Ustr::from("XBTUSD")),
+            order_id: Uuid::parse_str("a1b2c3d4-e5f6-7890-abcd-ef1234567890").unwrap(),
+            cl_ord_id: Some(Ustr::from("client-123")),
+            cl_ord_link_id: None,
+            side: Some(BitmexSide::Buy),
+            ord_type: None,
+            time_in_force: Some(BitmexTimeInForce::GoodTillCancel),
+            ord_status: Some(BitmexOrderStatus::Filled),
+            order_qty: Some(100),
+            cum_qty: Some(100),
+            price: None,
+            stop_px: None,
+            display_qty: None,
+            peg_offset_value: None,
+            peg_price_type: None,
+            currency: Some(Ustr::from("USD")),
+            settl_currency: Some(Ustr::from("XBt")),
+            exec_inst: None,
+            contingency_type: None,
+            ex_destination: None,
+            triggered: None,
+            working_indicator: None,
+            ord_rej_reason: None,
+            leaves_qty: Some(0),
+            avg_px: Some(50000.0),
+            multi_leg_reporting_type: None,
+            text: None,
+            transact_time: Some(
+                DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+            ),
+            timestamp: Some(
+                DateTime::parse_from_rfc3339("2024-01-01T00:00:01Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+            ),
+        };
+
+        let instrument =
+            parse_perpetual_instrument(&create_test_perpetual_instrument(), UnixNanos::default())
+                .unwrap();
+        let report =
+            parse_order_status_report(&order, &instrument, &DashMap::default(), UnixNanos::from(1))
+                .unwrap();
+
+        assert_eq!(report.order_type, OrderType::Market);
+    }
+
+    #[rstest]
+    fn test_parse_order_status_report_infers_limit_order_type() {
+        // Missing ord_type, has price, no stop_px -> Limit
+        let order = BitmexOrder {
+            account: 123456,
+            symbol: Some(Ustr::from("XBTUSD")),
+            order_id: Uuid::parse_str("a1b2c3d4-e5f6-7890-abcd-ef1234567890").unwrap(),
+            cl_ord_id: Some(Ustr::from("client-123")),
+            cl_ord_link_id: None,
+            side: Some(BitmexSide::Buy),
+            ord_type: None,
+            time_in_force: Some(BitmexTimeInForce::GoodTillCancel),
+            ord_status: Some(BitmexOrderStatus::New),
+            order_qty: Some(100),
+            cum_qty: Some(0),
+            price: Some(50000.0),
+            stop_px: None,
+            display_qty: None,
+            peg_offset_value: None,
+            peg_price_type: None,
+            currency: Some(Ustr::from("USD")),
+            settl_currency: Some(Ustr::from("XBt")),
+            exec_inst: None,
+            contingency_type: None,
+            ex_destination: None,
+            triggered: None,
+            working_indicator: Some(true),
+            ord_rej_reason: None,
+            leaves_qty: Some(100),
+            avg_px: None,
+            multi_leg_reporting_type: None,
+            text: None,
+            transact_time: Some(
+                DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+            ),
+            timestamp: Some(
+                DateTime::parse_from_rfc3339("2024-01-01T00:00:01Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+            ),
+        };
+
+        let instrument =
+            parse_perpetual_instrument(&create_test_perpetual_instrument(), UnixNanos::default())
+                .unwrap();
+        let report =
+            parse_order_status_report(&order, &instrument, &DashMap::default(), UnixNanos::from(1))
+                .unwrap();
+
+        assert_eq!(report.order_type, OrderType::Limit);
+    }
+
+    #[rstest]
+    fn test_parse_order_status_report_infers_stop_market_order_type() {
+        // Missing ord_type, no price, has stop_px -> StopMarket
+        let order = BitmexOrder {
+            account: 123456,
+            symbol: Some(Ustr::from("XBTUSD")),
+            order_id: Uuid::parse_str("a1b2c3d4-e5f6-7890-abcd-ef1234567890").unwrap(),
+            cl_ord_id: Some(Ustr::from("client-123")),
+            cl_ord_link_id: None,
+            side: Some(BitmexSide::Sell),
+            ord_type: None,
+            time_in_force: Some(BitmexTimeInForce::GoodTillCancel),
+            ord_status: Some(BitmexOrderStatus::New),
+            order_qty: Some(100),
+            cum_qty: Some(0),
+            price: None,
+            stop_px: Some(45000.0),
+            display_qty: None,
+            peg_offset_value: None,
+            peg_price_type: None,
+            currency: Some(Ustr::from("USD")),
+            settl_currency: Some(Ustr::from("XBt")),
+            exec_inst: None,
+            contingency_type: None,
+            ex_destination: None,
+            triggered: None,
+            working_indicator: Some(false),
+            ord_rej_reason: None,
+            leaves_qty: Some(100),
+            avg_px: None,
+            multi_leg_reporting_type: None,
+            text: None,
+            transact_time: Some(
+                DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+            ),
+            timestamp: Some(
+                DateTime::parse_from_rfc3339("2024-01-01T00:00:01Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+            ),
+        };
+
+        let instrument =
+            parse_perpetual_instrument(&create_test_perpetual_instrument(), UnixNanos::default())
+                .unwrap();
+        let report =
+            parse_order_status_report(&order, &instrument, &DashMap::default(), UnixNanos::from(1))
+                .unwrap();
+
+        assert_eq!(report.order_type, OrderType::StopMarket);
+    }
+
+    #[rstest]
+    fn test_parse_order_status_report_infers_stop_limit_order_type() {
+        // Missing ord_type, has price and stop_px -> StopLimit
+        let order = BitmexOrder {
+            account: 123456,
+            symbol: Some(Ustr::from("XBTUSD")),
+            order_id: Uuid::parse_str("a1b2c3d4-e5f6-7890-abcd-ef1234567890").unwrap(),
+            cl_ord_id: Some(Ustr::from("client-123")),
+            cl_ord_link_id: None,
+            side: Some(BitmexSide::Sell),
+            ord_type: None,
+            time_in_force: Some(BitmexTimeInForce::GoodTillCancel),
+            ord_status: Some(BitmexOrderStatus::New),
+            order_qty: Some(100),
+            cum_qty: Some(0),
+            price: Some(44000.0),
+            stop_px: Some(45000.0),
+            display_qty: None,
+            peg_offset_value: None,
+            peg_price_type: None,
+            currency: Some(Ustr::from("USD")),
+            settl_currency: Some(Ustr::from("XBt")),
+            exec_inst: None,
+            contingency_type: None,
+            ex_destination: None,
+            triggered: None,
+            working_indicator: Some(false),
+            ord_rej_reason: None,
+            leaves_qty: Some(100),
+            avg_px: None,
+            multi_leg_reporting_type: None,
+            text: None,
+            transact_time: Some(
+                DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+            ),
+            timestamp: Some(
+                DateTime::parse_from_rfc3339("2024-01-01T00:00:01Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+            ),
+        };
+
+        let instrument =
+            parse_perpetual_instrument(&create_test_perpetual_instrument(), UnixNanos::default())
+                .unwrap();
+        let report =
+            parse_order_status_report(&order, &instrument, &DashMap::default(), UnixNanos::from(1))
+                .unwrap();
+
+        assert_eq!(report.order_type, OrderType::StopLimit);
+    }
+
+    #[rstest]
+    fn test_parse_order_status_report_uses_cached_order_type() {
+        // Missing ord_type but cache has the order type -> use cached value
+        let order = BitmexOrder {
+            account: 123456,
+            symbol: Some(Ustr::from("XBTUSD")),
+            order_id: Uuid::parse_str("a1b2c3d4-e5f6-7890-abcd-ef1234567890").unwrap(),
+            cl_ord_id: Some(Ustr::from("client-123")),
+            cl_ord_link_id: None,
+            side: Some(BitmexSide::Buy),
+            ord_type: None,
+            time_in_force: Some(BitmexTimeInForce::GoodTillCancel),
+            ord_status: Some(BitmexOrderStatus::Canceled),
+            order_qty: None,
+            cum_qty: Some(0),
+            price: None,
+            stop_px: None,
+            display_qty: None,
+            peg_offset_value: None,
+            peg_price_type: None,
+            currency: Some(Ustr::from("USD")),
+            settl_currency: Some(Ustr::from("XBt")),
+            exec_inst: None,
+            contingency_type: None,
+            ex_destination: None,
+            triggered: None,
+            working_indicator: None,
+            ord_rej_reason: None,
+            leaves_qty: Some(0),
+            avg_px: None,
+            multi_leg_reporting_type: None,
+            text: None,
+            transact_time: Some(
+                DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+            ),
+            timestamp: Some(
+                DateTime::parse_from_rfc3339("2024-01-01T00:00:01Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+            ),
+        };
+
+        let instrument =
+            parse_perpetual_instrument(&create_test_perpetual_instrument(), UnixNanos::default())
+                .unwrap();
+
+        // Pre-populate cache with StopLimit (would be inferred as Market without cache)
+        let cache: DashMap<ClientOrderId, OrderType> = DashMap::new();
+        cache.insert(ClientOrderId::new("client-123"), OrderType::StopLimit);
+
+        let report =
+            parse_order_status_report(&order, &instrument, &cache, UnixNanos::from(1)).unwrap();
+
+        assert_eq!(report.order_type, OrderType::StopLimit);
     }
 }

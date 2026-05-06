@@ -13,8 +13,9 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
-use std::{collections::HashMap, fmt::Display, str::FromStr};
+use std::{fmt::Display, str::FromStr};
 
+use ahash::AHashMap;
 use nautilus_core::{UUID4, UnixNanos};
 use nautilus_model::{
     data::{delta::OrderBookDelta, deltas::OrderBookDeltas, order::BookOrder},
@@ -22,12 +23,13 @@ use nautilus_model::{
     events::AccountState,
     identifiers::{AccountId, InstrumentId},
     reports::PositionStatusReport,
-    types::{AccountBalance, Money, Price, Quantity},
+    types::{AccountBalance, Price, Quantity},
 };
-use rust_decimal::{Decimal, prelude::ToPrimitive};
+use rust_decimal::Decimal;
 use ustr::Ustr;
 
 use crate::{
+    common::parse::normalize_order,
     http::{
         models::{HyperliquidL2Book, HyperliquidLevel},
         parse::get_currency,
@@ -108,14 +110,14 @@ impl HyperliquidInstrumentInfo {
 /// Simple instrument cache for parsing messages and responses
 #[derive(Debug, Default)]
 pub struct HyperliquidInstrumentCache {
-    instruments_by_symbol: HashMap<Ustr, HyperliquidInstrumentInfo>,
+    instruments_by_symbol: AHashMap<Ustr, HyperliquidInstrumentInfo>,
 }
 
 impl HyperliquidInstrumentCache {
     /// Create a new empty cache
     pub fn new() -> Self {
         Self {
-            instruments_by_symbol: HashMap::new(),
+            instruments_by_symbol: AHashMap::new(),
         }
     }
 
@@ -168,7 +170,7 @@ pub enum HyperliquidTradeKey {
 #[derive(Debug)]
 pub struct HyperliquidDataConverter {
     /// Configuration by instrument symbol
-    configs: HashMap<Ustr, HyperliquidInstrumentInfo>,
+    configs: AHashMap<Ustr, HyperliquidInstrumentInfo>,
 }
 
 impl Default for HyperliquidDataConverter {
@@ -181,7 +183,7 @@ impl HyperliquidDataConverter {
     /// Create a new converter
     pub fn new() -> Self {
         Self {
-            configs: HashMap::new(),
+            configs: AHashMap::new(),
         }
     }
 
@@ -213,7 +215,7 @@ impl HyperliquidDataConverter {
         });
         let min_notional = config.min_notional.unwrap_or_else(|| Decimal::from(10)); // $10 minimum
 
-        crate::common::parse::normalize_order(
+        normalize_order(
             price,
             qty,
             tick_size,
@@ -358,7 +360,7 @@ impl HyperliquidDataConverter {
 
     /// Convert price/size changes to OrderBookDeltas
     /// This would be used for incremental WebSocket updates if Hyperliquid provided them
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn convert_delta_update(
         &self,
         instrument_id: InstrumentId,
@@ -553,10 +555,6 @@ impl Display for ConversionError {
 
 impl std::error::Error for ConversionError {}
 
-////////////////////////////////////////////////////////////////////////////////
-// Position and Account State Management
-////////////////////////////////////////////////////////////////////////////////
-
 /// Raw position data from Hyperliquid API for parsing position status reports.
 ///
 /// This struct is used only for parsing API responses and converting to Nautilus
@@ -640,13 +638,13 @@ impl HyperliquidBalance {
 /// - [User State Info](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint/perpetuals#retrieve-users-perpetuals-account-summary)
 #[derive(Default, Debug)]
 pub struct HyperliquidAccountState {
-    pub balances: HashMap<String, HyperliquidBalance>,
+    pub balances: AHashMap<String, HyperliquidBalance>,
     pub last_sequence: u64,
 }
 
 impl HyperliquidAccountState {
     pub fn new() -> Self {
-        Default::default()
+        Self::default()
     }
 
     /// Get balance for an asset, returns zero balance if not found
@@ -690,27 +688,16 @@ impl HyperliquidAccountState {
             .map(|balance| {
                 // Create currency - Hyperliquid primarily uses USD/USDC
                 let currency = get_currency(&balance.asset);
-
-                // Convert Decimal to f64 and create Money with proper currency
-                let total = Money::new(balance.total.to_f64().unwrap_or(0.0), currency);
-                let free = Money::new(balance.available.to_f64().unwrap_or(0.0), currency);
-                let locked = total - free; // locked = total - available
-
-                AccountBalance::new(total, locked, free)
+                AccountBalance::from_total_and_free(balance.total, balance.available, currency)
+                    .map_err(anyhow::Error::from)
             })
-            .collect();
+            .collect::<anyhow::Result<Vec<_>>>()?;
 
-        // For now, we don't map individual position margins since Hyperliquid uses cross-margin
-        // The risk management happens at the exchange level
+        // Hyperliquid uses cross-margin so we don't map individual position margins
         let margins = Vec::new();
 
-        // Hyperliquid is a margin exchange (supports leverage)
         let account_type = AccountType::Margin;
-
-        // This state comes from the exchange
         let is_reported = true;
-
-        // Generate event ID
         let event_id = UUID4::new();
 
         Ok(AccountState::new(
@@ -802,12 +789,9 @@ pub fn parse_position_status_report(
     };
 
     // Convert position size to Quantity
-    let quantity = Quantity::new(position_data.position.abs().to_f64().unwrap_or(0.0), 0);
+    let quantity = Quantity::from_decimal(position_data.position.abs())?;
 
-    // Use current timestamp as last update time
     let ts_last = ts_init;
-
-    // Convert entry price to Decimal if available
     let avg_px_open = position_data.entry_px;
 
     Ok(PositionStatusReport::new(
@@ -823,8 +807,6 @@ pub fn parse_position_status_report(
     ))
 }
 
-////////////////////////////////////////////////////////////////////////////////
-
 #[cfg(test)]
 #[allow(dead_code)]
 mod tests {
@@ -832,15 +814,7 @@ mod tests {
     use rust_decimal_macros::dec;
 
     use super::*;
-
-    fn load_test_data<T>(filename: &str) -> T
-    where
-        T: serde::de::DeserializeOwned,
-    {
-        let path = format!("test_data/{filename}");
-        let content = std::fs::read_to_string(path).expect("Failed to read test data");
-        serde_json::from_str(&content).expect("Failed to parse test data")
-    }
+    use crate::common::testing::load_test_data;
 
     fn test_instrument_id() -> InstrumentId {
         InstrumentId::from("BTC.HYPER")
@@ -1209,7 +1183,8 @@ mod tests {
 
         assert!(result.is_ok());
         let (price, qty) = result.unwrap();
-        assert_eq!(price, dec!(50123.45)); // rounded down to tick size
+        // Price is first rounded to 5 sig figs (50123), then to tick size
+        assert_eq!(price, dec!(50123.00));
         assert_eq!(qty, dec!(0.12345)); // rounded down to step size
 
         // Test with symbol not configured (should use defaults)
@@ -1415,5 +1390,57 @@ mod tests {
         assert_eq!(balance.total, dec!(1200.0)); // Still the newer value
         assert_eq!(balance.sequence, 10); // Still the newer sequence
         assert_eq!(state.last_sequence, 10); // Global sequence unchanged
+    }
+
+    #[rstest]
+    fn test_hyperliquid_account_state_to_account_state_uses_from_total_and_free() {
+        use nautilus_model::identifiers::AccountId;
+
+        let mut state = HyperliquidAccountState::new();
+        state.balances.insert(
+            "USDC".to_string(),
+            HyperliquidBalance::new(
+                "USDC".to_string(),
+                dec!(10_000),
+                dec!(7_500),
+                1,
+                UnixNanos::default(),
+            ),
+        );
+        state.balances.insert(
+            "BTC".to_string(),
+            HyperliquidBalance::new(
+                "BTC".to_string(),
+                dec!(1.25),
+                dec!(1.0),
+                2,
+                UnixNanos::default(),
+            ),
+        );
+
+        let account_id = AccountId::new("HYPERLIQUID-001");
+        let ts = UnixNanos::default();
+        let account_state = state.to_account_state(account_id, ts, ts).unwrap();
+
+        assert_eq!(account_state.account_id, account_id);
+        assert_eq!(account_state.balances.len(), 2);
+
+        let usdc = account_state
+            .balances
+            .iter()
+            .find(|b| b.currency.code.as_str() == "USDC")
+            .expect("USDC balance emitted");
+        assert_eq!(usdc.total.as_decimal(), dec!(10_000));
+        assert_eq!(usdc.free.as_decimal(), dec!(7_500));
+        assert_eq!(usdc.locked.as_decimal(), dec!(2_500));
+
+        let btc = account_state
+            .balances
+            .iter()
+            .find(|b| b.currency.code.as_str() == "BTC")
+            .expect("BTC balance emitted");
+        assert_eq!(btc.total.as_decimal(), dec!(1.25));
+        assert_eq!(btc.free.as_decimal(), dec!(1.0));
+        assert_eq!(btc.locked.as_decimal(), dec!(0.25));
     }
 }

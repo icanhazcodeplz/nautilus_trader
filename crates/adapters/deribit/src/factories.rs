@@ -21,13 +21,13 @@ use nautilus_common::{
     cache::Cache,
     clients::{DataClient, ExecutionClient},
     clock::Clock,
+    factories::{ClientConfig, DataClientFactory, ExecutionClientFactory},
 };
 use nautilus_live::ExecutionClientCore;
 use nautilus_model::{
     enums::{AccountType, OmsType},
     identifiers::ClientId,
 };
-use nautilus_system::factories::{ClientConfig, DataClientFactory, ExecutionClientFactory};
 
 use crate::{
     common::consts::DERIBIT_VENUE,
@@ -43,7 +43,15 @@ impl ClientConfig for DeribitDataClientConfig {
 }
 
 /// Factory for creating Deribit data clients.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.deribit", from_py_object)
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass(module = "nautilus_trader.deribit")
+)]
 pub struct DeribitDataClientFactory;
 
 impl DeribitDataClientFactory {
@@ -99,7 +107,15 @@ impl ClientConfig for DeribitExecClientConfig {
 }
 
 /// Factory for creating Deribit execution clients.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.deribit", from_py_object)
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass(module = "nautilus_trader.deribit")
+)]
 pub struct DeribitExecutionClientFactory;
 
 impl DeribitExecutionClientFactory {
@@ -122,7 +138,6 @@ impl ExecutionClientFactory for DeribitExecutionClientFactory {
         name: &str,
         config: &dyn ClientConfig,
         cache: Rc<RefCell<Cache>>,
-        clock: Rc<RefCell<dyn Clock>>,
     ) -> anyhow::Result<Box<dyn ExecutionClient>> {
         let deribit_config = config
             .as_any()
@@ -147,7 +162,6 @@ impl ExecutionClientFactory for DeribitExecutionClientFactory {
             deribit_config.account_id,
             account_type,
             None, // base_currency
-            clock,
             cache,
         );
 
@@ -169,13 +183,16 @@ mod tests {
     use std::{cell::RefCell, rc::Rc};
 
     use nautilus_common::{
-        cache::Cache, clock::TestClock, live::runner::set_data_event_sender, messages::DataEvent,
+        cache::Cache,
+        clock::TestClock,
+        factories::{ClientConfig, DataClientFactory},
+        live::runner::set_data_event_sender,
+        messages::DataEvent,
     };
-    use nautilus_system::factories::{ClientConfig, DataClientFactory};
     use rstest::rstest;
 
     use super::*;
-    use crate::http::models::DeribitInstrumentKind;
+    use crate::http::models::DeribitProductType;
 
     fn setup_test_env() {
         // Initialize data event sender for tests
@@ -199,7 +216,7 @@ mod tests {
     #[rstest]
     fn test_deribit_data_client_config_implements_client_config() {
         let config = DeribitDataClientConfig {
-            instrument_kinds: vec![DeribitInstrumentKind::Future],
+            product_types: vec![DeribitProductType::Future],
             ..Default::default()
         };
 
@@ -217,8 +234,8 @@ mod tests {
 
         let factory = DeribitDataClientFactory::new();
         let config = DeribitDataClientConfig {
-            instrument_kinds: vec![DeribitInstrumentKind::Future],
-            use_testnet: true,
+            product_types: vec![DeribitProductType::Future],
+            environment: crate::common::enums::DeribitEnvironment::Testnet,
             ..Default::default()
         };
 

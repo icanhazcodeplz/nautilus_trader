@@ -4248,6 +4248,8 @@ cdef class OrderUpdated(OrderEvent):
         UNIX timestamp (nanoseconds) when the object was initialized.
     reconciliation : bool, default False
         If the event was generated during reconciliation.
+    is_quote_quantity : bool, default False
+        If the order quantity is denominated in the quote currency.
 
     Raises
     ------
@@ -4270,6 +4272,7 @@ cdef class OrderUpdated(OrderEvent):
         uint64_t ts_event,
         uint64_t ts_init,
         bint reconciliation=False,
+        bint is_quote_quantity=False,
     ):
         Condition.positive(quantity, "quantity")
 
@@ -4287,6 +4290,7 @@ cdef class OrderUpdated(OrderEvent):
         self.quantity = quantity
         self.price = price
         self.trigger_price = trigger_price
+        self.is_quote_quantity = is_quote_quantity
 
     def __eq__(self, Event other) -> bool:
         if other is None:
@@ -4470,6 +4474,7 @@ cdef class OrderUpdated(OrderEvent):
             ts_event=values["ts_event"],
             ts_init=values["ts_init"],
             reconciliation=values.get("reconciliation", False),
+            is_quote_quantity=values.get("is_quote_quantity", False),
         )
 
     @staticmethod
@@ -4490,6 +4495,7 @@ cdef class OrderUpdated(OrderEvent):
             "ts_event": obj.ts_event,
             "ts_init": obj.ts_init,
             "reconciliation": obj.reconciliation,
+            "is_quote_quantity": obj.is_quote_quantity,
         }
 
     @staticmethod

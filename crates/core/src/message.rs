@@ -15,15 +15,12 @@
 
 //! Common message types.
 //!
-//! The [`Params`] type uses `IndexMap<String, String>` for consistent ordering
-//! and simpler, predictable serialization.
+//! The [`Params`] type uses `IndexMap<String, Value>` for consistent ordering
+//! and JSON value support.
 
-use indexmap::IndexMap;
-
+// Re-export Params from the centralized params module
+pub use crate::params::Params;
 use crate::{UUID4, UnixNanos};
-
-/// Additional parameters for messages.
-pub type Params = IndexMap<String, String>;
 
 /// Represents different types of messages in the system.
 #[derive(Debug, Clone)]
@@ -67,4 +64,71 @@ pub enum Message {
         /// The correlation identifier linking this response to a request.
         correlation_id: UUID4,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    fn test_message_command_construction() {
+        let msg = Message::Command {
+            id: UUID4::new(),
+            ts_init: UnixNanos::from(1_000),
+        };
+        assert!(matches!(msg, Message::Command { .. }));
+    }
+
+    #[rstest]
+    fn test_message_document_construction() {
+        let msg = Message::Document {
+            id: UUID4::new(),
+            ts_init: UnixNanos::from(2_000),
+        };
+        assert!(matches!(msg, Message::Document { .. }));
+    }
+
+    #[rstest]
+    fn test_message_event_construction() {
+        let msg = Message::Event {
+            id: UUID4::new(),
+            ts_init: UnixNanos::from(3_000),
+            ts_event: UnixNanos::from(2_500),
+        };
+        assert!(matches!(msg, Message::Event { .. }));
+    }
+
+    #[rstest]
+    fn test_message_request_construction() {
+        let msg = Message::Request {
+            id: UUID4::new(),
+            ts_init: UnixNanos::from(4_000),
+        };
+        assert!(matches!(msg, Message::Request { .. }));
+    }
+
+    #[rstest]
+    fn test_message_response_construction() {
+        let id = UUID4::new();
+        let correlation_id = UUID4::new();
+        let msg = Message::Response {
+            id,
+            ts_init: UnixNanos::from(5_000),
+            correlation_id,
+        };
+        assert!(matches!(msg, Message::Response { .. }));
+    }
+
+    #[rstest]
+    #[expect(clippy::redundant_clone, reason = "Clone is the behavior under test")]
+    fn test_message_clone() {
+        let msg = Message::Command {
+            id: UUID4::new(),
+            ts_init: UnixNanos::from(1_000),
+        };
+        let cloned = msg.clone();
+        assert!(matches!(cloned, Message::Command { .. }));
+    }
 }

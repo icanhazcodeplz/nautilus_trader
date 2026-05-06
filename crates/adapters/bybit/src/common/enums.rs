@@ -58,7 +58,17 @@ pub enum BybitUnifiedMarginStatus {
 #[strum(serialize_all = "SCREAMING_SNAKE_CASE")]
 #[cfg_attr(
     feature = "python",
-    pyo3::pyclass(eq, eq_int, module = "nautilus_trader.core.nautilus_pyo3.bybit")
+    pyo3::pyclass(
+        eq,
+        eq_int,
+        rename_all = "SCREAMING_SNAKE_CASE",
+        module = "nautilus_trader.core.nautilus_pyo3.bybit",
+        from_py_object
+    )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.bybit")
 )]
 pub enum BybitMarginMode {
     IsolatedMargin,
@@ -85,7 +95,17 @@ pub enum BybitMarginMode {
 #[strum(serialize_all = "SCREAMING_SNAKE_CASE")]
 #[cfg_attr(
     feature = "python",
-    pyo3::pyclass(eq, eq_int, module = "nautilus_trader.core.nautilus_pyo3.bybit")
+    pyo3::pyclass(
+        eq,
+        eq_int,
+        rename_all = "SCREAMING_SNAKE_CASE",
+        module = "nautilus_trader.core.nautilus_pyo3.bybit",
+        from_py_object
+    )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.bybit")
 )]
 pub enum BybitPositionMode {
     /// Merged single position mode.
@@ -95,8 +115,36 @@ pub enum BybitPositionMode {
 }
 
 /// Position index values used for hedge mode payloads.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize_repr, Deserialize_repr)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    strum::Display,
+    Eq,
+    PartialEq,
+    Hash,
+    AsRefStr,
+    EnumIter,
+    EnumString,
+    Serialize_repr,
+    Deserialize_repr,
+)]
 #[repr(i32)]
+#[strum(serialize_all = "SCREAMING_SNAKE_CASE")]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(
+        eq,
+        eq_int,
+        rename_all = "SCREAMING_SNAKE_CASE",
+        module = "nautilus_trader.core.nautilus_pyo3.bybit",
+        from_py_object
+    )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.bybit")
+)]
 pub enum BybitPositionIdx {
     /// One-way mode position identifier.
     OneWay = 0,
@@ -124,10 +172,30 @@ pub enum BybitPositionIdx {
 #[serde(rename_all = "UPPERCASE")]
 #[cfg_attr(
     feature = "python",
-    pyo3::pyclass(eq, eq_int, module = "nautilus_trader.core.nautilus_pyo3.bybit")
+    pyo3::pyclass(
+        eq,
+        eq_int,
+        rename_all = "SCREAMING_SNAKE_CASE",
+        module = "nautilus_trader.core.nautilus_pyo3.bybit",
+        from_py_object
+    )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.bybit")
 )]
 pub enum BybitAccountType {
     Unified,
+}
+
+/// API key authentication type returned by `/v5/user/list-sub-apikeys`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize_repr, Deserialize_repr)]
+#[repr(u8)]
+pub enum BybitApiKeyType {
+    /// HMAC-SHA256 signed keys (the default).
+    Hmac = 1,
+    /// RSA-signed keys.
+    Rsa = 2,
 }
 
 /// Environments supported by the Bybit API stack.
@@ -148,7 +216,17 @@ pub enum BybitAccountType {
 #[serde(rename_all = "lowercase")]
 #[cfg_attr(
     feature = "python",
-    pyo3::pyclass(eq, eq_int, module = "nautilus_trader.core.nautilus_pyo3.bybit")
+    pyo3::pyclass(
+        eq,
+        eq_int,
+        rename_all = "SCREAMING_SNAKE_CASE",
+        module = "nautilus_trader.core.nautilus_pyo3.bybit",
+        from_py_object
+    )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.bybit")
 )]
 pub enum BybitEnvironment {
     /// Live trading environment.
@@ -178,7 +256,17 @@ pub enum BybitEnvironment {
 #[serde(rename_all = "lowercase")]
 #[cfg_attr(
     feature = "python",
-    pyo3::pyclass(eq, eq_int, module = "nautilus_trader.core.nautilus_pyo3.bybit")
+    pyo3::pyclass(
+        eq,
+        eq_int,
+        rename_all = "SCREAMING_SNAKE_CASE",
+        module = "nautilus_trader.core.nautilus_pyo3.bybit",
+        from_py_object
+    )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.bybit")
 )]
 pub enum BybitProductType {
     #[default]
@@ -216,14 +304,10 @@ pub enum BybitInnovationFlag {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum BybitInstrumentStatus {
+    PreLaunch,
     Trading,
-    Settled,
     Delivering,
-    ListedOnly,
-    PendingListing,
-    PreTrading,
     Closed,
-    Suspended,
     #[serde(other)]
     Other,
 }
@@ -248,6 +332,22 @@ impl BybitProductType {
             Self::Linear => "-LINEAR",
             Self::Inverse => "-INVERSE",
             Self::Option => "-OPTION",
+        }
+    }
+
+    /// Returns the product type identified by the suffix in the symbol string.
+    #[must_use]
+    pub fn from_suffix(symbol: &str) -> Option<Self> {
+        if symbol.ends_with("-SPOT") {
+            Some(Self::Spot)
+        } else if symbol.ends_with("-LINEAR") {
+            Some(Self::Linear)
+        } else if symbol.ends_with("-INVERSE") {
+            Some(Self::Inverse)
+        } else if symbol.ends_with("-OPTION") {
+            Some(Self::Option)
+        } else {
+            None
         }
     }
 
@@ -427,7 +527,16 @@ impl Display for BybitKlineInterval {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "python",
-    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.bybit", eq, eq_int)
+    pyo3::pyclass(
+        module = "nautilus_trader.core.nautilus_pyo3.bybit",
+        eq,
+        eq_int,
+        from_py_object
+    )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.bybit")
 )]
 pub enum BybitOrderStatus {
     #[serde(rename = "Created")]
@@ -456,7 +565,16 @@ pub enum BybitOrderStatus {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "python",
-    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.bybit", eq, eq_int)
+    pyo3::pyclass(
+        module = "nautilus_trader.core.nautilus_pyo3.bybit",
+        eq,
+        eq_int,
+        from_py_object
+    )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.bybit")
 )]
 pub enum BybitOrderSide {
     #[serde(rename = "")]
@@ -487,6 +605,18 @@ impl From<BybitOrderSide> for OrderSide {
     }
 }
 
+impl TryFrom<OrderSide> for BybitOrderSide {
+    type Error = anyhow::Error;
+
+    fn try_from(value: OrderSide) -> Result<Self, Self::Error> {
+        match value {
+            OrderSide::Buy => Ok(Self::Buy),
+            OrderSide::Sell => Ok(Self::Sell),
+            _ => anyhow::bail!("unsupported OrderSide for Bybit: {value:?}"),
+        }
+    }
+}
+
 impl From<BybitTriggerType> for TriggerType {
     fn from(value: BybitTriggerType) -> Self {
         match value {
@@ -498,12 +628,40 @@ impl From<BybitTriggerType> for TriggerType {
     }
 }
 
+impl From<TriggerType> for BybitTriggerType {
+    fn from(value: TriggerType) -> Self {
+        match value {
+            TriggerType::Default | TriggerType::LastPrice | TriggerType::NoTrigger => {
+                Self::LastPrice
+            }
+            TriggerType::IndexPrice => Self::IndexPrice,
+            TriggerType::MarkPrice => Self::MarkPrice,
+            _ => Self::LastPrice,
+        }
+    }
+}
+
+/// Resolves an optional Nautilus trigger type to a Bybit trigger type,
+/// defaulting to `LastPrice` when absent.
+pub fn resolve_trigger_type(trigger_type: Option<TriggerType>) -> BybitTriggerType {
+    trigger_type.map_or(BybitTriggerType::LastPrice, BybitTriggerType::from)
+}
+
 /// Order cancel reason values as returned by Bybit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 #[cfg_attr(
     feature = "python",
-    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.bybit", eq, eq_int)
+    pyo3::pyclass(
+        module = "nautilus_trader.core.nautilus_pyo3.bybit",
+        eq,
+        eq_int,
+        from_py_object
+    )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.bybit")
 )]
 pub enum BybitCancelType {
     CancelByUser,
@@ -554,7 +712,16 @@ pub enum BybitCreateType {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "python",
-    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.bybit", eq, eq_int)
+    pyo3::pyclass(
+        module = "nautilus_trader.core.nautilus_pyo3.bybit",
+        eq,
+        eq_int,
+        from_py_object
+    )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.bybit")
 )]
 pub enum BybitOrderType {
     #[serde(rename = "Market")]
@@ -569,7 +736,16 @@ pub enum BybitOrderType {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "python",
-    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.bybit", eq, eq_int)
+    pyo3::pyclass(
+        module = "nautilus_trader.core.nautilus_pyo3.bybit",
+        eq,
+        eq_int,
+        from_py_object
+    )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.bybit")
 )]
 pub enum BybitStopOrderType {
     #[serde(rename = "")]
@@ -602,7 +778,16 @@ pub enum BybitStopOrderType {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "python",
-    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.bybit", eq, eq_int)
+    pyo3::pyclass(
+        module = "nautilus_trader.core.nautilus_pyo3.bybit",
+        eq,
+        eq_int,
+        from_py_object
+    )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.bybit")
 )]
 pub enum BybitTriggerType {
     #[serde(rename = "")]
@@ -620,7 +805,16 @@ pub enum BybitTriggerType {
 #[repr(i32)]
 #[cfg_attr(
     feature = "python",
-    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.bybit", eq, eq_int)
+    pyo3::pyclass(
+        module = "nautilus_trader.core.nautilus_pyo3.bybit",
+        eq,
+        eq_int,
+        from_py_object
+    )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.bybit")
 )]
 pub enum BybitTriggerDirection {
     None = 0,
@@ -633,7 +827,16 @@ pub enum BybitTriggerDirection {
 #[serde(rename_all = "PascalCase")]
 #[cfg_attr(
     feature = "python",
-    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.bybit", eq, eq_int)
+    pyo3::pyclass(
+        module = "nautilus_trader.core.nautilus_pyo3.bybit",
+        eq,
+        eq_int,
+        from_py_object
+    )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.bybit")
 )]
 pub enum BybitTpSlMode {
     Full,
@@ -646,7 +849,16 @@ pub enum BybitTpSlMode {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "python",
-    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.bybit", eq, eq_int)
+    pyo3::pyclass(
+        module = "nautilus_trader.core.nautilus_pyo3.bybit",
+        eq,
+        eq_int,
+        from_py_object
+    )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.bybit")
 )]
 pub enum BybitTimeInForce {
     #[serde(rename = "GTC")]
@@ -660,6 +872,8 @@ pub enum BybitTimeInForce {
 }
 
 /// Execution type values used in execution reports.
+///
+/// Reference: <https://bybit-exchange.github.io/docs/v5/enum#exectype>.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum BybitExecType {
     #[serde(rename = "Trade")]
@@ -680,6 +894,20 @@ pub enum BybitExecType {
     MovePosition,
     #[serde(rename = "UNKNOWN")]
     Unknown,
+}
+
+impl BybitExecType {
+    /// Returns `true` if this execution was generated by the venue rather than the user.
+    ///
+    /// This covers auto-deleveraging (`AdlTrade`), liquidation takeovers (`BustTrade`),
+    /// scheduled deliveries (`Delivery`), and settlement (`Settle`).
+    #[must_use]
+    pub const fn is_exchange_generated(&self) -> bool {
+        matches!(
+            self,
+            Self::AdlTrade | Self::BustTrade | Self::Delivery | Self::Settle
+        )
+    }
 }
 
 /// Transaction types for wallet funding records.
@@ -721,7 +949,16 @@ pub enum BybitEndpointType {
 #[repr(i32)]
 #[cfg_attr(
     feature = "python",
-    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.bybit", eq, eq_int)
+    pyo3::pyclass(
+        module = "nautilus_trader.core.nautilus_pyo3.bybit",
+        eq,
+        eq_int,
+        from_py_object
+    )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.bybit")
 )]
 pub enum BybitOpenOnly {
     /// Query open status orders only (New, PartiallyFilled).
@@ -737,7 +974,16 @@ pub enum BybitOpenOnly {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "python",
-    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.bybit", eq, eq_int)
+    pyo3::pyclass(
+        module = "nautilus_trader.core.nautilus_pyo3.bybit",
+        eq,
+        eq_int,
+        from_py_object
+    )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.bybit")
 )]
 pub enum BybitOrderFilter {
     /// Active orders (default).
@@ -778,8 +1024,14 @@ pub enum BybitOrderFilter {
         eq_int,
         hash,
         frozen,
-        module = "nautilus_trader.core.nautilus_pyo3.bybit"
+        rename_all = "SCREAMING_SNAKE_CASE",
+        module = "nautilus_trader.core.nautilus_pyo3.bybit",
+        from_py_object,
     )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.bybit")
 )]
 pub enum BybitMarginAction {
     /// Borrow funds for margin trading.
@@ -788,6 +1040,37 @@ pub enum BybitMarginAction {
     Repay,
     /// Query current borrowed amount.
     GetBorrowAmount,
+}
+
+/// Position status enumeration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum BybitPositionStatus {
+    Normal,
+    Settle,
+    Delivering,
+    #[serde(other)]
+    Other,
+}
+
+/// Market unit for spot market orders.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum BybitMarketUnit {
+    #[serde(rename = "baseCoin")]
+    BaseCoin,
+    #[serde(rename = "quoteCoin")]
+    QuoteCoin,
+}
+
+/// Self-match prevention type.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum BybitSmpType {
+    None,
+    CancelMaker,
+    CancelTaker,
+    CancelBoth,
+    #[serde(other)]
+    Other,
 }
 
 #[cfg(test)]
@@ -835,5 +1118,19 @@ mod tests {
     ) {
         let interval = BybitKlineInterval::Month1;
         assert_eq!(interval.bar_end_time_ms(start_ms), expected_end_ms);
+    }
+
+    #[rstest]
+    #[case(BybitExecType::Trade, false)]
+    #[case(BybitExecType::AdlTrade, true)]
+    #[case(BybitExecType::BustTrade, true)]
+    #[case(BybitExecType::Delivery, true)]
+    #[case(BybitExecType::Settle, true)]
+    #[case(BybitExecType::Funding, false)]
+    fn test_exec_type_is_exchange_generated(
+        #[case] exec_type: BybitExecType,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(exec_type.is_exchange_generated(), expected);
     }
 }

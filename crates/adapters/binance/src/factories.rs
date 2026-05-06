@@ -21,13 +21,13 @@ use nautilus_common::{
     cache::Cache,
     clients::{DataClient, ExecutionClient},
     clock::Clock,
+    factories::{ClientConfig, DataClientFactory, ExecutionClientFactory},
 };
 use nautilus_live::ExecutionClientCore;
 use nautilus_model::{
     enums::{AccountType, OmsType},
     identifiers::ClientId,
 };
-use nautilus_system::factories::{ClientConfig, DataClientFactory, ExecutionClientFactory};
 
 use crate::{
     common::{
@@ -40,7 +40,15 @@ use crate::{
 };
 
 /// Factory for creating Binance data clients.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.binance", from_py_object)
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass(module = "nautilus_trader.binance")
+)]
 pub struct BinanceDataClientFactory;
 
 impl BinanceDataClientFactory {
@@ -109,7 +117,15 @@ impl DataClientFactory for BinanceDataClientFactory {
 }
 
 /// Factory for creating Binance Spot execution clients.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.binance", from_py_object)
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass(module = "nautilus_trader.binance")
+)]
 pub struct BinanceExecutionClientFactory;
 
 impl BinanceExecutionClientFactory {
@@ -132,7 +148,6 @@ impl ExecutionClientFactory for BinanceExecutionClientFactory {
         name: &str,
         config: &dyn ClientConfig,
         cache: Rc<RefCell<Cache>>,
-        clock: Rc<RefCell<dyn Clock>>,
     ) -> anyhow::Result<Box<dyn ExecutionClient>> {
         let binance_config = config
             .as_any()
@@ -164,7 +179,6 @@ impl ExecutionClientFactory for BinanceExecutionClientFactory {
                     binance_config.account_id,
                     account_type,
                     None, // base_currency
-                    clock,
                     cache,
                 );
 
@@ -184,7 +198,6 @@ impl ExecutionClientFactory for BinanceExecutionClientFactory {
                     binance_config.account_id,
                     account_type,
                     None, // base_currency
-                    clock,
                     cache,
                 );
 
@@ -210,7 +223,7 @@ impl ExecutionClientFactory for BinanceExecutionClientFactory {
 
 #[cfg(test)]
 mod tests {
-    use nautilus_system::factories::DataClientFactory;
+    use nautilus_common::factories::DataClientFactory;
     use rstest::rstest;
 
     use super::*;

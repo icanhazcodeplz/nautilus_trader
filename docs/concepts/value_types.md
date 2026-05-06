@@ -2,7 +2,7 @@
 
 NautilusTrader provides specialized value types for representing core trading concepts:
 `Price`, `Quantity`, and `Money`. These types use fixed-point arithmetic internally
-to ensure highly performant and deterministic calculations across different platforms
+for performant, deterministic calculations across different platforms
 and environments.
 
 ## Overview
@@ -16,7 +16,7 @@ and environments.
 ## Immutability
 
 All value types are **immutable**. Once a value is constructed, it cannot be changed.
-Arithmetic operations always return new instances rather than modifying existing ones.
+Operations do not mutate the original object.
 
 ```python
 from nautilus_trader.model.objects import Quantity
@@ -40,12 +40,14 @@ This design provides several benefits:
 
 ## Arithmetic operations
 
-Value types support standard arithmetic operators (`+`, `-`, `*`, `/`, `%`, `//`).
-The return type depends on the operand types.
+Value types support standard arithmetic operators (`+`, `-`, `*`, `/`, `%`, `//`)
+and unary operators (`-`, `+`, `abs`). The return type depends on the operator
+and the operand types.
 
-### Same-type operations
+### Same-type binary operations
 
-When both operands are the same value type, the result is also that type:
+Addition and subtraction of the same value type return that type, preserving
+domain meaning (a price plus a price is still a price):
 
 | Operation             | Result     |
 |-----------------------|------------|
@@ -66,12 +68,66 @@ result = price1 + price2  # Returns Price(100.75, precision=2)
 print(type(result))       # <class 'Price'>
 ```
 
+Multiplication, division, floor division, and modulo between two values of the
+same type return `Decimal`:
+
+| Operation             | Result    |
+|-----------------------|-----------|
+| `Price * Price`       | `Decimal` |
+| `Price / Price`       | `Decimal` |
+| `Price // Price`      | `Decimal` |
+| `Price % Price`       | `Decimal` |
+
+The same pattern applies to `Quantity` and `Money`.
+
+These operations do not return the original type because the result has different
+dimensional meaning. Multiplying a price by a price produces "price squared", not
+a price. Dividing a quantity by a quantity produces a dimensionless ratio, not a
+quantity. Returning `Decimal` makes the unit change explicit and prevents
+misinterpretation of the result as a value with the original unit.
+
+### Unary operations
+
+Unary operators preserve the value type where the result is valid for that type:
+
+| Operation    | `Price`   | `Quantity` | `Money`   |
+|--------------|-----------|------------|-----------|
+| `-x` (neg)   | `Price`   | `Decimal`  | `Money`   |
+| `+x` (pos)   | `Price`   | `Quantity` | `Money`   |
+| `abs(x)`     | `Price`   | `Quantity` | `Money`   |
+| `int(x)`     | `int`     | `int`      | `int`     |
+| `float(x)`   | `float`   | `float`    | `float`   |
+| `round(x)`   | `Decimal` | `Decimal`  | `Decimal` |
+
+`Quantity.__neg__` returns `Decimal` rather than `Quantity` because `Quantity` is
+unsigned and cannot represent a negative value.
+
+```python
+from nautilus_trader.model.objects import Price, Quantity, Money
+from nautilus_trader.model.currencies import USD
+
+price = Price(100.50, precision=2)
+print(-price)            # -100.50
+print(type(-price))      # <class 'Price'>
+
+money = Money(-50.00, USD)
+print(abs(money))        # 50.00 USD
+print(type(abs(money)))  # <class 'Money'>
+
+qty = Quantity(10, precision=0)
+print(+qty)              # 10
+print(type(+qty))        # <class 'Quantity'>
+```
+
 ### Mixed-type operations
 
 When operating with other numeric types, the result type follows Python's
 [numeric tower](https://docs.python.org/3/library/numbers.html) conventions. The general
 principle is that operations widen to the more general type: `float` operations return
 `float`, while `int` and `Decimal` operations return `Decimal` for precision preservation.
+
+This applies to all six binary operators (`+`, `-`, `*`, `/`, `//`, `%`) and works
+in both directions (`value op scalar` and `scalar op value`):
 
 | Left operand | Right operand | Result type |
 |--------------|---------------|-------------|
@@ -104,6 +160,46 @@ print(type(result3))  # <class 'decimal.Decimal'>
 ## Precision handling
 
 Each value type stores a precision field indicating the number of decimal places.
+Precision is set at construction and is immutable. There is no "unspecified" precision.
+
+### Fixed-point representation
+
+Value types are stored internally as integers scaled to a global fixed precision
+(e.g., 10^16 in high-precision mode), not floating-point numbers. The `precision`
+field tracks the number of decimal places used at construction, controlling display
+formatting and serialization, but the underlying raw value always uses the global scale.
+
+```python
+from nautilus_trader.model.objects import Price
+
+p1 = Price(1.23, precision=2)   # displays as "1.23"
+p2 = Price(1.230, precision=3)  # displays as "1.230"
+
+p1 == p2  # True: same underlying value
+str(p1)   # "1.23"
+str(p2)   # "1.230"
+```
+
+**Precision controls display, not identity.** Two prices with the same decimal value but
+different precisions are equal. The `precision` field determines string formatting and
+how many decimal places are shown, but equality is based on the underlying numeric value.
+
+**Market data serialization uses precision metadata.** When market data types (quotes,
+trades, order book deltas) are written to Parquet or Arrow format, precision is stored in
+the file metadata so that values can be correctly decoded. All market data values within
+a single file must share the same precision.
+
+:::note
+If a venue changes an instrument's tick size (and thus its precision), data files written
+before and after the change will have different precision metadata and should not be
+consolidated into a single file.
+:::
+
+For how instrument-level precision constrains valid prices and quantities, see the
+[Precision](instruments.md#precision) section of the Instruments guide.
+
+### Arithmetic precision
+
 When performing arithmetic between values with different precisions, the result
 uses the maximum precision of the operands.
 
@@ -139,8 +235,8 @@ result = qty1 - qty2  # Would be -50, which is invalid
 
 ### Money
 
-`Money` values include a currency. Arithmetic between `Money` values requires
-matching currencies:
+`Money` values include a currency. Addition and subtraction between `Money` values
+require matching currencies:
 
 ```python
 from nautilus_trader.model.objects import Money

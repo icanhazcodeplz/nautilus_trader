@@ -22,13 +22,16 @@
 //!
 //! For authenticated endpoints, set environment variables:
 //! ```bash
-//! export BYBIT_API_KEY=your_key
-//! export BYBIT_API_SECRET=your_secret
+//! export BYBIT_TESTNET_API_KEY=your_key
+//! export BYBIT_TESTNET_API_SECRET=your_secret
 //! cargo run -p nautilus-bybit --bin bybit-http
 //! ```
 
 use nautilus_bybit::{
-    common::enums::{BybitKlineInterval, BybitProductType},
+    common::{
+        credential::Credential,
+        enums::{BybitEnvironment, BybitKlineInterval, BybitProductType},
+    },
     http::{
         client::BybitHttpClient,
         query::{
@@ -46,16 +49,12 @@ async fn main() -> anyhow::Result<()> {
     // Test public endpoints
     test_public_endpoints().await?;
 
-    // Test authenticated endpoints if credentials are provided
-    let api_key = std::env::var("BYBIT_API_KEY").ok();
-    let api_secret = std::env::var("BYBIT_API_SECRET").ok();
-
-    if let (Some(key), Some(secret)) = (api_key, api_secret) {
+    if Credential::resolve(None, None, BybitEnvironment::Testnet).is_some() {
         println!("\n=== Testing Authenticated Endpoints ===");
-        test_authenticated_endpoints(&key, &secret).await?;
+        test_authenticated_endpoints().await?;
     } else {
         println!(
-            "\n[SKIP] Skipping authenticated endpoints (set BYBIT_API_KEY and BYBIT_API_SECRET to test)"
+            "\n[SKIP] Skipping authenticated endpoints (set BYBIT_TESTNET_API_KEY and BYBIT_TESTNET_API_SECRET to test)"
         );
     }
 
@@ -63,10 +62,11 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn test_public_endpoints() -> anyhow::Result<()> {
-    let client = BybitHttpClient::new(None, Some(60), None, None, None, None, None)?;
+    let client = BybitHttpClient::new(None, 60, 3, 1000, 10_000, 5_000, None)?;
 
     // Test 1: Get server time
     println!("1. Testing GET /v5/market/time");
+
     match client.get_server_time().await {
         Ok(response) => {
             println!(
@@ -175,24 +175,14 @@ async fn test_public_endpoints() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn test_authenticated_endpoints(api_key: &str, api_secret: &str) -> anyhow::Result<()> {
-    let base_url = std::env::var("BYBIT_BASE_URL")
-        .unwrap_or_else(|_| "https://api-testnet.bybit.com".to_string());
-
-    let client = BybitHttpClient::with_credentials(
-        api_key.to_string(),
-        api_secret.to_string(),
-        Some(base_url),
-        Some(60),
-        None,
-        None,
-        None,
-        None,
-        None,
+async fn test_authenticated_endpoints() -> anyhow::Result<()> {
+    let client = BybitHttpClient::new_with_env(
+        None, None, None, false, true, 60, 3, 1000, 10_000, 5_000, None,
     )?;
 
     // Test 1: Get open orders
     println!("\n1. Testing GET /v5/order/realtime (open orders)");
+
     match client
         .get_open_orders(
             BybitProductType::Linear,

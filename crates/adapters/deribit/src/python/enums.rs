@@ -22,12 +22,14 @@ use pyo3::{PyTypeInfo, prelude::*, types::PyType};
 use strum::IntoEnumIterator;
 
 use crate::{
-    common::enums::{DeribitCurrency, DeribitInstrumentKind},
+    common::enums::{DeribitCurrency, DeribitEnvironment, DeribitProductType},
     websocket::enums::DeribitUpdateInterval,
 };
 
 #[pymethods]
+#[pyo3_stub_gen::derive::gen_stub_pymethods]
 impl DeribitCurrency {
+    /// Deribit currency.
     #[new]
     fn py_new(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Self> {
         let t = Self::type_object(py);
@@ -75,40 +77,12 @@ impl DeribitCurrency {
         let data_str: String = data.str()?.extract()?;
         Self::from_str(&data_str).map_err(to_pyvalue_err)
     }
-
-    #[classattr]
-    #[pyo3(name = "BTC")]
-    fn py_btc() -> Self {
-        Self::BTC
-    }
-
-    #[classattr]
-    #[pyo3(name = "ETH")]
-    fn py_eth() -> Self {
-        Self::ETH
-    }
-
-    #[classattr]
-    #[pyo3(name = "USDC")]
-    fn py_usdc() -> Self {
-        Self::USDC
-    }
-
-    #[classattr]
-    #[pyo3(name = "USDT")]
-    fn py_usdt() -> Self {
-        Self::USDT
-    }
-
-    #[classattr]
-    #[pyo3(name = "EURR")]
-    fn py_eurr() -> Self {
-        Self::EURR
-    }
 }
 
 #[pymethods]
-impl DeribitInstrumentKind {
+#[pyo3_stub_gen::derive::gen_stub_pymethods]
+impl DeribitProductType {
+    /// Deribit product type.
     #[new]
     fn py_new(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Self> {
         let t = Self::type_object(py);
@@ -122,7 +96,7 @@ impl DeribitInstrumentKind {
     fn __repr__(&self) -> String {
         format!(
             "<{}.{}: '{}'>",
-            stringify!(DeribitInstrumentKind),
+            stringify!(DeribitProductType),
             self.name(),
             self.value(),
         )
@@ -156,40 +130,15 @@ impl DeribitInstrumentKind {
         let data_str: String = data.str()?.extract()?;
         Self::from_str(&data_str).map_err(to_pyvalue_err)
     }
-
-    #[classattr]
-    #[pyo3(name = "FUTURE")]
-    fn py_future() -> Self {
-        Self::Future
-    }
-
-    #[classattr]
-    #[pyo3(name = "OPTION")]
-    fn py_option() -> Self {
-        Self::Option
-    }
-
-    #[classattr]
-    #[pyo3(name = "SPOT")]
-    fn py_spot() -> Self {
-        Self::Spot
-    }
-
-    #[classattr]
-    #[pyo3(name = "FUTURE_COMBO")]
-    fn py_future_combo() -> Self {
-        Self::FutureCombo
-    }
-
-    #[classattr]
-    #[pyo3(name = "OPTION_COMBO")]
-    fn py_option_combo() -> Self {
-        Self::OptionCombo
-    }
 }
 
 #[pymethods]
+#[pyo3_stub_gen::derive::gen_stub_pymethods]
 impl DeribitUpdateInterval {
+    /// Deribit data stream update intervals.
+    ///
+    /// Controls how frequently updates are sent for subscribed channels.
+    /// Raw updates require authentication while aggregated updates are public.
     #[new]
     fn py_new(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Self> {
         let t = Self::type_object(py);
@@ -237,22 +186,48 @@ impl DeribitUpdateInterval {
         let data_str: String = data.str()?.extract()?;
         Self::from_str(&data_str).map_err(to_pyvalue_err)
     }
+}
 
-    #[classattr]
-    #[pyo3(name = "RAW")]
-    fn py_raw() -> Self {
-        Self::Raw
+#[pymethods]
+#[pyo3_stub_gen::derive::gen_stub_pymethods]
+impl DeribitEnvironment {
+    /// Deribit API environment.
+    #[new]
+    fn py_new(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let t = Self::type_object(py);
+        Self::py_from_str(&t, value)
     }
 
-    #[classattr]
-    #[pyo3(name = "MS100")]
-    fn py_ms100() -> Self {
-        Self::Ms100
+    const fn __hash__(&self) -> isize {
+        *self as isize
     }
 
-    #[classattr]
-    #[pyo3(name = "AGG2")]
-    fn py_agg2() -> Self {
-        Self::Agg2
+    fn __str__(&self) -> String {
+        self.to_string()
+    }
+
+    #[getter]
+    #[must_use]
+    pub fn name(&self) -> String {
+        self.to_string()
+    }
+
+    #[getter]
+    #[must_use]
+    pub fn value(&self) -> u8 {
+        *self as u8
+    }
+
+    #[classmethod]
+    #[must_use]
+    fn variants(_: &Bound<'_, PyType>) -> Vec<String> {
+        Self::iter().map(|x| x.to_string()).collect()
+    }
+
+    #[classmethod]
+    #[pyo3(name = "from_str")]
+    fn py_from_str(_cls: &Bound<'_, PyType>, data: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let data_str: String = data.str()?.extract()?;
+        Self::from_str(&data_str).map_err(to_pyvalue_err)
     }
 }

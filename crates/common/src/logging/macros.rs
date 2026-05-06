@@ -367,7 +367,11 @@ pub use log_info;
 pub use log_trace;
 pub use log_warn;
 
-#[cfg(test)]
+// Gated out under `cfg(madsim)`: both tests drive the file-logging writer thread,
+// which is itself gated out under simulation (see `Logger::init_with_config`), so log
+// events are dropped and these tests would hang on `wait_until` waiting for a log file
+// that is never written. Logging is outside the determinism contract.
+#[cfg(all(test, not(all(feature = "simulation", madsim))))]
 mod tests {
     use std::{thread::sleep, time::Duration};
 
@@ -548,7 +552,7 @@ mod tests {
 
         assert!(
             log_contents.contains("nautilus_common::logging::macros"),
-            "Component should contain module path, got:\n{log_contents}"
+            "Component should contain module path, was:\n{log_contents}"
         );
         assert!(
             log_contents.contains("Auto-captured module path message"),

@@ -139,17 +139,16 @@ cdef class CashAccount(Account):
         Parameters
         ----------
         balances : list[AccountBalance]
-            The balances for the update.
+            The balances for the update. An empty list is treated as a no-op.
 
         Raises
         ------
-        ValueError
-            If `balances` is empty.
         AccountBalanceNegative
             If borrowing is not allowed and balance is negative.
 
         """
-        Condition.not_empty(balances, "balances")
+        if len(balances) == 0:
+            return
 
         cdef AccountBalance balance
         for balance in balances:
@@ -162,7 +161,8 @@ cdef class CashAccount(Account):
         """
         Apply the given account event to the account.
 
-        Clears per-instrument locked balances since external state is authoritative.
+        Clears per-instrument locked balances only for externally reported state,
+        since external state is authoritative. Internal state preserves lock tracking.
 
         Parameters
         ----------
@@ -174,7 +174,10 @@ cdef class CashAccount(Account):
         System method (not intended to be called by user code).
 
         """
-        self._balances_locked.clear()
+        # Only clear locks when the venue reports a fresh balance snapshot
+        if event.is_reported and len(event.balances) > 0:
+            self._balances_locked.clear()
+
         Account.apply(self, event)
 
     cpdef void update_balance_locked(self, InstrumentId instrument_id, Money locked):
@@ -347,7 +350,7 @@ cdef class CashAccount(Account):
             )
 
         if instrument.is_inverse and not use_quote_for_inverse:
-            return Money(commission, instrument.base_currency)
+            return Money(commission, instrument.get_base_currency())
         else:
             return Money(commission, instrument.quote_currency)
 

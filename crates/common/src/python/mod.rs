@@ -15,11 +15,18 @@
 
 //! Python bindings from [PyO3](https://pyo3.rs).
 
+#![expect(
+    clippy::missing_errors_doc,
+    reason = "errors documented on underlying Rust methods"
+)]
+
 pub mod actor;
 pub mod cache;
 pub mod clock;
 pub mod custom;
 pub mod enums;
+pub mod fifo;
+pub mod greeks;
 pub mod listener;
 pub mod logging;
 pub mod msgbus;
@@ -40,15 +47,20 @@ use pyo3::prelude::*;
 pub fn common(_: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<crate::custom::CustomData>()?;
     m.add_class::<crate::signal::Signal>()?;
+    m.add_class::<crate::timer::TimeEvent>()?;
     m.add_class::<crate::cache::CacheConfig>()?;
-    m.add_class::<crate::cache::Cache>()?;
     m.add_class::<crate::python::actor::PyDataActor>()?;
     m.add_class::<crate::python::cache::PyCache>()?;
+    m.add_class::<crate::python::fifo::PyFifoCache>()?;
     m.add_class::<crate::python::clock::PyClock>()?;
+    m.add_class::<crate::python::greeks::PyGreeksCalculator>()?;
     m.add_class::<crate::python::logging::PyLogger>()?;
     m.add_class::<crate::actor::data_actor::DataActorConfig>()?;
     m.add_class::<crate::actor::data_actor::ImportableActorConfig>()?;
     m.add_class::<crate::msgbus::BusMessage>()?;
+    m.add_class::<crate::msgbus::database::DatabaseConfig>()?;
+    m.add_class::<crate::msgbus::database::MessageBusConfig>()?;
+    m.add_class::<crate::python::msgbus::PyMessageBus>()?;
     m.add_class::<crate::enums::ComponentState>()?;
     m.add_class::<crate::enums::ComponentTrigger>()?;
     m.add_class::<crate::enums::Environment>()?;
@@ -66,6 +78,10 @@ pub fn common(_: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(logging::py_logging_clock_set_static_mode, m)?)?;
     m.add_function(wrap_pyfunction!(logging::py_logging_clock_set_realtime_mode, m)?)?;
     m.add_function(wrap_pyfunction!(logging::py_logging_clock_set_static_time, m)?)?;
+    #[cfg(feature = "tracing-bridge")]
+    m.add_function(wrap_pyfunction!(logging::py_tracing_is_initialized, m)?)?;
+    #[cfg(feature = "tracing-bridge")]
+    m.add_function(wrap_pyfunction!(logging::py_init_tracing, m)?)?;
     m.add_function(wrap_pyfunction!(xrate::py_get_exchange_rate, m)?)?;
 
     #[cfg(feature = "live")]

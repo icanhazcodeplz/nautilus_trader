@@ -20,9 +20,9 @@
 //!
 //! # API Documentation
 //!
-//! - Indexer HTTP API: <https://docs.dydx.exchange/api_integration-indexer/indexer_api>
-//! - Markets: <https://docs.dydx.exchange/api_integration-indexer/indexer_api#markets>
-//! - Accounts: <https://docs.dydx.exchange/api_integration-indexer/indexer_api#accounts>
+//! - Indexer HTTP API: <https://docs.dydx.xyz/api_integration-indexer/indexer_api>
+//! - Markets: <https://docs.dydx.xyz/api_integration-indexer/indexer_api#markets>
+//! - Accounts: <https://docs.dydx.xyz/api_integration-indexer/indexer_api#accounts>
 
 use std::collections::HashMap;
 
@@ -56,15 +56,15 @@ pub struct PerpetualMarket {
     #[serde_as(as = "DisplayFromStr")]
     pub clob_pair_id: u32,
     /// Market ticker (e.g., "BTC-USD").
-    pub ticker: String,
+    pub ticker: Ustr,
     /// Market status (ACTIVE, PAUSED, etc.).
     pub status: DydxMarketStatus,
     /// Base asset symbol (optional, not always returned by API).
     #[serde(default)]
-    pub base_asset: Option<String>,
+    pub base_asset: Option<Ustr>,
     /// Quote asset symbol (optional, not always returned by API).
     #[serde(default)]
-    pub quote_asset: Option<String>,
+    pub quote_asset: Option<Ustr>,
     /// Step size for order quantities (minimum increment).
     #[serde_as(as = "DisplayFromStr")]
     pub step_size: Decimal,
@@ -75,9 +75,10 @@ pub struct PerpetualMarket {
     #[serde(default)]
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub index_price: Option<Decimal>,
-    /// Oracle price for the market.
-    #[serde_as(as = "DisplayFromStr")]
-    pub oracle_price: Decimal,
+    /// Oracle price for the market (may be null for inactive/pre-launch markets).
+    #[serde(default)]
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    pub oracle_price: Option<Decimal>,
     /// Price change over 24 hours.
     #[serde(rename = "priceChange24H")]
     #[serde_as(as = "DisplayFromStr")]
@@ -201,7 +202,7 @@ pub struct Candle {
     /// Candle start time.
     pub started_at: DateTime<Utc>,
     /// Market ticker.
-    pub ticker: String,
+    pub ticker: Ustr,
     /// Candle resolution.
     pub resolution: DydxCandleResolution,
     /// Opening price.
@@ -275,11 +276,11 @@ pub struct Subaccount {
 #[serde(rename_all = "camelCase")]
 pub struct PerpetualPosition {
     /// Market ticker.
-    pub market: String,
+    pub market: Ustr,
     /// Position status.
     pub status: DydxPositionStatus,
     /// Position side (determined by size sign).
-    pub side: OrderSide,
+    pub side: DydxPositionSide,
     /// Position size (negative for short).
     #[serde_as(as = "DisplayFromStr")]
     pub size: Decimal,
@@ -416,7 +417,7 @@ pub struct Order {
     pub updated_at_height: Option<u64>,
     /// Ticker symbol (e.g., "BTC-USD").
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub ticker: Option<String>,
+    pub ticker: Option<Ustr>,
     /// Subaccount number.
     #[serde(default)]
     pub subaccount_number: u32,
@@ -449,7 +450,7 @@ pub struct Fill {
     #[serde(rename = "type")]
     pub fill_type: DydxFillType,
     /// Market ticker.
-    pub market: String,
+    pub market: Ustr,
     /// Market type.
     pub market_type: DydxTickerType,
     /// Fill price.
@@ -516,6 +517,34 @@ pub struct TransferAccount {
     pub address: String,
     /// Subaccount number.
     pub subaccount_number: u32,
+}
+
+/// Response wrapper for historical funding endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoricalFundingResponse {
+    /// List of historical funding rate entries.
+    pub historical_funding: Vec<HistoricalFunding>,
+}
+
+/// Historical funding rate entry.
+#[serde_as]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoricalFunding {
+    /// Market ticker (e.g., "BTC-USD").
+    pub ticker: Ustr,
+    /// Funding rate for the period.
+    #[serde_as(as = "DisplayFromStr")]
+    pub rate: Decimal,
+    /// Oracle price at the time of funding.
+    #[serde_as(as = "DisplayFromStr")]
+    pub price: Decimal,
+    /// Block height when the funding rate became effective.
+    #[serde_as(as = "DisplayFromStr")]
+    pub effective_at_height: u64,
+    /// Timestamp when the funding rate became effective.
+    pub effective_at: DateTime<Utc>,
 }
 
 /// Response for time endpoint.

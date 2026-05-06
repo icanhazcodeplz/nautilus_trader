@@ -32,7 +32,7 @@ async fn main() -> anyhow::Result<()> {
     let config = KrakenDataClientConfig::default();
     let token = CancellationToken::new();
 
-    let mut client = KrakenSpotWebSocketClient::new(config, token.clone());
+    let mut client = KrakenSpotWebSocketClient::new(config, token.clone(), None);
 
     client.connect().await?;
 
@@ -44,7 +44,7 @@ async fn main() -> anyhow::Result<()> {
         .subscribe(KrakenWsChannel::Trade, vec![Ustr::from("BTC/USD")], None)
         .await?;
 
-    let stream = client.stream();
+    let stream = client.stream()?;
     let shutdown = signal::ctrl_c();
     pin!(stream);
     pin!(shutdown);

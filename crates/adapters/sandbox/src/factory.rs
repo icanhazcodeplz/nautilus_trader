@@ -17,10 +17,15 @@
 
 use std::{any::Any, cell::RefCell, rc::Rc};
 
-use nautilus_common::{cache::Cache, clients::ExecutionClient, clock::Clock};
-use nautilus_execution::client::base::ExecutionClientCore;
+use nautilus_common::{
+    cache::Cache,
+    clients::ExecutionClient,
+    clock::Clock,
+    factories::{ClientConfig, ExecutionClientFactory},
+    live::clock::LiveClock,
+};
+use nautilus_execution::client::core::ExecutionClientCore;
 use nautilus_model::identifiers::ClientId;
-use nautilus_system::factories::{ClientConfig, ExecutionClientFactory};
 
 use crate::{config::SandboxExecutionClientConfig, execution::SandboxExecutionClient};
 
@@ -48,7 +53,6 @@ impl ExecutionClientFactory for SandboxExecutionClientFactory {
         name: &str,
         config: &dyn ClientConfig,
         cache: Rc<RefCell<Cache>>,
-        clock: Rc<RefCell<dyn Clock>>,
     ) -> anyhow::Result<Box<dyn ExecutionClient>> {
         let sandbox_config = config
             .as_any()
@@ -61,6 +65,7 @@ impl ExecutionClientFactory for SandboxExecutionClientFactory {
             .clone();
 
         let client_id = ClientId::from(name);
+        let clock: Rc<RefCell<dyn Clock>> = Rc::new(RefCell::new(LiveClock::default()));
 
         let core = ExecutionClientCore::new(
             sandbox_config.trader_id,
@@ -70,7 +75,6 @@ impl ExecutionClientFactory for SandboxExecutionClientFactory {
             sandbox_config.account_id,
             sandbox_config.account_type,
             sandbox_config.base_currency,
-            clock.clone(),
             cache.clone(),
         );
 
