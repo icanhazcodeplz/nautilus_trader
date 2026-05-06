@@ -205,6 +205,8 @@ def run_single_backtest_from_top_gainers_candidate(
     start = allow_buy_times[0] - pd.Timedelta(minutes=30)
     end = allow_buy_times[-1] + pd.Timedelta(minutes=20)
 
+    # start = allow_buy_times[0] + pd.Timedelta(minutes=2)
+    # end = allow_buy_times[0] + pd.Timedelta(minutes=5)
     start_str = pd.Timestamp.strftime(start, CATALOG_TIME_STR_FMT)
     end_str = pd.Timestamp.strftime(end, CATALOG_TIME_STR_FMT)
 
@@ -285,42 +287,57 @@ if __name__ == "__main__":
     # log_level = "WARNING"
 
     strategy_name = "momo"
+    lstm_buy = False
     params = dict(
         allow_trades=True,
         max_position_multiplier=1,
         trade_size=10,
         stop_loss=0.2,
         take_profit=None,
-        upper_scalar_multiplier=1.1,
-        lower_scalar_multiplier=2.0,
+        upper_scalar_multiplier=0.5,
+        lower_scalar_multiplier=1.5,
         vwap_window=150,
         variance_window=300,
         outer_band_multiplier=2.5,
-        pressure_window=10,
-        simple_take=False,
-        only_buy_if_macd_positive=True,
-        trailing_take=True,
+        pressure_window=25,
+        simple_take=True,
+        only_buy_if_macd_positive=False,
+        trailing_take=False,
         num_sell_tiers=3,
         trailing_buy_order=False,
-        random_buy=False,
+        random_buy=not lstm_buy,
+        lstm_buy=lstm_buy,
         random_seed=1,
         # --- TOP GAINERS PARAMS ----------------
-        price_min=0.8,
-        price_max=20.0,
-        vol_30min_min=100_000,
-        perc_gain_min=30,
-        rank_max=5,
+        # price_min=0.8,
+        # price_max=20.0,
+        # vol_30min_min=100_000,
+        # perc_gain_min=30,
+        # rank_max=5,
     )
 
-    candidate_str = "2026-03-18_AIM"
-    run_single_backtest_from_top_gainers_candidate(
-        candidate_str, strategy_name, params, artifacts_location=BACKTEST_RUNS_PATH, log_level="ERROR", analyze=True
+    # candidate_str = "2026-03-19_LNKS"
+    #
+    # run_single_backtest_from_top_gainers_candidate(
+    #     candidate_str, strategy_name, params, artifacts_location=BACKTEST_RUNS_PATH, log_level="ERROR", analyze=True
+    # )
+
+    symbol = 'AAPL'
+    start_str = "2026-02-03 08:30-04:00"
+    # end_str = "2026-04-13 10:30-04:00"
+    end_str = "2026-02-03 16:00-04:00"
+    run_single_backtest(
+        symbol,
+        start_str,
+        end_str,
+        strategy_name,
+        params,
+        allow_buy_times=None,
+        artifacts_location=BACKTEST_RUNS_PATH,
+        log_level=log_level,
+        analyze=True,
     )
 
-    # symbol = 'WNW'
-    # start_str = "2026-03-17 04:00-04:00"
-    # end_str = "2026-03-17 06:00-04:00"
-    # run_backtest_and_analyze(symbol, start_str, end_str, strategy_name, params, log_level=log_level)
 
     # datasets = ["0129_vivssm"]
     # all_stats = []
