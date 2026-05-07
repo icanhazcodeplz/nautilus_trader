@@ -541,7 +541,7 @@ class BaseStrategy(Strategy):
         # TODO: Remove overlap with _trigger_force_reconciliation
         if self._trader_helper is not None:
             # Running live. Get position from broker
-            position_at_broker = self._trader_helper.get_position_obj()
+            position_at_broker = self._trader_helper.get_position_obj(self.config.instrument_id.symbol.value)
             position_at_broker = int(position_at_broker.qty)
         else:
             # Running a backtest, so just use the local position

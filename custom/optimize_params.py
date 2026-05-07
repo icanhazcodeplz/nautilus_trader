@@ -18,7 +18,7 @@ from custom.backtest_utils.prepare_top_gainers import (
     make_top_gainers_candidates_txt_and_prepare_catalog,
 )
 from custom.utils.process_manager import ProcessManager
-from custom.backtest_runner import run_single_backtest_from_top_gainers_candidate
+from custom.backtest_scripts.strategy_backtest_runner import run_single_backtest_from_top_gainers_candidate
 
 OPTUNA_DB_DIR = "optuna_dbs"
 optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))

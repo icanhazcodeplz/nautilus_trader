@@ -1,69 +1,22 @@
 #!/usr/bin/env python3
-import glob
-import os
 import random
-import shutil
 
 import pandas as pd
 
+from custom.artifacts import ArtifactsIO, BACKTEST_RUNS_PATH
+from custom.backtest_utils.backtest_run_utils import (
+    add_default_venue,
+    analyze_backtest,
+    build_backtest_engine,
+    register_custom_statistics,
+    save_backtest_order_updates,
+)
 from custom.backtest_utils.load_catalog_data import load_catalog_data_to_engine, CATALOG_TIME_STR_FMT
 from custom.backtest_utils.prepare_top_gainers import parse_candidate_str, get_allow_buy_times_for_candidate
-from custom.nt_extensions.limit_fill_model import LimitFillModel
 from custom.strategies.momo import MomoStrategyConfig, MomoStrategy
-from custom.artifacts import ArtifactsIO, BACKTEST_RUNS_PATH
 from custom.strategies.random import RandomConfig, Random
-from nautilus_trader.adapters.alpaca.utils import ns_to_iso_8601
-from nautilus_trader.backtest.engine import BacktestEngine
-from nautilus_trader.backtest.engine import BacktestEngineConfig
-from custom.statistics.trade_avg import AvgTrade
-from custom.statistics.trade_avg_scaled import PnlPer100, TotalBought, AverageBuyPrice
-from custom.statistics.trade_counts import Winners, Losers, NumTrades
-from custom.statistics.win_loss_ratio import WinLossRatio
-from custom.utils.orders_to_trades import orders_to_trades
 from custom.utils.run_utils import run_strategy
-from nautilus_trader.adapters.alpaca import ALPACA
-from nautilus_trader.backtest.models import LatencyModel
-from nautilus_trader.cache.config import CacheConfig
-from nautilus_trader.config import LoggingConfig
-from nautilus_trader.model.events import (
-    OrderFilled,
-    OrderAccepted,
-    OrderInitialized,
-    OrderCanceled,
-    OrderExpired,
-    OrderUpdated,
-)
-from nautilus_trader.persistence.config import StreamingConfig
-from nautilus_trader.core.nautilus_pyo3 import (
-    Expectancy,
-    LongRatio,
-    MinLoser,
-    ProfitFactor,
-    ReturnsAverage,
-    ReturnsAverageLoss,
-    ReturnsAverageWin,
-    ReturnsVolatility,
-    RiskReturnRatio,
-    SharpeRatio,
-    SortinoRatio,
-    MinWinner,
-)
-from nautilus_trader.model.currencies import USD
-from nautilus_trader.model.enums import AccountType, BookType
-from nautilus_trader.model.enums import OmsType
-from nautilus_trader.model.identifiers import TraderId
-from nautilus_trader.model.identifiers import Venue
-from nautilus_trader.model.objects import Money
-
-latency_model = LatencyModel(
-    base_latency_nanos=30 * 1e6,
-    insert_latency_nanos=34 * 1e6,
-    update_latency_nanos=25 * 1e6,
-    cancel_latency_nanos=25 * 1e6,
-)
-# latency_model=LatencyModel()
-prob_fill_on_limit = 0.5
-DATA_VENUE = ALPACA
+from nautilus_trader.adapters.alpaca.utils import ns_to_iso_8601
 
 
 def run_single_backtest(
@@ -82,75 +35,10 @@ def run_single_backtest(
     random_seed = params_copy.pop("random_seed", None)
     random.seed(random_seed)
 
-    streaming = None
-    if artifacts_location is not None:
-        streaming = StreamingConfig(
-            catalog_path=str(artifacts_location),
-            include_types=[OrderInitialized, OrderFilled, OrderAccepted, OrderCanceled, OrderUpdated, OrderExpired],
-            replace_existing=True,
-        )
-        for log_file in glob.glob(os.path.join(str(artifacts_location), "*.log")):
-            os.remove(log_file)
-
-    engine = BacktestEngine(
-        config=BacktestEngineConfig(
-            trader_id=TraderId("M-1"),
-            logging=LoggingConfig(
-                log_level=log_level,
-                log_level_file="DEBUG" if artifacts_location is not None else None,
-                log_directory=str(artifacts_location) if artifacts_location is not None else "logs",
-                log_file_name="DEBUG",
-                log_file_max_size=int(10e6),
-                log_file_max_backup_count=50,
-                log_component_levels=dict(
-                    RiskEngine="WARNING",
-                    Portfolio="WARNING",
-                ),
-                use_pyo3=False,
-            ),
-            cache=CacheConfig(tick_capacity=1000, bar_capacity=1000),
-            streaming=streaming,
-        )
-    )
-
-    engine.add_venue(
-        venue=Venue(DATA_VENUE),
-        # book_type=BookType.L3_MBO,
-        book_type=BookType.L1_MBP,
-        oms_type=OmsType.NETTING,
-        account_type=AccountType.MARGIN,
-        base_currency=USD,
-        starting_balances=[Money(100000.0, USD)],
-        fill_model=LimitFillModel(prob_fill_on_limit=prob_fill_on_limit, random_seed=random_seed),
-        reject_stop_orders=False,
-        # trade_execution=True,
-        latency_model=latency_model,
-    )
-
+    engine = build_backtest_engine(artifacts_location, log_level)
+    add_default_venue(engine, random_seed)
     test_instrument, engine = load_catalog_data_to_engine(engine, symbol, start_str, end_str, data_venue="ALPACA")
-
-    avg_trade_scaled = PnlPer100()
-
-    for stat_class in [
-        ReturnsVolatility,
-        SharpeRatio,
-        SortinoRatio,
-        LongRatio,
-        ProfitFactor,
-        RiskReturnRatio,
-        ReturnsAverage,
-        ReturnsAverageLoss,
-        ReturnsAverageWin,
-        MinWinner,
-        MinLoser,
-        Expectancy,
-    ]:
-        engine.portfolio.analyzer.deregister_statistic(stat_class())
-
-    for stat_class in [NumTrades, Winners, Losers, WinLossRatio, AvgTrade, TotalBought, AverageBuyPrice]:
-        engine.portfolio.analyzer.register_statistic(stat_class())
-
-    engine.portfolio.analyzer.register_statistic(avg_trade_scaled)
+    register_custom_statistics(engine)
 
     if strategy_name == "random":
         config = RandomConfig(instrument_id=test_instrument.id, **params_copy)
@@ -166,19 +54,7 @@ def run_single_backtest(
 
     performance_stats = run_strategy(strategy, engine, artifacts_location, run_config=config.dict())
 
-    if artifacts_location is not None:
-        # --- SAVE ORDER FILLS TO PKL ---
-        from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
-
-        catalog = ParquetDataCatalog(str(artifacts_location))
-        relevant_order_updates = catalog.read_backtest(instance_id=str(engine.kernel.instance_id))
-        # Deduplicate: OrderFilled events are published twice in engine.pyx
-        # (once from _handle_order_fill, once from _handle_event)
-        relevant_order_updates = list(set(f for f in relevant_order_updates))
-        relevant_order_updates.sort(key=lambda e: e.ts_event)
-        artifacts_io = ArtifactsIO(BACKTEST_RUNS_PATH)
-        artifacts_io.save_backtest_order_updates_to_pkl(relevant_order_updates)
-        shutil.rmtree(BACKTEST_RUNS_PATH / "backtest", ignore_errors=True)
+    save_backtest_order_updates(engine, artifacts_location)
 
     if artifacts_location is not None and analyze:
         analyze_backtest()
@@ -234,22 +110,6 @@ def run_multiple_backtests(dataset_names, strategy_name, params, log_level="ERRO
     return stats_df
 
 
-def analyze_trades(trades, print_report=False):
-    if len(trades) == 0:
-        return 0
-    trades = trades.copy()
-    trades = trades[trades["avg_sell_price"] > 0]
-    wins = len(trades[trades["pnl"] > 0])
-    losses = len(trades[trades["pnl"] < 0])
-    scratches = len(trades[trades["pnl"] == 0])
-    trade_count = len(trades)
-    win_ratio = round(wins / trade_count, 3)
-    if print_report:
-        print(f"\nTrades:  {trade_count}   {wins}|{losses}|{scratches} = {win_ratio}")
-        print(f"Total PnL: ${round(trades['pnl'].sum(), 2)} | Per trade: ${round(trades['pnl'].mean(), 3)}\n")
-    return win_ratio
-
-
 def replay_live_run(live_run_artifacts_dir, log_level="ERROR"):
     """Run a backtest with the same parameters as a live run."""
     artifacts_io = ArtifactsIO(live_run_artifacts_dir)
@@ -265,25 +125,13 @@ def replay_live_run(live_run_artifacts_dir, log_level="ERROR"):
     return run_single_backtest(symbol, start_str, end_str, "momo", config, log_level=log_level, analyze=True)
 
 
-def analyze_backtest():
-    artifacts_io = ArtifactsIO(BACKTEST_RUNS_PATH)
-
-    p_mets = artifacts_io.load_performance_metrics()
-    print("\n".join(f"{k}: {round(v, 2)}" for k, v in p_mets.items()))
-    print()
-
-    orders_report = artifacts_io.load_orders_report()
-    trades, sell_legs = orders_to_trades(orders_report)
-    analyze_trades(trades, print_report=True)
-
-
 if __name__ == "__main__":
     # live_run_artifacts_dir = data_subdir("runs", "20260313_144138")
     # replay_live_run(live_run_artifacts_dir)
 
     log_level = "INFO"
     # log_level = "DEBUG"
-    log_level = "ERROR"
+    # log_level = "ERROR"
     # log_level = "WARNING"
 
     strategy_name = "momo"
@@ -322,7 +170,7 @@ if __name__ == "__main__":
     #     candidate_str, strategy_name, params, artifacts_location=BACKTEST_RUNS_PATH, log_level="ERROR", analyze=True
     # )
 
-    symbol = 'AAPL'
+    symbol = "AAPL"
     start_str = "2026-02-03 08:30-04:00"
     # end_str = "2026-04-13 10:30-04:00"
     end_str = "2026-02-03 16:00-04:00"
@@ -337,7 +185,6 @@ if __name__ == "__main__":
         log_level=log_level,
         analyze=True,
     )
-
 
     # datasets = ["0129_vivssm"]
     # all_stats = []

@@ -11,8 +11,9 @@ log = Logger(name="run_utils")
 
 def run_strategy(strategy, node_or_engine, artifacts_location=None, run_config=None, paper=True):
     if isinstance(node_or_engine, TradingNode):
-        alpaca_helper = AlpacaTraderHelper(symbol=strategy.config.instrument_id.symbol.value, paper=paper)
-        alpaca_helper.cancel_orders_and_flatten_position_with_retry()
+        symbol = strategy.config.instrument_id.symbol.value
+        alpaca_helper = AlpacaTraderHelper(paper=paper)
+        alpaca_helper.cancel_orders_and_flatten_position_with_retry(symbol)
 
         strategy.initialize(artifacts_location=artifacts_location, trader_helper=alpaca_helper)
         node_or_engine.trader.add_strategy(strategy=strategy)
@@ -31,7 +32,7 @@ def run_strategy(strategy, node_or_engine, artifacts_location=None, run_config=N
     finally:
         if isinstance(node_or_engine, TradingNode):
             try:
-                alpaca_helper.cancel_orders_and_flatten_position_with_retry()
+                alpaca_helper.cancel_orders_and_flatten_position_with_retry(symbol)
             except Exception as e:
                 log.error(f"Unable to flatten position during cleanup: {e}")
                 # FIXME: Add text notification!

@@ -85,23 +85,24 @@ class AlpacaTraderHttpClient:
 
 
 class AlpacaTraderHelper:
-    def __init__(self, symbol: str, paper: bool = True):
-        self.symbol = symbol.upper()
+    def __init__(self, paper: bool = True):
         self.client = AlpacaTraderHttpClient(paper=paper)
         self._log = Logger(name=self.__class__.__name__)
 
-    def get_position_obj(self):
-        return self.client.get_position(self.symbol)
+    def get_position_obj(self, symbol: str) -> Position:
+        return self.client.get_position(symbol)
 
-    def get_open_orders(self):
-        return self.client.get_orders(symbol=self.symbol, status="open")
+    def get_open_orders(self, symbol: str):
+        return self.client.get_orders(symbol=symbol, status="open")
 
-    def submit_limit_order_and_wait_to_fill(self, side, qty, limit_price, max_wait_secs=10):
+    def submit_limit_order_and_wait_to_fill(
+        self, symbol: str, side: str, qty: float, limit_price: float, max_wait_secs: int = 10
+    ):
         fill_order_sent_at = pd.Timestamp.now()
-        limit_sell_order = self.client.limit_order(side, symbol=self.symbol, qty=qty, price=limit_price)
+        limit_sell_order = self.client.limit_order(side, symbol=symbol, qty=qty, price=limit_price)
         while limit_sell_order.status != "filled":
             if (pd.Timestamp.now() - fill_order_sent_at) > pd.Timedelta(seconds=max_wait_secs):
-                self._log.error(f"Sell order for {self.symbol} never filled after {max_wait_secs} seconds")
+                self._log.error(f"Sell order for {symbol} never filled after {max_wait_secs} seconds")
                 return False
             limit_sell_order = self.client.get_order(limit_sell_order.id)
             self._log.info(f"Waiting for sell order {limit_sell_order.id} to fill")
@@ -112,19 +113,23 @@ class AlpacaTraderHelper:
         return int(position.qty) < 0
 
     @retry(max_retries=3, wait_time=2.0)
-    def flatten_if_short_with_retry(self, position: Position | None):
+    def flatten_if_short_with_retry(self, symbol: str, position: Position):
         position_was_short = False
         if self._position_is_short(position):
             position_was_short = True
             flattened = self.submit_limit_order_and_wait_to_fill(
-                "buy", abs(int(position.qty)), float(position.current_price) * 1.10, max_wait_secs=20
+                symbol,
+                "buy",
+                abs(int(position.qty)),
+                float(position.current_price) * 1.10,
+                max_wait_secs=20,
             )
-            position = self.get_position_obj()
+            position = self.get_position_obj(symbol)
             if not flattened or self._position_is_short(position):
-                raise RuntimeError(f"Failed to flatten {self.symbol} position")
+                raise RuntimeError(f"Failed to flatten {symbol} position")
         return position_was_short
 
-    def cancel_open_orders_and_flatten(self):
+    def cancel_open_orders_and_flatten(self, symbol: str):
         """
         Cancels all open orders and closes any existing position for a specified symbol.
 
@@ -139,36 +144,37 @@ class AlpacaTraderHelper:
             and False otherwise.
         """
         canceling_or_flattening_needed = False
-        open_orders = self.client.get_orders(symbol=self.symbol, status="open")
+        open_orders = self.client.get_orders(symbol=symbol, status="open")
         for open_order in open_orders:
             canceling_or_flattening_needed = True
-            self._log.warning(f"Cancelling existing open order for {self.symbol}: {open_order}")
-            self.client.cancel_order(open_order.id)
+            self._log.warning(f"Cancelling existing open order for {symbol}: {open_order}")
+            self.client.cancel_order(str(open_order.id))
 
-        position = self.get_position_obj()
+        position = self.get_position_obj(symbol)
         qty = int(position.qty) if position is not None else 0
         if qty != 0:
             canceling_or_flattening_needed = True
+            current_price = float(position.current_price or 0)
             if qty > 0:
-                limit_price = float(position.current_price) * 0.90
+                limit_price = current_price * 0.90
                 side = "sell"
-            elif qty < 0:
-                self._log.error(f"Negative position for {self.symbol} of {qty}. Not good!")
-                limit_price = float(position.current_price) * 1.10
+            else:
+                self._log.error(f"Negative position for {symbol} of {qty}. Not good!")
+                limit_price = current_price * 1.10
                 side = "buy"
-            self.submit_limit_order_and_wait_to_fill(side, abs(qty), limit_price, max_wait_secs=10)
-            self._log.warning(f"Existing position for {self.symbol} of {qty}. Submitting {side} order at {limit_price}")
+            self.submit_limit_order_and_wait_to_fill(symbol, side, abs(qty), limit_price, max_wait_secs=10)
+            self._log.warning(f"Existing position for {symbol} of {qty}. Submitting {side} order at {limit_price}")
         return canceling_or_flattening_needed
 
     @retry(max_retries=2, wait_time=2.0)
-    def cancel_orders_and_flatten_position_with_retry(self, max_retries=2):
+    def cancel_orders_and_flatten_position_with_retry(self, symbol: str, max_retries: int = 2):
         # Wrapper to run multiple times until we get through `cancel_open_orders_and_close_position` without any operations
         iterations = 0
-        while self.cancel_open_orders_and_flatten():
+        while self.cancel_open_orders_and_flatten(symbol):
             iterations += 1
             if iterations > max_retries:
                 raise RuntimeError(
-                    f"Failed to cancel orders and flatten position for {self.symbol} after {iterations - 1} iterations"
+                    f"Failed to cancel orders and flatten position for {symbol} after {iterations - 1} iterations"
                 )
             sleep(1)
-        self._log.info(f"{self.symbol} flat after {iterations} iterations of canceling orders and closing position")
+        self._log.info(f"{symbol} flat after {iterations} iterations of canceling orders and closing position")
