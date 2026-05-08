@@ -157,7 +157,6 @@ class MomoStrategy(BaseStrategy):
         self._last_1m_bucket = bucket_1m
 
     def _on_trade_tick(self, tick: TradeTick) -> None:
-        self.stop_out_if_needed(tick)
         # self.log.info(f"Trade tick: {tick}")
         # NOTE: Need to be subscribed to order book deltas to get best bid/ask prices
         # ob = self.cache.order_book(self.config.instrument_id)
@@ -418,9 +417,3 @@ class MomoStrategy(BaseStrategy):
     def _on_order_filled(self, order_filled) -> None:
         if order_filled.is_buy:
             self.take_price = order_filled.last_px + self.take_profit
-
-    def _on_bar(self, bar: Bar) -> None:
-        pass
-
-    def on_reset(self) -> None:
-        raise NotImplementedError

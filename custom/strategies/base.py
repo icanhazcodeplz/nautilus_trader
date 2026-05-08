@@ -210,7 +210,7 @@ class BaseStrategy(Strategy):
         if remaining_qty_to_sell > 0:
             self.sell(quantity=remaining_qty_to_sell, limit_price=new_limit_price, tag="s")
 
-    def stop_out_if_needed(self, tick: TradeTick):
+    def _stop_out_if_needed(self, tick: TradeTick):
         if self.position_qty == 0:
             self.stop_price = None
             self._stopping_out = False
@@ -311,6 +311,7 @@ class BaseStrategy(Strategy):
                 # "ts_now": pd.Timestamp.utcnow(),
             }
 
+        self._stop_out_if_needed(tick)
         #  Actual operations of this method
         if self.indicators_initialized():
             self._on_trade_tick(tick)
@@ -790,7 +791,7 @@ class BaseStrategy(Strategy):
         pass
 
     def on_reset(self) -> None:
-        pass
+        raise NotImplementedError
 
     def on_save(self) -> dict[str, bytes]:
         return {}
