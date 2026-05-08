@@ -711,7 +711,7 @@ cdef class Actor(Component):
 
         """
         if not self._indicators:
-            return False
+            return True
 
         cdef Indicator indicator
         for indicator in self._indicators:
