@@ -8,8 +8,10 @@ from typing import TYPE_CHECKING
 import msgspec
 import pandas as pd
 
+from custom.artifacts import BACKTEST_RUNS_PATH
 from custom.strategies.momo import MomoStrategy, MomoStrategyConfig
-from custom.utils.alpaca_trader_http_client import AlpacaTraderHelper, AlpacaTraderHttpClient
+from custom.strategies.news import NewsStrategyConfig, NewsStrategy
+from custom.utils.alpaca_trader_http_client import AlpacaTraderHelper
 from nautilus_trader.common.config import ActorConfig
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.trading.controller import Controller
@@ -20,30 +22,20 @@ if TYPE_CHECKING:
 
 _PRIVATE_PLACEMENT = "private placement"
 
-_DEFAULT_MOMO_KWARGS: dict = dict(
+_DEFAULT_KWARGS: dict = dict(
     trade_size=10,
     max_position_multiplier=10,
     stop_loss=0.05,
     take_profit=None,
-    upper_scalar_multiplier=0.3,
-    lower_scalar_multiplier=1.7,
-    vwap_window=150,
-    variance_window=300,
-    outer_band_multiplier=3.0,
-    pressure_window=10,
-    trailing_buy_order=False,
-    trailing_take=False,
-    num_sell_tiers=3,
     random_buy=True,
     simple_take=True,
     allow_trades=True,
     print_update_every_secs=5,
-    only_buy_if_macd_positive=False,
 )
 
 
 class _NewsManagerConfig(ActorConfig, frozen=True):
-    momo_overrides: dict = {}
+    strategy_overrides: dict = {}
 
 
 class NewsManagerConfig(_NewsManagerConfig, frozen=True, kw_only=True):
@@ -80,7 +72,7 @@ class _NewsManagerBase(Controller):
     def _build_strategy(self, symbol: str) -> tuple[MomoStrategy, "AlpacaTraderHelper | None"]:
         """Construct the MomoStrategy and its trader helper. Backtest overrides for no helper."""
         instrument_id = InstrumentId.from_str(f"{symbol}.ALPACA")
-        kwargs = {**_DEFAULT_MOMO_KWARGS, **self.config.momo_overrides}
+        kwargs = {**_DEFAULT_KWARGS, **self.config.strategy_overrides}
         config = MomoStrategyConfig(instrument_id=instrument_id, **kwargs)
         strategy = MomoStrategy(config=config)
         helper = AlpacaTraderHelper(paper=self.config.paper)
@@ -88,7 +80,8 @@ class _NewsManagerBase(Controller):
 
     def _launch_strategy(self, symbol: str):
         strategy, helper = self._build_strategy(symbol)
-        strategy.initialize(artifacts_location=None, trader_helper=helper)
+        # FIXME: NOW backtest_runs_path needs new name and location
+        strategy.initialize(artifacts_location=BACKTEST_RUNS_PATH, trader_helper=helper)
 
         # Trader.add_strategy creates a fresh clock at epoch 0; sync it before on_start()
         # runs, otherwise timers registered there will fire ~56 years of missed events
@@ -102,6 +95,8 @@ class _NewsManagerBase(Controller):
     def _teardown_all(self) -> None:
         for symbol in list(self._strategies):
             strategy = self._strategies.pop(symbol)
+            strategy.on_stop()
+            strategy.on_dispose()
             self.remove_strategy(strategy)
 
 
@@ -202,9 +197,9 @@ class NewsManagerBacktest(_NewsManagerBase):
 
     def _build_strategy(self, symbol: str) -> tuple[MomoStrategy, None]:
         instrument_id = InstrumentId.from_str(f"{symbol}.ALPACA")
-        kwargs = {**_DEFAULT_MOMO_KWARGS, **self.config.momo_overrides}
-        config = MomoStrategyConfig(instrument_id=instrument_id, **kwargs)
-        strategy = MomoStrategy(config=config)
+        kwargs = {**_DEFAULT_KWARGS, **self.config.strategy_overrides}
+        config = NewsStrategyConfig(instrument_id=instrument_id, **kwargs)
+        strategy = NewsStrategy(config=config)
         return strategy, None
 
     @staticmethod

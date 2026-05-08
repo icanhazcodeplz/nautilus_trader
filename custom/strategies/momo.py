@@ -1,5 +1,4 @@
 from collections import deque
-from dataclasses import dataclass
 import random
 
 import pandas as pd
@@ -8,29 +7,13 @@ import torch
 from custom.nt_extensions.indicators import VWAPBandsNew
 from custom.strategies.base import BaseStrategy, BaseStrategyConfig
 from custom.strategies._tiers import Tiers
+from custom.strategies.metric import Metric
 from nautilus_trader.indicators.trend import MACDHistogram
-from nautilus_trader.model.data import Bar
 from nautilus_trader.model.data import TradeTick
 from nautilus_trader.model.enums import OrderStatus
 from nautilus_trader.model.identifiers import InstrumentId
 
 from lstm.lstm_common import TICK_LOOKBACK, build_live_features, get_device, load_model
-
-
-@dataclass
-class Metric:
-    obj: object
-    name: str
-    attrs: list[str]
-
-    def get_vals(self):
-        return {f"{self.name}_{attr}": getattr(self.obj, attr) for attr in self.attrs}
-
-    @property
-    def tick_lookback(self):
-        if hasattr(self.obj, "tick_lookback"):
-            return self.obj.tick_lookback
-        return 0
 
 
 class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):

@@ -16,26 +16,26 @@ from custom.backtest_utils.load_catalog_data import load_catalog_data_to_engine
 from nautilus_trader.trading.config import ImportableControllerConfig
 
 
-def run_single_backtest(
+def run_single_news_backtest(
     symbol,
     start_str,
     end_str,
     news_file,
-    momo_overrides=None,
+    strategy_overrides=None,
     artifacts_location=None,
     log_level="ERROR",
     analyze=False,
 ):
     start_time = pd.Timestamp.now()
-    momo_overrides = dict(momo_overrides or {})
-    random_seed = momo_overrides.pop("random_seed", None)
+    strategy_overrides = dict(strategy_overrides or {})
+    random_seed = strategy_overrides.pop("random_seed", None)
 
     controller = ImportableControllerConfig(
         controller_path="custom.managers.news_manager:NewsManagerBacktest",
         config_path="custom.managers.news_manager:NewsManagerBacktestConfig",
         config={
             "news_file": news_file,
-            "momo_overrides": momo_overrides,
+            "strategy_overrides": strategy_overrides,
         },
     )
 
@@ -60,7 +60,13 @@ def run_single_backtest(
             artifacts_io = ArtifactsIO(artifacts_location)
             artifacts_io.save_orders_report(orders_report)
             artifacts_io.save_performance_metrics(performance_stats)
-            artifacts_io.save_config({"news_file": news_file, "momo_overrides": momo_overrides})
+            artifacts_io.save_config(
+                {
+                    "news_file": news_file,
+                    "strategy_overrides": strategy_overrides,
+                    "instrument_id": f"{symbol}.ALPACA",  # TODO: make dynaamic
+                }
+            )
 
     save_backtest_order_updates(engine, artifacts_location)
 
@@ -75,19 +81,19 @@ def run_single_backtest(
 if __name__ == "__main__":
     log_level = "INFO"
 
-    momo_overrides = dict(random_seed=1)
+    strategy_overrides = dict(random_seed=1)
 
-    symbol = "AAPL"
-    start_str = "2026-02-03 08:30-04:00"
-    end_str = "2026-02-03 10:35-04:00"
+    symbol = "RXT"
+    start_str = "2026-05-07 04:00-04:00"
+    end_str = "2026-05-07 8:30-04:00"
     news_file = str(Path(__file__).parent / "fake_news_events.jsonl")
 
-    run_single_backtest(
+    run_single_news_backtest(
         symbol,
         start_str,
         end_str,
         news_file,
-        momo_overrides=momo_overrides,
+        strategy_overrides=strategy_overrides,
         artifacts_location=BACKTEST_RUNS_PATH,
         log_level=log_level,
         analyze=True,

@@ -69,7 +69,8 @@ class ArtifactsIO:
             "strategy_id",
             "order_id_tag",
         ]:
-            config.pop(drop_key)
+            if drop_key in config:
+                config.pop(drop_key)
         return config
 
     @staticmethod
