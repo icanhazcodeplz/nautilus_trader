@@ -43,6 +43,7 @@ class BaseStrategyConfig(StrategyConfig, frozen=True):
 
 
 class BaseStrategy(Strategy):
+    MIN_TICK_LOOKBACK: int = 0
     buy_signal_delay_secs: int = 1
     _POSITION_DISCREPANCY_ALLOW_SECS = 10  # Raise if alpaca vs nt discrepancy lasts for longer than this
     _MODIFY_REJECT_COOLDOWN_SECS = 1  # Seconds to block retries after a ModifyRejected
@@ -73,7 +74,6 @@ class BaseStrategy(Strategy):
         # Used to track order modifications to avoid sending duplicate modify orders when the cache is slow
         self._already_cancelled_orders = set()
         self._uncached_orders = set()
-        self._last_log_update_dt = 0
 
         self._initialized = False
         self._artifacts_io = None
@@ -289,41 +289,42 @@ class BaseStrategy(Strategy):
             self.log.error(f"Raising RuntimeError: {self._raise_msg}")
             raise RuntimeError(self._raise_msg)
 
-    def on_trade_tick(self, tick: TradeTick) -> None:
-        self._raise_if_needed()
-        self._last_tick = tick
+    def _save_tick_data(self, tick: TradeTick) -> None:
+        if not self.save_artifacts:
+            return
         if self._tick_event_dt_adjusted >= tick.ts_event:
             self._tick_event_dt_adjusted += 1
         else:
             self._tick_event_dt_adjusted = tick.ts_event
+        tick_data = {
+            "price": float(tick.price),
+            "size": int(tick.size),
+            "ts_event": tick.ts_event,
+            # These can be used to measure data latency
+            # "ts_recv": tick.ts_init,
+            # "ts_clock": self.clock.utc_now(),
+            # "ts_now": pd.Timestamp.utcnow(),
+        }
+        for metric in self.metrics_to_save_on_tick:
+            tick_data = {**tick_data, **metric.get_vals()}
+        self._add_tick_data(self._tick_event_dt_adjusted, tick_data)
+
+    def on_trade_tick(self, tick: TradeTick) -> None:
+        self._raise_if_needed()
+        self._last_tick = tick
 
         if self.stop_loss is None:
             self.stop_loss = self.config.stop_loss
 
-        tick_data = {"price": float(tick.price), "size": int(tick.size)}
-        if self.save_artifacts:
-            tick_data = {
-                **tick_data,
-                "ts_event": tick.ts_event,
-                # These can be used to measure data latency
-                # "ts_recv": tick.ts_init,
-                # "ts_clock": self.clock.utc_now(),
-                # "ts_now": pd.Timestamp.utcnow(),
-            }
-
         self._stop_out_if_needed(tick)
+
         #  Actual operations of this method
         if self.indicators_initialized():
             self._on_trade_tick(tick)
 
         # TODO: Rethink buy signals?
         # self._update_buy_signals(tick)
-
-        if self.save_artifacts:
-            # tick_data["ts_now_after"] = pd.Timestamp.utcnow()
-            for metric in self.metrics_to_save_on_tick:
-                tick_data = {**tick_data, **metric.get_vals()}
-            self._add_tick_data(self._tick_event_dt_adjusted, tick_data)
+        self._save_tick_data(tick)
 
     def _on_bar(self, bar: Bar) -> None:
         pass
@@ -337,23 +338,8 @@ class BaseStrategy(Strategy):
             self._add_tick_data(bar.ts_init, tick_data)
 
     def on_historical_data(self, data) -> None:
-        if not self.save_artifacts:
-            return
-        if not isinstance(data, TradeTick):
-            return
-
-        tick: TradeTick = data
-        if self._tick_event_dt_adjusted >= tick.ts_event:
-            self._tick_event_dt_adjusted += 1
-        else:
-            self._tick_event_dt_adjusted = tick.ts_event
-
-        tick_data = {
-            "price": float(tick.price),
-            "size": int(tick.size),
-            "ts_event": tick.ts_event,
-        }
-        self._add_tick_data(self._tick_event_dt_adjusted, tick_data)
+        if isinstance(data, TradeTick):
+            self._save_tick_data(data)
 
     def _submit_orders_if_allowed(self, order_or_order_list, expire_time=None) -> None:
         buy_included = False
@@ -677,7 +663,6 @@ class BaseStrategy(Strategy):
             f"{metrics_data}",
             color=LogColor.CYAN,
         )
-        self._last_log_update_dt = self._tick_event_dt_adjusted
 
     def _set_allow_buy_based_on_allow_buy_times(self, event: TimeEvent):
         current_5min = pd.Timestamp(self.clock.utc_now()).floor("5min")
@@ -723,7 +708,7 @@ class BaseStrategy(Strategy):
 
         # TICK DATA
         # Register indicators and request historical trade ticks if needed
-        max_tick_lookback = 0
+        max_tick_lookback = self.MIN_TICK_LOOKBACK
         for metric in self.metrics_to_save_on_tick:
             self.register_indicator_for_trade_ticks(self.config.instrument_id, metric.obj)
             max_tick_lookback = max(max_tick_lookback, metric.tick_lookback)

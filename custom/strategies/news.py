@@ -24,6 +24,8 @@ class NewsStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
 
 
 class NewsStrategy(BaseStrategy):
+    MIN_TICK_LOOKBACK = 50
+
     def __init__(self, config: NewsStrategyConfig) -> None:
         super().__init__(config)
 
@@ -55,7 +57,7 @@ class NewsStrategy(BaseStrategy):
             # Metric(obj=self.vwap_day, name="day_vwap", attrs=["value"]),
         ]
 
-        self.price_dq = deque(maxlen=2)
+        self.price_dq = deque(maxlen=self.MIN_TICK_LOOKBACK)
         self.take_price = None
 
         self.metrics = []
