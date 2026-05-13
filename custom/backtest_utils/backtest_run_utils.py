@@ -10,6 +10,7 @@ from custom.statistics.trade_avg_scaled import PnlPer100, TotalBought, AverageBu
 from custom.statistics.trade_counts import Winners, Losers, NumTrades
 from custom.statistics.win_loss_ratio import WinLossRatio
 from custom.utils.orders_to_trades import orders_to_trades
+from custom.backtest_utils.load_catalog_data import BACKTESTING_CATALOG
 
 from nautilus_trader.backtest.engine import BacktestEngine, BacktestEngineConfig
 from nautilus_trader.cache.config import CacheConfig
@@ -58,7 +59,7 @@ def build_backtest_engine(artifacts_location, log_level, controller=None):
         for log_file in glob.glob(os.path.join(str(artifacts_location), "*.log")):
             os.remove(log_file)
 
-    return BacktestEngine(
+    engine = BacktestEngine(
         config=BacktestEngineConfig(
             trader_id=TraderId("M-1"),
             logging=LoggingConfig(
@@ -79,6 +80,13 @@ def build_backtest_engine(artifacts_location, log_level, controller=None):
             controller=controller,
         )
     )
+
+    # Register the parquet catalog so request_trade_ticks / request_quote_ticks /
+    # request_bars called from a strategy's on_start() actually serve data via
+    # on_historical_data. Without this, BacktestMarketDataClient no-ops on requests.
+    engine.kernel.data_engine.register_catalog(BACKTESTING_CATALOG)
+
+    return engine
 
 
 def add_default_venue(engine, random_seed):
