@@ -2238,6 +2238,15 @@ cdef class DataEngine(Component):
             if data and not isinstance(request, RequestInstruments):
                 break
 
+        # Apply request.limit to catalog results (catalog queries don't honor it natively).
+        # Keep the most recent N records so warm-up requests match adapter behavior.
+        if (
+            request.limit > 0
+            and len(data) > request.limit
+            and not isinstance(request, (RequestInstrument, RequestInstruments))
+        ):
+            data = data[-request.limit:]
+
         # Validate data is not from the future
         if data and data[-1].ts_init > ts_now and query_past_data:
             raise RuntimeError(
