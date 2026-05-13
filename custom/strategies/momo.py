@@ -42,7 +42,7 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     allow_trades: bool = True
 
 
-def initialize_deque_if_needed(dq: deque, value):
+def backfill_deque_with_value_if_empty(dq: deque, value):
     if len(dq) == 0:
         for i in range(dq.maxlen):
             dq.append(value)
@@ -148,7 +148,7 @@ class MomoStrategy(BaseStrategy):
             return
         if self.config.lstm_buy:
             self._update_candle_mids(tick)
-        initialize_deque_if_needed(self.price_dq, tick.price)
+        backfill_deque_with_value_if_empty(self.price_dq, tick.price)
         if self.last_take_ts is None:
             self.last_take_ts = self.clock.utc_now()
 

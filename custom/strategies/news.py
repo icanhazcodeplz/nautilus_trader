@@ -2,6 +2,7 @@ from collections import deque
 import random
 
 from custom.strategies.base import BaseStrategy, BaseStrategyConfig
+from custom.strategies.momo import backfill_deque_with_value_if_empty
 
 from nautilus_trader.model.data import TradeTick
 from nautilus_trader.model.identifiers import InstrumentId
@@ -20,13 +21,6 @@ class NewsStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     print_update_every_secs: int = None
 
     allow_trades: bool = True
-
-
-def initialize_deque_if_needed(dq: deque, value):
-    if len(dq) == 0:
-        for i in range(dq.maxlen):
-            dq.append(value)
-    return dq
 
 
 class NewsStrategy(BaseStrategy):
@@ -74,7 +68,7 @@ class NewsStrategy(BaseStrategy):
         # NOTE: Need to be subscribed to order book deltas to get best bid/ask prices
         # ob = self.cache.order_book(self.config.instrument_id)
         # best_bid = ob.best_bid_price()
-        initialize_deque_if_needed(self.price_dq, tick.price)
+        backfill_deque_with_value_if_empty(self.price_dq, tick.price)
         if self.last_take_ts is None:
             self.last_take_ts = self.clock.utc_now()
 
