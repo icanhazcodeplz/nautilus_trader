@@ -9,7 +9,6 @@ import msgspec
 import pandas as pd
 
 from custom.artifacts import BACKTEST_RUNS_PATH
-from custom.strategies.momo import MomoStrategy, MomoStrategyConfig
 from custom.strategies.news import NewsStrategyConfig, NewsStrategy
 from custom.utils.alpaca_trader_http_client import AlpacaTraderHelper
 from nautilus_trader.common.config import ActorConfig
@@ -30,7 +29,7 @@ _DEFAULT_KWARGS: dict = dict(
     random_buy=True,
     simple_take=True,
     allow_trades=True,
-    print_update_every_secs=5,
+    print_update_every_secs=None,
 )
 
 
@@ -52,7 +51,7 @@ class _NewsManagerBase(Controller):
 
     def __init__(self, trader: Trader, config: _NewsManagerConfig) -> None:
         super().__init__(trader=trader, config=config)
-        self._strategies: dict[str, MomoStrategy] = {}
+        self._strategies: dict[str, NewsStrategy] = {}
 
     def initialize(self) -> None:
         pass
@@ -67,30 +66,18 @@ class _NewsManagerBase(Controller):
             self.log.info(f"Skipping news for {symbol}: strategy already running")
             return
 
-        self._launch_strategy(symbol)
-
-    def _build_strategy(self, symbol: str) -> tuple[MomoStrategy, "AlpacaTraderHelper | None"]:
-        """Construct the MomoStrategy and its trader helper. Backtest overrides for no helper."""
         instrument_id = InstrumentId.from_str(f"{symbol}.ALPACA")
         kwargs = {**_DEFAULT_KWARGS, **self.config.strategy_overrides}
-        config = MomoStrategyConfig(instrument_id=instrument_id, **kwargs)
-        strategy = MomoStrategy(config=config)
-        helper = AlpacaTraderHelper(paper=self.config.paper)
-        return strategy, helper
+        config = NewsStrategyConfig(instrument_id=instrument_id, **kwargs)
+        strategy = NewsStrategy(config=config)
+        article_published_ns = pd.Timestamp(event["published"]).value
+        strategy = self._initialize_and_start_strategy(strategy, article_published_ns)
 
-    def _launch_strategy(self, symbol: str):
-        strategy, helper = self._build_strategy(symbol)
-        # FIXME: NOW backtest_runs_path needs new name and location
-        strategy.initialize(artifacts_location=BACKTEST_RUNS_PATH, trader_helper=helper)
-
-        # Trader.add_strategy creates a fresh clock at epoch 0; sync it before on_start()
-        # runs, otherwise timers registered there will fire ~56 years of missed events
-        # the next time the simulator advances this strategy's clock.
-        self.create_strategy(strategy, start=False)
-        strategy.clock.set_time(self.clock.timestamp_ns())
-        self.start_strategy(strategy)
         self._strategies[symbol] = strategy
         self.log.info(f"Launched MomoStrategy for {symbol}")
+
+    def _initialize_and_start_strategy(self, strategy, article_published_ns:int) -> NewsStrategy:
+        raise NotImplementedError
 
     def _teardown_all(self) -> None:
         for symbol in list(self._strategies):
@@ -108,6 +95,14 @@ class NewsManager(_NewsManagerBase):
         self._listener_task: asyncio.Task | None = None
         self._server: asyncio.AbstractServer | None = None
         self._decoder = msgspec.json.Decoder()
+
+    def _initialize_and_start_strategy(self, strategy, article_published_ns:int) -> NewsStrategy:
+        helper = AlpacaTraderHelper(paper=self.config.paper)
+        strategy.initialize(article_published_ns=article_published_ns, artifacts_location=None, trader_helper=helper)
+        self.create_strategy(strategy, start=True)
+
+        raise RuntimeError("need to figure out artifacts location")
+        return strategy
 
     def on_start(self) -> None:
         loop = asyncio.get_event_loop()
@@ -172,6 +167,16 @@ class NewsManagerBacktest(_NewsManagerBase):
         super().__init__(trader=trader, config=config)
         self._events_by_alert: dict[str, dict] = {}
 
+    def _initialize_and_start_strategy(self, strategy, article_published_ns:int) -> NewsStrategy:
+        strategy.initialize(article_published_ns=article_published_ns, artifacts_location=BACKTEST_RUNS_PATH, trader_helper=None)
+        # Trader.add_strategy creates a fresh clock at epoch 0; sync it before on_start()
+        # runs, otherwise timers registered there will fire ~56 years of missed events
+        # the next time the simulator advances this strategy's clock.
+        self.create_strategy(strategy, start=False)
+        strategy.clock.set_time(self.clock.timestamp_ns())
+        self.start_strategy(strategy)
+        return strategy
+
     def on_start(self) -> None:
         events = self._load_events(self.config.news_file)
         now = self.clock.utc_now()
@@ -195,12 +200,6 @@ class NewsManagerBacktest(_NewsManagerBase):
             return
         self._handle_news_event(news_event)
 
-    def _build_strategy(self, symbol: str) -> tuple[MomoStrategy, None]:
-        instrument_id = InstrumentId.from_str(f"{symbol}.ALPACA")
-        kwargs = {**_DEFAULT_KWARGS, **self.config.strategy_overrides}
-        config = NewsStrategyConfig(instrument_id=instrument_id, **kwargs)
-        strategy = NewsStrategy(config=config)
-        return strategy, None
 
     @staticmethod
     def _load_events(path: str) -> list[dict]:

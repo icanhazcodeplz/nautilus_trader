@@ -94,6 +94,8 @@ class BaseStrategy(Strategy):
         self._last_force_reconcile_ns = 0
         self._last_negative_flatten_ns = 0
         self._reconciliation_task: asyncio.Task | None = None
+        self._historical_loaded = False
+        self._historical_ticks: list[TradeTick] = []
 
     def initialize(self, artifacts_location: Optional[Path], trader_helper: Optional[AlpacaTraderHelper] = None):
         self._initialized = True
@@ -319,7 +321,7 @@ class BaseStrategy(Strategy):
         self._stop_out_if_needed(tick)
 
         #  Actual operations of this method
-        if self.indicators_initialized():
+        if self._historical_loaded and self.indicators_initialized():
             self._on_trade_tick(tick)
 
         # TODO: Rethink buy signals?
@@ -339,7 +341,12 @@ class BaseStrategy(Strategy):
 
     def on_historical_data(self, data) -> None:
         if isinstance(data, TradeTick):
+            self._historical_ticks.append(data)
             self._save_tick_data(data)
+
+
+    def _on_historical_ticks_loaded(self, request_id) -> None:
+        self._historical_loaded = True
 
     def _submit_orders_if_allowed(self, order_or_order_list, expire_time=None) -> None:
         buy_included = False
@@ -716,7 +723,12 @@ class BaseStrategy(Strategy):
         if max_tick_lookback > 0:
             # Set a long lookback to ensure we get at least `max_tick_lookback` ticks back
             trade_tick_start = self.clock.utc_now() - timedelta(days=2)
-            self.request_trade_ticks(self.config.instrument_id, start=trade_tick_start, limit=max_tick_lookback)
+            self.request_trade_ticks(
+                self.config.instrument_id,
+                start=trade_tick_start,
+                limit=max_tick_lookback,
+                callback=self._on_historical_ticks_loaded,
+            )
 
         self.subscribe_trade_ticks(self.config.instrument_id)
 

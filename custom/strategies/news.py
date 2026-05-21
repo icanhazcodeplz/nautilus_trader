@@ -1,8 +1,12 @@
 from collections import deque
 import random
+from pathlib import Path
+from typing import Optional
 
+from custom.nt_extensions.indicators import VWAPBandsNew
 from custom.strategies.base import BaseStrategy, BaseStrategyConfig
 from custom.strategies.momo import backfill_deque_with_value_if_empty
+from custom.utils.alpaca_trader_http_client import AlpacaTraderHelper
 
 from nautilus_trader.model.data import TradeTick
 from nautilus_trader.model.identifiers import InstrumentId
@@ -24,11 +28,11 @@ class NewsStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
 
 
 class NewsStrategy(BaseStrategy):
-    MIN_TICK_LOOKBACK = 50
+    MIN_TICK_LOOKBACK = 100
 
     def __init__(self, config: NewsStrategyConfig) -> None:
         super().__init__(config)
-
+        self.article_published_ns: int = 0  # Initialized in self.initialization
         # FIXME: This is temporary
         self.take_profit = self.config.take_profit if self.config.take_profit is not None else self.config.stop_loss
         # self.vwap = VWAPBandsNew(
@@ -65,6 +69,33 @@ class NewsStrategy(BaseStrategy):
         self.last_take_ts = None
         self._sell_diff_start_ns: int | None = None
         self._last_tier_adjustment_ns = None
+
+    def initialize(self, article_published_ns:int, artifacts_location: Optional[Path], trader_helper: Optional[AlpacaTraderHelper] = None):
+        super().initialize(artifacts_location=artifacts_location, trader_helper=trader_helper)
+        self.article_published_ns = article_published_ns
+
+    def _on_historical_ticks_loaded(self, request_id) -> None:
+        super()._on_historical_ticks_loaded(request_id)
+        pre_article = [t for t in self._historical_ticks if t.ts_event < self.article_published_ns][-50:]
+        prices = [float(t.price) for t in pre_article]
+        volumes = [float(t.size) for t in pre_article]
+
+        seen: set = set()
+        post_article: list[TradeTick] = []
+        for t in list(self._historical_ticks) + list(self.cache.trade_ticks(self.config.instrument_id)):
+            if t.ts_event < self.article_published_ns:
+                continue
+            key = str(t.trade_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            post_article.append(t)
+        post_article.sort(key=lambda t: t.ts_event)
+
+        last_tick = self.cache.trade_tick(self.config.instrument_id)
+        if last_tick is None:
+            return
+        self.buy(self.config.trade_size, last_tick.price, tag="initial", cancel_after_secs=10)
 
     def _on_trade_tick(self, tick: TradeTick) -> None:
         # NOTE: Need to be subscribed to order book deltas to get best bid/ask prices
