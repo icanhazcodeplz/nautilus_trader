@@ -215,6 +215,7 @@ def mock_ws_client():
     mock.subscribe_index_prices = AsyncMock()
     mock.subscribe_funding_rates = AsyncMock()
     mock.subscribe_bars = AsyncMock()
+    mock.cache_instrument = MagicMock()
 
     # Mock unsubscription methods
     mock.unsubscribe_orders = AsyncMock()
@@ -336,7 +337,7 @@ def exec_client(
     config = BitmexExecClientConfig(
         api_key="test_api_key",
         api_secret="test_api_secret",
-        testnet=True,
+        environment=nautilus_pyo3.BitmexEnvironment.TESTNET,
     )
 
     client = BitmexExecutionClient(
@@ -391,7 +392,7 @@ def exec_client_with_dms(
     config = BitmexExecClientConfig(
         api_key="test_api_key",
         api_secret="test_api_secret",
-        testnet=True,
+        environment=nautilus_pyo3.BitmexEnvironment.TESTNET,
         deadmans_switch_timeout_secs=60,
     )
 

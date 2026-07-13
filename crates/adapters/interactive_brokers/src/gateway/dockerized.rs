@@ -23,12 +23,16 @@ use anyhow::Context;
 #[cfg(feature = "gateway")]
 use bollard::Docker;
 #[cfg(feature = "gateway")]
-use bollard::container::{
-    Config, CreateContainerOptions, LogOutput, LogsOptions, RemoveContainerOptions,
-};
+use bollard::container::LogOutput;
 #[cfg(feature = "gateway")]
 use bollard::models::{
-    ContainerCreateResponse, HostConfig, PortBinding, RestartPolicy, RestartPolicyNameEnum,
+    ContainerCreateBody, ContainerCreateResponse, HostConfig, PortBinding, RestartPolicy,
+    RestartPolicyNameEnum,
+};
+#[cfg(feature = "gateway")]
+use bollard::query_parameters::{
+    CreateContainerOptions, ListContainersOptions, LogsOptions, RemoveContainerOptions,
+    StartContainerOptions, StopContainerOptions,
 };
 #[cfg(feature = "gateway")]
 use futures_util::StreamExt;
@@ -219,7 +223,7 @@ impl DockerizedIBGateway {
     ///
     /// Returns an error if log retrieval fails.
     pub async fn is_logged_in(&self, container_id: &str) -> anyhow::Result<bool> {
-        let logs_options = LogsOptions::<String> {
+        let logs_options = LogsOptions {
             stdout: true,
             stderr: true,
             ..Default::default()
@@ -252,7 +256,7 @@ impl DockerizedIBGateway {
     ///
     /// Returns an error if container inspection fails.
     pub async fn container_status(&self) -> anyhow::Result<ContainerStatus> {
-        let list_options = bollard::container::ListContainersOptions::<String> {
+        let list_options = ListContainersOptions {
             all: true,
             ..Default::default()
         };
@@ -274,7 +278,11 @@ impl DockerizedIBGateway {
             return Ok(ContainerStatus::NoContainer);
         };
 
-        let state = container.state.as_deref().unwrap_or("unknown");
+        let state = container
+            .state
+            .as_ref()
+            .map(|state| state.as_ref())
+            .unwrap_or("unknown");
 
         match state {
             "running" => {
@@ -305,7 +313,7 @@ impl DockerizedIBGateway {
     ///
     /// Returns an error if container creation or startup fails.
     pub async fn start(&mut self, wait: Option<u64>) -> anyhow::Result<()> {
-        tracing::info!("Ensuring gateway is running");
+        tracing::debug!("Ensuring gateway is running");
 
         let status = self.container_status().await?;
 
@@ -325,7 +333,7 @@ impl DockerizedIBGateway {
                 self.stop().await?;
             }
             ContainerStatus::Ready | ContainerStatus::ContainerStarting => {
-                tracing::info!("Status {:?}, using existing container", status);
+                tracing::debug!("Status {:?}, using existing container", status);
                 return Ok(());
             }
             _ => {}
@@ -377,7 +385,7 @@ impl DockerizedIBGateway {
         ];
 
         // Create container configuration
-        let container_config = Config {
+        let container_config = ContainerCreateBody {
             image: Some(self.config.container_image.clone()),
             hostname: Some(self.container_name.clone()),
             host_config: Some(HostConfig {
@@ -394,8 +402,8 @@ impl DockerizedIBGateway {
 
         // Create container
         let create_options = CreateContainerOptions {
-            name: self.container_name.clone(),
-            platform: None,
+            name: Some(self.container_name.clone()),
+            ..Default::default()
         };
 
         let create_response: ContainerCreateResponse = self
@@ -408,14 +416,11 @@ impl DockerizedIBGateway {
 
         // Start container
         self.docker
-            .start_container(
-                &container_id,
-                None::<bollard::container::StartContainerOptions<String>>,
-            )
+            .start_container(&container_id, None::<StartContainerOptions>)
             .await
             .context("Failed to start container")?;
 
-        tracing::info!(
+        tracing::debug!(
             "Container `{}` starting, waiting for ready",
             self.container_name
         );
@@ -426,7 +431,7 @@ impl DockerizedIBGateway {
 
         while waited < wait_time {
             if self.is_logged_in(&container_id).await.unwrap_or(false) {
-                tracing::info!(
+                tracing::debug!(
                     "Gateway `{}` ready. VNC port is {:?}",
                     self.container_name,
                     self.config.vnc_port
@@ -472,7 +477,7 @@ impl DockerizedIBGateway {
     ///
     /// Returns an error if container stop or removal fails.
     pub async fn stop(&self) -> anyhow::Result<()> {
-        let list_options = bollard::container::ListContainersOptions::<String> {
+        let list_options = ListContainersOptions {
             all: true,
             ..Default::default()
         };
@@ -493,12 +498,12 @@ impl DockerizedIBGateway {
         if let Some(container) = container {
             if let Some(container_id) = &container.id {
                 // Stop container if running
-                if container.state.as_deref() == Some("running") {
+                if matches!(
+                    container.state.as_ref().map(|state| state.as_ref()),
+                    Some("running")
+                ) {
                     self.docker
-                        .stop_container(
-                            container_id,
-                            None::<bollard::container::StopContainerOptions>,
-                        )
+                        .stop_container(container_id, None::<StopContainerOptions>)
                         .await
                         .context("Failed to stop container")?;
                 }
@@ -514,7 +519,7 @@ impl DockerizedIBGateway {
                     .await
                     .context("Failed to remove container")?;
 
-                tracing::info!("Stopped and removed container `{}`", self.container_name);
+                tracing::debug!("Stopped and removed container `{}`", self.container_name);
             }
         }
 

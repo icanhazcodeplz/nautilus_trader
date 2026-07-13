@@ -43,6 +43,26 @@ class MyActor(Actor):
         self.count_of_processed_bars += 1
 ```
 
+## Actor configuration and IDs
+
+Actors can receive an `ActorConfig` subclass. The base config may include an `actor_id`;
+if supplied, the actor registers with that ID. If omitted, the system derives a runtime
+actor ID.
+
+Treat configuration as construction data for the actor. Read user-supplied settings through
+`self.config`, and keep runtime state on the actor itself.
+
+:::info Rust implementation
+For Rust actors, generated or assigned runtime IDs live on the actor core rather than being
+written back into `DataActorConfig`. This differs from Python bridge paths which may copy
+inherited config fields into runtime state when a Python object is created from an importable
+config.
+
+Rust authors implement `DataActor` and use the facade methods on `self`.
+`DataActorNative` is native-only access for runtime wiring and borrowed
+core state. Import it only for same-binary performance paths or internal runtime wiring.
+:::
+
 ## Lifecycle
 
 Actors follow a defined state machine through their lifecycle:
@@ -230,6 +250,10 @@ class MyActor(Actor):
         # Handle real-time bar updates (from subscriptions)
         self.log.info(f"Received real-time bar: {bar}")
 ```
+
+When `validate_data_sequence=True`, subscribe to live bars via the `request_bars()`
+`callback` (rather than a separate `subscribe_bars()` call) so the stream starts only
+after history has loaded; see [Working with bars: request vs. subscribe](data.md#working-with-bars-request-vs-subscribe).
 
 Separating historical and real-time handlers lets you apply different processing logic
 based on context. For example:

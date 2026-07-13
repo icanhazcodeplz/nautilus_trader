@@ -45,6 +45,10 @@ fn to_websocket_pyerr(e: TransportError) -> PyErr {
     PyErr::new::<WebSocketClientError, _>(e.to_string())
 }
 
+fn is_python_reconnect_control_message(msg: &Message) -> bool {
+    matches!(msg, Message::Text(text) if text.as_ref() == RECONNECTED.as_bytes())
+}
+
 #[pymethods]
 #[pyo3_stub_gen::derive::gen_stub_pymethods]
 impl WebSocketConfig {
@@ -100,8 +104,8 @@ impl WebSocketConfig {
         reconnect_max_attempts: Option<u32>,
         idle_timeout_ms: Option<u64>,
         proxy_url: Option<String>,
-    ) -> Self {
-        Self {
+    ) -> PyResult<Self> {
+        let config = Self {
             url,
             headers,
             heartbeat,
@@ -115,7 +119,9 @@ impl WebSocketConfig {
             idle_timeout_ms,
             backend: TransportBackend::default(),
             proxy_url,
-        }
+        };
+        config.validate().map_err(to_pyvalue_err)?;
+        Ok(config)
     }
 }
 
@@ -151,7 +157,7 @@ impl WebSocketClient {
         let handler_clone = clone_py_object(&handler);
 
         let message_handler: MessageHandler = Arc::new(move |msg: Message| {
-            if matches!(msg, Message::Text(ref text) if text.as_ref() == RECONNECTED.as_bytes()) {
+            if is_python_reconnect_control_message(&msg) {
                 return;
             }
 
@@ -211,6 +217,8 @@ impl WebSocketClient {
     ///
     /// Controller task will periodically check the disconnect mode
     /// and shutdown the client if it is alive
+    ///
+    /// If an `AuthTracker` is registered, this fails pending auth waits.
     #[pyo3(name = "disconnect")]
     #[expect(clippy::needless_pass_by_value)]
     fn py_disconnect<'py>(slf: PyRef<'_, Self>, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
@@ -228,7 +236,8 @@ impl WebSocketClient {
                     log::debug!("WebSocket already disconnecting");
                 }
                 _ => {
-                    connection_mode.store(ConnectionMode::Disconnect.as_u8(), Ordering::SeqCst);
+                    // Preserve a CLOSED terminal state reached concurrently
+                    ConnectionMode::request_disconnect(&connection_mode);
                     state_notify.notify_one();
 
                     let timeout = tokio::time::timeout(Duration::from_secs(5), async {
@@ -239,7 +248,7 @@ impl WebSocketClient {
                     .await;
 
                     if timeout.is_err() {
-                        log::error!("Timeout waiting for WebSocket to close, forcing closed state");
+                        log::warn!("Timeout waiting for WebSocket to close, forcing closed state");
                         connection_mode.store(ConnectionMode::Closed.as_u8(), Ordering::SeqCst);
                     }
                 }
@@ -293,7 +302,9 @@ impl WebSocketClient {
     ///
     /// # Errors
     ///
-    /// - Raises `PyRuntimeError` if not able to send data.
+    /// Returns an error if:
+    /// - The connection is not active or closes while waiting for rate limit (`WebSocketClientError`).
+    /// - The writer channel is broken (`PyRuntimeError`).
     #[pyo3(name = "send")]
     #[pyo3(signature = (data, keys=None))]
     #[expect(clippy::needless_pass_by_value)]
@@ -311,21 +322,21 @@ impl WebSocketClient {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             if !ConnectionMode::from_atomic(&mode).is_active() {
                 let msg = "Cannot send data: connection not active".to_string();
-                log::error!("{msg}");
-                return Err(to_pyruntime_err(std::io::Error::new(
+                log::warn!("{msg}");
+                return Err(to_websocket_pyerr(TransportError::Io(std::io::Error::new(
                     std::io::ErrorKind::NotConnected,
                     msg,
-                )));
+                ))));
             }
 
             tokio::select! {
                 biased;
                 () = rate_limiter.await_keys_ready(keys.as_deref()) => {}
                 () = poll_until_closed(&mode) => {
-                    return Err(to_pyruntime_err(std::io::Error::new(
+                    return Err(to_websocket_pyerr(TransportError::Io(std::io::Error::new(
                         std::io::ErrorKind::ConnectionAborted,
                         "Connection closed while waiting for rate limit",
-                    )));
+                    ))));
                 }
             }
 
@@ -360,21 +371,20 @@ impl WebSocketClient {
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             if !ConnectionMode::from_atomic(&mode).is_active() {
-                let e = std::io::Error::new(
+                return Err(to_websocket_pyerr(TransportError::Io(std::io::Error::new(
                     std::io::ErrorKind::NotConnected,
                     "Cannot send text: connection not active",
-                );
-                return Err(to_pyruntime_err(e));
+                ))));
             }
 
             tokio::select! {
                 biased;
                 () = rate_limiter.await_keys_ready(keys.as_deref()) => {}
                 () = poll_until_closed(&mode) => {
-                    return Err(to_pyruntime_err(std::io::Error::new(
+                    return Err(to_websocket_pyerr(TransportError::Io(std::io::Error::new(
                         std::io::ErrorKind::ConnectionAborted,
                         "Connection closed while waiting for rate limit",
-                    )));
+                    ))));
                 }
             }
 
@@ -401,11 +411,8 @@ impl WebSocketClient {
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             if !ConnectionMode::from_atomic(&mode).is_active() {
-                let e = std::io::Error::new(
-                    std::io::ErrorKind::NotConnected,
-                    "Cannot send pong: connection not active",
-                );
-                return Err(to_pyruntime_err(e));
+                log::debug!("Skipping pong: connection not active");
+                return Ok(());
             }
             log::trace!("Sending pong frame ({data_len} bytes)");
 
@@ -431,6 +438,52 @@ async fn poll_until_closed(mode: &Arc<AtomicU8>) {
 }
 
 #[cfg(test)]
+mod control_filter_tests {
+    use bytes::Bytes;
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    #[case::reconnected_control(Message::text(RECONNECTED), true)]
+    #[case::application_text(Message::text("application"), false)]
+    #[case::reconnected_prefix(Message::text(format!("{RECONNECTED}:payload")), false)]
+    #[case::reconnected_binary(Message::Binary(Bytes::from_static(RECONNECTED.as_bytes())), false)]
+    #[case::ping(Message::ping(Bytes::new()), false)]
+    fn python_reconnect_control_filter(#[case] msg: Message, #[case] expected: bool) {
+        assert_eq!(is_python_reconnect_control_message(&msg), expected);
+    }
+}
+
+#[cfg(test)]
+mod py_new_tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    fn test_py_new_rejects_empty_url() {
+        let result = WebSocketConfig::py_new(
+            String::new(),
+            vec![],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        assert!(result.is_err());
+    }
+}
+
+#[cfg(test)]
+#[cfg(not(feature = "turmoil"))]
 #[cfg(target_os = "linux")] // Only run network tests on Linux (CI stability)
 mod tests {
     use std::ffi::CString;
@@ -506,8 +559,6 @@ mod tests {
                         .unwrap();
 
                     task::spawn(async move {
-                        // Inner if consumes `msg`, cannot hoist into a match guard
-                        #[expect(clippy::collapsible_match)]
                         while let Some(Ok(msg)) = websocket.next().await {
                             match msg {
                                 tokio_tungstenite::tungstenite::protocol::Message::Text(txt)
@@ -615,7 +666,8 @@ counter = Counter()
             None,
             None,
             None,
-        );
+        )
+        .unwrap();
 
         let handler_clone = Python::attach(|py| handler.clone_ref(py));
 
@@ -705,7 +757,8 @@ counter = Counter()
             None,
             None,
             None,
-        );
+        )
+        .unwrap();
 
         let handler_clone = Python::attach(|py| handler.clone_ref(py));
 

@@ -48,7 +48,7 @@ pub struct VerticalHorizontalFilter {
 
 impl Display for VerticalHorizontalFilter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}({},{})", self.name(), self.period, self.ma_type,)
+        write!(f, "{}({},{})", self.name(), self.period, self.ma_type)
     }
 }
 
@@ -113,6 +113,10 @@ impl VerticalHorizontalFilter {
             self.previous_close = close;
         }
 
+        if self.prices.len() == self.period {
+            let _ = self.prices.pop_front();
+        }
+
         let _ = self.prices.push_back(close);
 
         let max_price = self
@@ -130,10 +134,10 @@ impl VerticalHorizontalFilter {
         }
 
         self.previous_close = close;
-        self._check_initialized();
+        self.check_initialized();
     }
 
-    pub fn _check_initialized(&mut self) {
+    pub fn check_initialized(&mut self) {
         if !self.initialized {
             self.has_inputs = true;
 
@@ -217,5 +221,20 @@ mod tests {
         assert_eq!(vhf_10.prices.len(), 0);
         assert!(!vhf_10.has_inputs);
         assert!(!vhf_10.initialized);
+    }
+
+    #[rstest]
+    fn test_value_respects_period_window() {
+        let mut vhf = VerticalHorizontalFilter::new(3, None);
+
+        vhf.update_raw(100.0); // Early spike must leave the 3-period window
+        vhf.update_raw(1.0);
+        vhf.update_raw(2.0);
+        vhf.update_raw(3.0);
+        vhf.update_raw(4.0);
+
+        // Window is now [2, 3, 4]: |max - min| = 2, and the SMA(3) of the last
+        // three absolute price changes (1, 1, 1) is 1, so value = 2 / 3 / 1.
+        assert_eq!(vhf.value, 2.0 / 3.0);
     }
 }

@@ -17,18 +17,21 @@
 //!
 //! Configures the Polymarket data client with `subscribe_new_markets: true` so
 //! the WebSocket connection receives `new_market` events. A [`SearchFilter`]
-//! pre-populates BTC markets from the Gamma search API at startup — these
-//! serve as the initial instrument set. Any new market created on Polymarket
-//! is then fetched from the Gamma API and emitted alongside the initial BTC
-//! instruments. A custom [`DataActor`] subscribes to all instruments from the
-//! POLYMARKET venue and logs every instrument that arrives — including newly
-//! created markets pushed in real time.
+//! pre-populates the configured query's markets from the Gamma search API at
+//! startup — these serve as the initial instrument set. Any new market created
+//! on Polymarket is then fetched from the Gamma API and emitted alongside the
+//! initial instruments. A custom [`DataActor`] subscribes to all instruments
+//! from the POLYMARKET venue and logs every instrument that arrives — including
+//! newly created markets pushed in real time.
 //!
-//! # Usage
+//! Edit the constants below to change the initial market search query.
 //!
-//! ```sh
-//! cargo run --example polymarket-new-market-monitor --package nautilus-polymarket --features examples
-//! ```
+//! Run with: `cargo run --example polymarket-new-market-monitor --package nautilus-polymarket --features examples`
+//!
+//! Required credential environment variables:
+//! - `POLYMARKET_PK` (EOA signer private key).
+//! - `POLYMARKET_API_KEY`, `POLYMARKET_API_SECRET`, `POLYMARKET_PASSPHRASE`.
+//! - `POLYMARKET_FUNDER` (Gnosis Safe proxy address).
 
 use std::sync::Arc;
 
@@ -41,16 +44,24 @@ use nautilus_common::{
 };
 use nautilus_live::node::LiveNode;
 use nautilus_model::{
-    identifiers::{AccountId, ClientId, TraderId, Venue},
+    identifiers::{AccountId, ClientId, TraderId},
     instruments::{Instrument, InstrumentAny},
 };
-use nautilus_network::websocket::TransportBackend;
 use nautilus_polymarket::{
-    common::{enums::SignatureType, models::PolymarketLabel},
+    common::{
+        consts::{POLYMARKET_CLIENT_ID, POLYMARKET_VENUE},
+        enums::SignatureType,
+        models::PolymarketLabel,
+    },
     config::{PolymarketDataClientConfig, PolymarketExecClientConfig},
     factories::{PolymarketDataClientFactory, PolymarketExecutionClientFactory},
     filters::SearchFilter,
 };
+
+const TRADER_ID: &str = "TESTER-001";
+const ACCOUNT_ID: &str = "POLYMARKET-001";
+const NODE_NAME: &str = "POLYMARKET-NEW-MARKET-MONITOR-001";
+const SEARCH_QUERY: &str = "BTC";
 
 #[derive(Debug, Clone)]
 struct NewMarketMonitorConfig {
@@ -79,7 +90,7 @@ nautilus_actor!(NewMarketMonitor);
 
 impl DataActor for NewMarketMonitor {
     fn on_start(&mut self) -> anyhow::Result<()> {
-        let venue = Venue::from("POLYMARKET");
+        let venue = *POLYMARKET_VENUE;
         let client_id = Some(self.config.client_id);
 
         // Log instruments already in cache from the initial provider load
@@ -89,7 +100,6 @@ impl DataActor for NewMarketMonitor {
             .iter()
             .map(|i| (i.id(), PolymarketLabel::from_instrument(i)))
             .collect();
-        drop(cache);
 
         log::info!(
             "Initial provider load: {} instruments in cache",
@@ -128,17 +138,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
 
     let environment = Environment::Live;
-    let trader_id = TraderId::from("TESTER-001");
-    let account_id = AccountId::from("POLYMARKET-001");
-    let client_id = ClientId::new("POLYMARKET");
+    let trader_id = TraderId::from(TRADER_ID);
+    let account_id = AccountId::from(ACCOUNT_ID);
+    let client_id = *POLYMARKET_CLIENT_ID;
 
-    // SearchFilter pre-populates BTC markets as the initial instrument set
-    let search_filter = SearchFilter::from_query("BTC");
+    // SearchFilter pre-populates the query's markets as the initial instrument set
+    let search_filter = SearchFilter::from_query(SEARCH_QUERY);
 
     let data_config = PolymarketDataClientConfig {
         subscribe_new_markets: true,
         filters: vec![Arc::new(search_filter)],
-        transport_backend: TransportBackend::Sockudo,
         ..Default::default()
     };
 
@@ -146,7 +155,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         trader_id,
         account_id,
         signature_type: SignatureType::PolyGnosisSafe,
-        transport_backend: TransportBackend::Sockudo,
         ..Default::default()
     };
 
@@ -156,7 +164,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let mut node = LiveNode::builder(trader_id, environment)?
-        .with_name("POLYMARKET-NEW-MARKET-MONITOR-001".to_string())
+        .with_name(NODE_NAME.to_string())
         .with_logging(log_config)
         .with_reconciliation(true)
         .with_reconciliation_lookback_mins(120)

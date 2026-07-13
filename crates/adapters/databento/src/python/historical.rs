@@ -22,7 +22,8 @@ use nautilus_core::{
     time::get_atomic_clock_realtime,
 };
 use nautilus_model::{
-    enums::BarAggregation, identifiers::InstrumentId,
+    enums::BarAggregation,
+    identifiers::{InstrumentId, Symbol},
     python::instruments::instrument_any_to_pyobject,
 };
 use pyo3::{
@@ -43,7 +44,7 @@ use crate::{
 )]
 #[cfg_attr(
     feature = "python",
-    pyo3_stub_gen::derive::gen_stub_pyclass(module = "nautilus_trader.databento")
+    pyo3_stub_gen::derive::gen_stub_pyclass(module = "nautilus_trader.adapters.databento")
 )]
 pub struct DatabentoHistoricalClient {
     inner: CoreDatabentoHistoricalClient,
@@ -87,6 +88,17 @@ impl DatabentoHistoricalClient {
     #[pyo3(name = "api_key")]
     fn py_api_key(&self) -> &str {
         self.inner.api_key()
+    }
+
+    /// Caches a `price_precision` for the given `symbol`.
+    ///
+    /// When market data is fetched without an explicit `price_precision`, the
+    /// client resolves precision per record from this cache. Instruments
+    /// returned by `Self.get_range_instruments` are inserted automatically.
+    #[pyo3(name = "set_price_precision")]
+    fn py_set_price_precision(&self, symbol: &str, price_precision: u8) {
+        self.inner
+            .set_price_precision(Symbol::from(symbol), price_precision);
     }
 
     /// Gets the date range for a specific dataset.
@@ -193,7 +205,7 @@ impl DatabentoHistoricalClient {
 
     /// Fetches trade ticks for the given parameters.
     #[pyo3(name = "get_range_trades")]
-    #[pyo3(signature = (dataset, instrument_ids, start, end=None, limit=None, price_precision=None))]
+    #[pyo3(signature = (dataset, instrument_ids, start, end=None, limit=None, price_precision=None, schema=None))]
     #[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
     fn py_get_range_trades<'py>(
         &self,
@@ -204,6 +216,7 @@ impl DatabentoHistoricalClient {
         end: Option<u64>,
         limit: Option<u64>,
         price_precision: Option<u8>,
+        schema: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         let symbols = inner.prepare_symbols_from_instrument_ids(&instrument_ids);
@@ -219,7 +232,7 @@ impl DatabentoHistoricalClient {
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let trades = inner
-                .get_range_trades(params)
+                .get_range_trades(params, schema)
                 .await
                 .map_err(to_pyvalue_err)?;
             Python::attach(|py| trades.into_py_any(py))

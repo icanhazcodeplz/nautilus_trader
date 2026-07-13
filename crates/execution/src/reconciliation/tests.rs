@@ -19,11 +19,21 @@
 use nautilus_core::{UUID4, UnixNanos};
 use nautilus_model::{
     enums::{LiquiditySide, OrderSide, OrderStatus, OrderType, PositionSideSpecified, TimeInForce},
-    events::{OrderAccepted, OrderEventAny, OrderFilled, OrderSubmitted},
-    identifiers::{AccountId, ClientOrderId, InstrumentId, PositionId, TradeId, VenueOrderId},
+    events::{
+        OrderAccepted, OrderEventAny, OrderFilled, OrderPendingCancel, OrderPendingUpdate,
+        OrderSubmitted,
+        order::spec::{
+            OrderAcceptedSpec, OrderFilledSpec, OrderPendingCancelSpec, OrderPendingUpdateSpec,
+            OrderSubmittedSpec, OrderUpdatedSpec,
+        },
+    },
+    identifiers::{
+        AccountId, ClientOrderId, InstrumentId, PositionId, StrategyId, TradeId, TraderId,
+        VenueOrderId,
+    },
     instruments::{
         Instrument, InstrumentAny,
-        stubs::{audusd_sim, crypto_perpetual_ethusdt},
+        stubs::{audusd_sim, binary_option, crypto_perpetual_ethusdt},
     },
     orders::{
         Order, OrderAny, OrderTestBuilder,
@@ -37,7 +47,7 @@ use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use uuid::Uuid;
 
-use super::*;
+use super::{ids::*, orders::*, positions::*, types::*};
 
 #[fixture]
 fn instrument() -> InstrumentAny {
@@ -46,6 +56,150 @@ fn instrument() -> InstrumentAny {
 
 fn create_test_venue_order_id(value: &str) -> VenueOrderId {
     VenueOrderId::new(value)
+}
+
+fn build_order_submitted(
+    trader_id: TraderId,
+    strategy_id: StrategyId,
+    instrument_id: InstrumentId,
+    client_order_id: ClientOrderId,
+    account_id: AccountId,
+    event_id: UUID4,
+    ts_event: UnixNanos,
+    ts_init: UnixNanos,
+) -> OrderSubmitted {
+    OrderSubmittedSpec::builder()
+        .trader_id(trader_id)
+        .strategy_id(strategy_id)
+        .instrument_id(instrument_id)
+        .client_order_id(client_order_id)
+        .account_id(account_id)
+        .event_id(event_id)
+        .ts_event(ts_event)
+        .ts_init(ts_init)
+        .build()
+}
+
+fn build_order_accepted(
+    trader_id: TraderId,
+    strategy_id: StrategyId,
+    instrument_id: InstrumentId,
+    client_order_id: ClientOrderId,
+    venue_order_id: VenueOrderId,
+    account_id: AccountId,
+    event_id: UUID4,
+    ts_event: UnixNanos,
+    ts_init: UnixNanos,
+    reconciliation: bool,
+) -> OrderAccepted {
+    OrderAcceptedSpec::builder()
+        .trader_id(trader_id)
+        .strategy_id(strategy_id)
+        .instrument_id(instrument_id)
+        .client_order_id(client_order_id)
+        .venue_order_id(venue_order_id)
+        .account_id(account_id)
+        .event_id(event_id)
+        .ts_event(ts_event)
+        .ts_init(ts_init)
+        .reconciliation(reconciliation)
+        .build()
+}
+
+fn build_order_pending_cancel(
+    trader_id: TraderId,
+    strategy_id: StrategyId,
+    instrument_id: InstrumentId,
+    client_order_id: ClientOrderId,
+    account_id: AccountId,
+    event_id: UUID4,
+    ts_event: UnixNanos,
+    ts_init: UnixNanos,
+    reconciliation: bool,
+    venue_order_id: Option<VenueOrderId>,
+) -> OrderPendingCancel {
+    OrderPendingCancelSpec::builder()
+        .trader_id(trader_id)
+        .strategy_id(strategy_id)
+        .instrument_id(instrument_id)
+        .client_order_id(client_order_id)
+        .account_id(account_id)
+        .event_id(event_id)
+        .ts_event(ts_event)
+        .ts_init(ts_init)
+        .reconciliation(reconciliation)
+        .maybe_venue_order_id(venue_order_id)
+        .build()
+}
+
+fn build_order_pending_update(
+    trader_id: TraderId,
+    strategy_id: StrategyId,
+    instrument_id: InstrumentId,
+    client_order_id: ClientOrderId,
+    account_id: AccountId,
+    event_id: UUID4,
+    ts_event: UnixNanos,
+    ts_init: UnixNanos,
+    reconciliation: bool,
+    venue_order_id: Option<VenueOrderId>,
+) -> OrderPendingUpdate {
+    OrderPendingUpdateSpec::builder()
+        .trader_id(trader_id)
+        .strategy_id(strategy_id)
+        .instrument_id(instrument_id)
+        .client_order_id(client_order_id)
+        .account_id(account_id)
+        .event_id(event_id)
+        .ts_event(ts_event)
+        .ts_init(ts_init)
+        .reconciliation(reconciliation)
+        .maybe_venue_order_id(venue_order_id)
+        .build()
+}
+
+fn build_order_filled(
+    trader_id: TraderId,
+    strategy_id: StrategyId,
+    instrument_id: InstrumentId,
+    client_order_id: ClientOrderId,
+    venue_order_id: VenueOrderId,
+    account_id: AccountId,
+    trade_id: TradeId,
+    order_side: OrderSide,
+    order_type: OrderType,
+    last_qty: Quantity,
+    last_px: Price,
+    currency: Currency,
+    liquidity_side: LiquiditySide,
+    event_id: UUID4,
+    ts_event: UnixNanos,
+    ts_init: UnixNanos,
+    reconciliation: bool,
+    position_id: Option<PositionId>,
+    commission: Option<Money>,
+) -> OrderFilled {
+    OrderFilledSpec::builder()
+        .trader_id(trader_id)
+        .strategy_id(strategy_id)
+        .instrument_id(instrument_id)
+        .client_order_id(client_order_id)
+        .venue_order_id(venue_order_id)
+        .account_id(account_id)
+        .trade_id(trade_id)
+        .order_side(order_side)
+        .order_type(order_type)
+        .last_qty(last_qty)
+        .last_px(last_px)
+        .currency(currency)
+        .liquidity_side(liquidity_side)
+        .event_id(event_id)
+        .ts_event(ts_event)
+        .ts_init(ts_init)
+        .reconciliation(reconciliation)
+        .maybe_position_id(position_id)
+        .maybe_commission(commission)
+        .build()
 }
 
 fn submit_accept(order: &mut OrderAny, account_id: AccountId, venue_order_id: VenueOrderId) {
@@ -77,13 +231,62 @@ fn apply_fill(
     order.apply(fill).unwrap();
 }
 
+// Builds an accepted order whose cache has been promoted from old_venue_order_id
+// to new_venue_order_id through a confirmed cancel-replace modify, so its
+// venue_order_ids history holds both legs and the current leg is the new one.
+fn build_order_promoted_to_new_leg(
+    instrument: &InstrumentAny,
+    client_order_id: ClientOrderId,
+    old_venue_order_id: VenueOrderId,
+    new_venue_order_id: VenueOrderId,
+    account_id: AccountId,
+) -> OrderAny {
+    let mut order = OrderTestBuilder::new(OrderType::Limit)
+        .instrument_id(instrument.id())
+        .client_order_id(client_order_id)
+        .side(OrderSide::Buy)
+        .quantity(Quantity::from(100))
+        .price(Price::from("1.00000"))
+        .build();
+    submit_accept(&mut order, account_id, old_venue_order_id);
+
+    let pending_update = build_order_pending_update(
+        order.trader_id(),
+        order.strategy_id(),
+        order.instrument_id(),
+        order.client_order_id(),
+        account_id,
+        UUID4::new(),
+        UnixNanos::default(),
+        UnixNanos::default(),
+        false,
+        Some(old_venue_order_id),
+    );
+    order
+        .apply(OrderEventAny::PendingUpdate(pending_update))
+        .unwrap();
+
+    let updated = OrderUpdatedSpec::builder()
+        .trader_id(order.trader_id())
+        .strategy_id(order.strategy_id())
+        .instrument_id(order.instrument_id())
+        .client_order_id(order.client_order_id())
+        .quantity(Quantity::from(100))
+        .maybe_venue_order_id(Some(new_venue_order_id))
+        .maybe_account_id(Some(account_id))
+        .build();
+    order.apply(OrderEventAny::Updated(updated)).unwrap();
+
+    order
+}
+
 #[rstest]
 fn test_fill_snapshot_direction() {
     let venue_order_id = create_test_venue_order_id("ORDER1");
-    let buy_fill = FillSnapshot::new(1000, OrderSide::Buy, dec!(10), dec!(100), venue_order_id);
+    let buy_fill = FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(10), dec!(100), 1000);
     assert_eq!(buy_fill.direction(), 1);
 
-    let sell_fill = FillSnapshot::new(2000, OrderSide::Sell, dec!(10), dec!(100), venue_order_id);
+    let sell_fill = FillSnapshot::new(venue_order_id, OrderSide::Sell, dec!(10), dec!(100), 2000);
     assert_eq!(sell_fill.direction(), -1);
 }
 
@@ -91,8 +294,8 @@ fn test_fill_snapshot_direction() {
 fn test_simulate_position_accumulate_long() {
     let venue_order_id = create_test_venue_order_id("ORDER1");
     let fills = vec![
-        FillSnapshot::new(1000, OrderSide::Buy, dec!(10), dec!(100), venue_order_id),
-        FillSnapshot::new(2000, OrderSide::Buy, dec!(5), dec!(102), venue_order_id),
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(10), dec!(100), 1000),
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(5), dec!(102), 2000),
     ];
 
     let (qty, value) = simulate_position(&fills);
@@ -104,8 +307,8 @@ fn test_simulate_position_accumulate_long() {
 fn test_simulate_position_close_and_flip() {
     let venue_order_id = create_test_venue_order_id("ORDER1");
     let fills = vec![
-        FillSnapshot::new(1000, OrderSide::Buy, dec!(10), dec!(100), venue_order_id),
-        FillSnapshot::new(2000, OrderSide::Sell, dec!(15), dec!(102), venue_order_id),
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(10), dec!(100), 1000),
+        FillSnapshot::new(venue_order_id, OrderSide::Sell, dec!(15), dec!(102), 2000),
     ];
 
     let (qty, value) = simulate_position(&fills);
@@ -117,8 +320,8 @@ fn test_simulate_position_close_and_flip() {
 fn test_simulate_position_partial_close() {
     let venue_order_id = create_test_venue_order_id("ORDER1");
     let fills = vec![
-        FillSnapshot::new(1000, OrderSide::Buy, dec!(10), dec!(100), venue_order_id),
-        FillSnapshot::new(2000, OrderSide::Sell, dec!(5), dec!(102), venue_order_id),
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(10), dec!(100), 1000),
+        FillSnapshot::new(venue_order_id, OrderSide::Sell, dec!(5), dec!(102), 2000),
     ];
 
     let (qty, value) = simulate_position(&fills);
@@ -134,9 +337,9 @@ fn test_simulate_position_partial_close() {
 fn test_simulate_position_multiple_partial_closes() {
     let venue_order_id = create_test_venue_order_id("ORDER1");
     let fills = vec![
-        FillSnapshot::new(1000, OrderSide::Buy, dec!(100), dec!(10.0), venue_order_id),
-        FillSnapshot::new(2000, OrderSide::Sell, dec!(25), dec!(11.0), venue_order_id), // Close 25%
-        FillSnapshot::new(3000, OrderSide::Sell, dec!(25), dec!(12.0), venue_order_id), // Close another 25%
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(100), dec!(10.0), 1000),
+        FillSnapshot::new(venue_order_id, OrderSide::Sell, dec!(25), dec!(11.0), 2000), // Close 25%
+        FillSnapshot::new(venue_order_id, OrderSide::Sell, dec!(25), dec!(12.0), 3000), // Close another 25%
     ];
 
     let (qty, value) = simulate_position(&fills);
@@ -155,8 +358,8 @@ fn test_simulate_position_multiple_partial_closes() {
 fn test_simulate_position_short_partial_close() {
     let venue_order_id = create_test_venue_order_id("ORDER1");
     let fills = vec![
-        FillSnapshot::new(1000, OrderSide::Sell, dec!(10), dec!(100), venue_order_id),
-        FillSnapshot::new(2000, OrderSide::Buy, dec!(5), dec!(98), venue_order_id), // Partial close
+        FillSnapshot::new(venue_order_id, OrderSide::Sell, dec!(10), dec!(100), 1000),
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(5), dec!(98), 2000), // Partial close
     ];
 
     let (qty, value) = simulate_position(&fills);
@@ -172,10 +375,10 @@ fn test_simulate_position_short_partial_close() {
 fn test_detect_zero_crossings() {
     let venue_order_id = create_test_venue_order_id("ORDER1");
     let fills = vec![
-        FillSnapshot::new(1000, OrderSide::Buy, dec!(10), dec!(100), venue_order_id),
-        FillSnapshot::new(2000, OrderSide::Sell, dec!(10), dec!(102), venue_order_id), // Close to zero
-        FillSnapshot::new(3000, OrderSide::Buy, dec!(5), dec!(103), venue_order_id),
-        FillSnapshot::new(4000, OrderSide::Sell, dec!(5), dec!(104), venue_order_id), // Close to zero again
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(10), dec!(100), 1000),
+        FillSnapshot::new(venue_order_id, OrderSide::Sell, dec!(10), dec!(102), 2000), // Close to zero
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(5), dec!(103), 3000),
+        FillSnapshot::new(venue_order_id, OrderSide::Sell, dec!(5), dec!(104), 4000), // Close to zero again
     ];
 
     let crossings = detect_zero_crossings(&fills);
@@ -354,8 +557,8 @@ fn test_reconciliation_price_flip_simulation_compatibility() {
 
     // Simulate the flip with reconciliation fill (sell 200 to go from +100 to -100)
     let fills = vec![
-        FillSnapshot::new(1000, OrderSide::Buy, dec!(100), dec!(1.20), venue_order_id),
-        FillSnapshot::new(2000, OrderSide::Sell, dec!(200), recon_px, venue_order_id),
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(100), dec!(1.20), 1000),
+        FillSnapshot::new(venue_order_id, OrderSide::Sell, dec!(200), recon_px, 2000),
     ];
 
     let (final_qty, final_value) = simulate_position(&fills);
@@ -375,8 +578,8 @@ fn test_reconciliation_price_accumulation_simulation_compatibility() {
 
     // Simulate accumulation with reconciliation fill
     let fills = vec![
-        FillSnapshot::new(1000, OrderSide::Buy, dec!(100), dec!(1.20), venue_order_id),
-        FillSnapshot::new(2000, OrderSide::Buy, dec!(100), recon_px, venue_order_id),
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(100), dec!(1.20), 1000),
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(100), recon_px, 2000),
     ];
 
     let (final_qty, final_value) = simulate_position(&fills);
@@ -389,8 +592,8 @@ fn test_reconciliation_price_accumulation_simulation_compatibility() {
 fn test_simulate_position_accumulate_short() {
     let venue_order_id = create_test_venue_order_id("ORDER1");
     let fills = vec![
-        FillSnapshot::new(1000, OrderSide::Sell, dec!(10), dec!(100), venue_order_id),
-        FillSnapshot::new(2000, OrderSide::Sell, dec!(5), dec!(98), venue_order_id),
+        FillSnapshot::new(venue_order_id, OrderSide::Sell, dec!(10), dec!(100), 1000),
+        FillSnapshot::new(venue_order_id, OrderSide::Sell, dec!(5), dec!(98), 2000),
     ];
 
     let (qty, value) = simulate_position(&fills);
@@ -402,8 +605,8 @@ fn test_simulate_position_accumulate_short() {
 fn test_simulate_position_short_to_long_flip() {
     let venue_order_id = create_test_venue_order_id("ORDER1");
     let fills = vec![
-        FillSnapshot::new(1000, OrderSide::Sell, dec!(10), dec!(100), venue_order_id),
-        FillSnapshot::new(2000, OrderSide::Buy, dec!(15), dec!(102), venue_order_id),
+        FillSnapshot::new(venue_order_id, OrderSide::Sell, dec!(10), dec!(100), 1000),
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(15), dec!(102), 2000),
     ];
 
     let (qty, value) = simulate_position(&fills);
@@ -415,9 +618,9 @@ fn test_simulate_position_short_to_long_flip() {
 fn test_simulate_position_multiple_flips() {
     let venue_order_id = create_test_venue_order_id("ORDER1");
     let fills = vec![
-        FillSnapshot::new(1000, OrderSide::Buy, dec!(10), dec!(100), venue_order_id),
-        FillSnapshot::new(2000, OrderSide::Sell, dec!(15), dec!(105), venue_order_id), // Flip to -5
-        FillSnapshot::new(3000, OrderSide::Buy, dec!(10), dec!(110), venue_order_id),  // Flip to +5
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(10), dec!(100), 1000),
+        FillSnapshot::new(venue_order_id, OrderSide::Sell, dec!(15), dec!(105), 2000), // Flip to -5
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(10), dec!(110), 3000),  // Flip to +5
     ];
 
     let (qty, value) = simulate_position(&fills);
@@ -437,8 +640,8 @@ fn test_simulate_position_empty_fills() {
 fn test_detect_zero_crossings_no_crossings() {
     let venue_order_id = create_test_venue_order_id("ORDER1");
     let fills = vec![
-        FillSnapshot::new(1000, OrderSide::Buy, dec!(10), dec!(100), venue_order_id),
-        FillSnapshot::new(2000, OrderSide::Buy, dec!(5), dec!(102), venue_order_id),
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(10), dec!(100), 1000),
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(5), dec!(102), 2000),
     ];
 
     let crossings = detect_zero_crossings(&fills);
@@ -449,8 +652,8 @@ fn test_detect_zero_crossings_no_crossings() {
 fn test_detect_zero_crossings_single_crossing() {
     let venue_order_id = create_test_venue_order_id("ORDER1");
     let fills = vec![
-        FillSnapshot::new(1000, OrderSide::Buy, dec!(10), dec!(100), venue_order_id),
-        FillSnapshot::new(2000, OrderSide::Sell, dec!(10), dec!(102), venue_order_id), // Close to zero
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(10), dec!(100), 1000),
+        FillSnapshot::new(venue_order_id, OrderSide::Sell, dec!(10), dec!(102), 2000), // Close to zero
     ];
 
     let crossings = detect_zero_crossings(&fills);
@@ -470,8 +673,8 @@ fn test_detect_zero_crossings_long_to_short_flip() {
     let venue_order_id = create_test_venue_order_id("ORDER1");
     // Buy 10, then Sell 15 -> flip from +10 to -5
     let fills = vec![
-        FillSnapshot::new(1000, OrderSide::Buy, dec!(10), dec!(100), venue_order_id),
-        FillSnapshot::new(2000, OrderSide::Sell, dec!(15), dec!(102), venue_order_id), // Flip
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(10), dec!(100), 1000),
+        FillSnapshot::new(venue_order_id, OrderSide::Sell, dec!(15), dec!(102), 2000), // Flip
     ];
 
     let crossings = detect_zero_crossings(&fills);
@@ -484,8 +687,8 @@ fn test_detect_zero_crossings_short_to_long_flip() {
     let venue_order_id = create_test_venue_order_id("ORDER1");
     // Sell 10, then Buy 20 -> flip from -10 to +10
     let fills = vec![
-        FillSnapshot::new(1000, OrderSide::Sell, dec!(10), dec!(100), venue_order_id),
-        FillSnapshot::new(2000, OrderSide::Buy, dec!(20), dec!(102), venue_order_id), // Flip
+        FillSnapshot::new(venue_order_id, OrderSide::Sell, dec!(10), dec!(100), 1000),
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(20), dec!(102), 2000), // Flip
     ];
 
     let crossings = detect_zero_crossings(&fills);
@@ -497,10 +700,10 @@ fn test_detect_zero_crossings_short_to_long_flip() {
 fn test_detect_zero_crossings_multiple_flips() {
     let venue_order_id = create_test_venue_order_id("ORDER1");
     let fills = vec![
-        FillSnapshot::new(1000, OrderSide::Buy, dec!(10), dec!(100), venue_order_id),
-        FillSnapshot::new(2000, OrderSide::Sell, dec!(10), dec!(102), venue_order_id), // Land on zero
-        FillSnapshot::new(3000, OrderSide::Sell, dec!(5), dec!(103), venue_order_id),  // Go short
-        FillSnapshot::new(4000, OrderSide::Buy, dec!(15), dec!(104), venue_order_id), // Flip to long
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(10), dec!(100), 1000),
+        FillSnapshot::new(venue_order_id, OrderSide::Sell, dec!(10), dec!(102), 2000), // Land on zero
+        FillSnapshot::new(venue_order_id, OrderSide::Sell, dec!(5), dec!(103), 3000),  // Go short
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(15), dec!(104), 4000), // Flip to long
     ];
 
     let crossings = detect_zero_crossings(&fills);
@@ -534,12 +737,11 @@ fn test_check_position_match_zero_venue_avg_px() {
 #[rstest]
 fn test_adjust_fills_no_fills() {
     let venue_position = VenuePositionSnapshot {
-        side: OrderSide::Buy,
+        side: PositionSideSpecified::Long,
         qty: dec!(0.02),
         avg_px: dec!(4100.00),
     };
-    let instrument = instrument();
-    let result = adjust_fills_for_partial_window(&[], &venue_position, &instrument, dec!(0.0001));
+    let result = adjust_fills_for_partial_window(&[], &venue_position, dec!(0.0001));
     assert!(matches!(result, FillAdjustmentResult::NoAdjustment));
 }
 
@@ -547,20 +749,18 @@ fn test_adjust_fills_no_fills() {
 fn test_adjust_fills_flat_position() {
     let venue_order_id = create_test_venue_order_id("ORDER1");
     let fills = vec![FillSnapshot::new(
-        1000,
+        venue_order_id,
         OrderSide::Buy,
         dec!(0.01),
         dec!(4100.00),
-        venue_order_id,
+        1000,
     )];
     let venue_position = VenuePositionSnapshot {
-        side: OrderSide::Buy,
+        side: PositionSideSpecified::Long,
         qty: dec!(0),
         avg_px: dec!(0),
     };
-    let instrument = instrument();
-    let result =
-        adjust_fills_for_partial_window(&fills, &venue_position, &instrument, dec!(0.0001));
+    let result = adjust_fills_for_partial_window(&fills, &venue_position, dec!(0.0001));
     assert!(matches!(result, FillAdjustmentResult::NoAdjustment));
 }
 
@@ -570,28 +770,26 @@ fn test_adjust_fills_complete_lifecycle_no_adjustment() {
     let venue_order_id2 = create_test_venue_order_id("ORDER2");
     let fills = vec![
         FillSnapshot::new(
-            1000,
+            venue_order_id,
             OrderSide::Buy,
             dec!(0.01),
             dec!(4100.00),
-            venue_order_id,
+            1000,
         ),
         FillSnapshot::new(
-            2000,
+            venue_order_id2,
             OrderSide::Buy,
             dec!(0.01),
             dec!(4100.00),
-            venue_order_id2,
+            2000,
         ),
     ];
     let venue_position = VenuePositionSnapshot {
-        side: OrderSide::Buy,
+        side: PositionSideSpecified::Long,
         qty: dec!(0.02),
         avg_px: dec!(4100.00),
     };
-    let instrument = instrument();
-    let result =
-        adjust_fills_for_partial_window(&fills, &venue_position, &instrument, dec!(0.0001));
+    let result = adjust_fills_for_partial_window(&fills, &venue_position, dec!(0.0001));
     assert!(matches!(result, FillAdjustmentResult::NoAdjustment));
 }
 
@@ -600,20 +798,18 @@ fn test_adjust_fills_incomplete_lifecycle_adds_synthetic() {
     let venue_order_id = create_test_venue_order_id("ORDER1");
     // Window only sees +0.02 @ 4200, but venue has 0.04 @ 4100
     let fills = vec![FillSnapshot::new(
-        2000,
+        venue_order_id,
         OrderSide::Buy,
         dec!(0.02),
         dec!(4200.00),
-        venue_order_id,
+        2000,
     )];
     let venue_position = VenuePositionSnapshot {
-        side: OrderSide::Buy,
+        side: PositionSideSpecified::Long,
         qty: dec!(0.04),
         avg_px: dec!(4100.00),
     };
-    let instrument = instrument();
-    let result =
-        adjust_fills_for_partial_window(&fills, &venue_position, &instrument, dec!(0.0001));
+    let result = adjust_fills_for_partial_window(&fills, &venue_position, dec!(0.0001));
 
     match result {
         FillAdjustmentResult::AddSyntheticOpening {
@@ -638,37 +834,35 @@ fn test_adjust_fills_with_zero_crossings() {
     // Lifecycle 2: LONG 0.03 (current)
     let fills = vec![
         FillSnapshot::new(
-            1000,
+            venue_order_id1,
             OrderSide::Buy,
             dec!(0.02),
             dec!(4100.00),
-            venue_order_id1,
+            1000,
         ),
         FillSnapshot::new(
-            2000,
+            venue_order_id2,
             OrderSide::Sell,
             dec!(0.02),
             dec!(4150.00),
-            venue_order_id2,
+            2000,
         ), // Zero-crossing
         FillSnapshot::new(
-            3000,
+            venue_order_id3,
             OrderSide::Buy,
             dec!(0.03),
             dec!(4200.00),
-            venue_order_id3,
+            3000,
         ), // Current lifecycle
     ];
 
     let venue_position = VenuePositionSnapshot {
-        side: OrderSide::Buy,
+        side: PositionSideSpecified::Long,
         qty: dec!(0.03),
         avg_px: dec!(4200.00),
     };
 
-    let instrument = instrument();
-    let result =
-        adjust_fills_for_partial_window(&fills, &venue_position, &instrument, dec!(0.0001));
+    let result = adjust_fills_for_partial_window(&fills, &venue_position, dec!(0.0001));
 
     // Should filter to current lifecycle only
     match result {
@@ -696,44 +890,42 @@ fn test_adjust_fills_multiple_zero_crossings_mismatch() {
     // Lifecycle 2: Current fills produce 0.10 @ 4050, but venue has 0.05 @ 4142.04
     let fills = vec![
         FillSnapshot::new(
-            1000,
+            venue_order_id1,
             OrderSide::Buy,
             dec!(0.05),
             dec!(4000.00),
-            venue_order_id1,
+            1000,
         ),
         FillSnapshot::new(
-            2000,
+            venue_order_id2,
             OrderSide::Sell,
             dec!(0.05),
             dec!(4050.00),
-            venue_order_id2,
+            2000,
         ), // Zero-crossing
         FillSnapshot::new(
-            3000,
+            venue_order_id4,
             OrderSide::Buy,
             dec!(0.05),
             dec!(4000.00),
-            venue_order_id4,
+            3000,
         ), // Current lifecycle
         FillSnapshot::new(
-            4000,
+            venue_order_id5,
             OrderSide::Buy,
             dec!(0.05),
             dec!(4100.00),
-            venue_order_id5,
+            4000,
         ), // Current lifecycle
     ];
 
     let venue_position = VenuePositionSnapshot {
-        side: OrderSide::Buy,
+        side: PositionSideSpecified::Long,
         qty: dec!(0.05),
         avg_px: dec!(4142.04),
     };
 
-    let instrument = instrument();
-    let result =
-        adjust_fills_for_partial_window(&fills, &venue_position, &instrument, dec!(0.0001));
+    let result = adjust_fills_for_partial_window(&fills, &venue_position, dec!(0.0001));
 
     // Should replace current lifecycle with synthetic
     match result {
@@ -756,22 +948,20 @@ fn test_adjust_fills_short_position() {
 
     // Window only sees SELL 0.02 @ 4120, but venue has -0.05 @ 4100
     let fills = vec![FillSnapshot::new(
-        1000,
+        venue_order_id,
         OrderSide::Sell,
         dec!(0.02),
         dec!(4120.00),
-        venue_order_id,
+        1000,
     )];
 
     let venue_position = VenuePositionSnapshot {
-        side: OrderSide::Sell,
+        side: PositionSideSpecified::Short,
         qty: dec!(0.05),
         avg_px: dec!(4100.00),
     };
 
-    let instrument = instrument();
-    let result =
-        adjust_fills_for_partial_window(&fills, &venue_position, &instrument, dec!(0.0001));
+    let result = adjust_fills_for_partial_window(&fills, &venue_position, dec!(0.0001));
 
     // Should add synthetic opening SHORT fill
     match result {
@@ -793,22 +983,20 @@ fn test_adjust_fills_timestamp_underflow_protection() {
 
     // First fill at timestamp 0 - saturating_sub should prevent underflow
     let fills = vec![FillSnapshot::new(
-        0,
+        venue_order_id,
         OrderSide::Buy,
         dec!(0.01),
         dec!(4100.00),
-        venue_order_id,
+        0,
     )];
 
     let venue_position = VenuePositionSnapshot {
-        side: OrderSide::Buy,
+        side: PositionSideSpecified::Long,
         qty: dec!(0.02),
         avg_px: dec!(4100.00),
     };
 
-    let instrument = instrument();
-    let result =
-        adjust_fills_for_partial_window(&fills, &venue_position, &instrument, dec!(0.0001));
+    let result = adjust_fills_for_partial_window(&fills, &venue_position, dec!(0.0001));
 
     // Should add synthetic fill with timestamp 0 (not u64::MAX)
     match result {
@@ -826,19 +1014,17 @@ fn test_adjust_fills_with_flip_scenario() {
 
     // Long 10 @ 100, then Sell 20 @ 105 -> flip to Short 10 @ 105
     let fills = vec![
-        FillSnapshot::new(1000, OrderSide::Buy, dec!(10), dec!(100), venue_order_id1),
-        FillSnapshot::new(2000, OrderSide::Sell, dec!(20), dec!(105), venue_order_id2), // Flip
+        FillSnapshot::new(venue_order_id1, OrderSide::Buy, dec!(10), dec!(100), 1000),
+        FillSnapshot::new(venue_order_id2, OrderSide::Sell, dec!(20), dec!(105), 2000), // Flip
     ];
 
     let venue_position = VenuePositionSnapshot {
-        side: OrderSide::Sell,
+        side: PositionSideSpecified::Short,
         qty: dec!(10),
         avg_px: dec!(105),
     };
 
-    let instrument = instrument();
-    let result =
-        adjust_fills_for_partial_window(&fills, &venue_position, &instrument, dec!(0.0001));
+    let result = adjust_fills_for_partial_window(&fills, &venue_position, dec!(0.0001));
 
     // Should recognize the flip and match correctly
     match result {
@@ -858,12 +1044,12 @@ fn test_detect_zero_crossings_complex_lifecycle() {
     let venue_order_id = create_test_venue_order_id("ORDER1");
     // Complex scenario with multiple lifecycles
     let fills = vec![
-        FillSnapshot::new(1000, OrderSide::Buy, dec!(100), dec!(1.20), venue_order_id),
-        FillSnapshot::new(2000, OrderSide::Sell, dec!(50), dec!(1.25), venue_order_id), // Reduce
-        FillSnapshot::new(3000, OrderSide::Sell, dec!(100), dec!(1.30), venue_order_id), // Flip to -50
-        FillSnapshot::new(4000, OrderSide::Buy, dec!(50), dec!(1.28), venue_order_id), // Close to zero
-        FillSnapshot::new(5000, OrderSide::Buy, dec!(75), dec!(1.22), venue_order_id), // Open long
-        FillSnapshot::new(6000, OrderSide::Sell, dec!(150), dec!(1.24), venue_order_id), // Flip to -75
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(100), dec!(1.20), 1000),
+        FillSnapshot::new(venue_order_id, OrderSide::Sell, dec!(50), dec!(1.25), 2000), // Reduce
+        FillSnapshot::new(venue_order_id, OrderSide::Sell, dec!(100), dec!(1.30), 3000), // Flip to -50
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(50), dec!(1.28), 4000), // Close to zero
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(75), dec!(1.22), 5000), // Open long
+        FillSnapshot::new(venue_order_id, OrderSide::Sell, dec!(150), dec!(1.24), 6000), // Flip to -75
     ];
 
     let crossings = detect_zero_crossings(&fills);
@@ -883,8 +1069,8 @@ fn test_reconciliation_price_partial_close() {
 
     // Simulate partial close
     let fills = vec![
-        FillSnapshot::new(1000, OrderSide::Buy, dec!(100), dec!(1.20), venue_order_id),
-        FillSnapshot::new(2000, OrderSide::Sell, dec!(50), recon_px, venue_order_id),
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(100), dec!(1.20), 1000),
+        FillSnapshot::new(venue_order_id, OrderSide::Sell, dec!(50), recon_px, 2000),
     ];
 
     let (final_qty, final_value) = simulate_position(&fills);
@@ -900,9 +1086,9 @@ fn test_detect_zero_crossings_identical_timestamps() {
 
     // Two fills with identical timestamps - should process deterministically
     let fills = vec![
-        FillSnapshot::new(1000, OrderSide::Buy, dec!(10), dec!(100), venue_order_id1),
-        FillSnapshot::new(2000, OrderSide::Sell, dec!(5), dec!(102), venue_order_id1),
-        FillSnapshot::new(2000, OrderSide::Sell, dec!(5), dec!(103), venue_order_id2), // Same ts
+        FillSnapshot::new(venue_order_id1, OrderSide::Buy, dec!(10), dec!(100), 1000),
+        FillSnapshot::new(venue_order_id1, OrderSide::Sell, dec!(5), dec!(102), 2000),
+        FillSnapshot::new(venue_order_id2, OrderSide::Sell, dec!(5), dec!(103), 2000), // Same ts
     ];
 
     let crossings = detect_zero_crossings(&fills);
@@ -923,19 +1109,19 @@ fn test_detect_zero_crossings_five_lifecycles() {
     // Five complete position lifecycles: open->close repeated 5 times
     let fills = vec![
         // Lifecycle 1: Long
-        FillSnapshot::new(1000, OrderSide::Buy, dec!(10), dec!(100), venue_order_id),
-        FillSnapshot::new(2000, OrderSide::Sell, dec!(10), dec!(101), venue_order_id),
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(10), dec!(100), 1000),
+        FillSnapshot::new(venue_order_id, OrderSide::Sell, dec!(10), dec!(101), 2000),
         // Lifecycle 2: Short
-        FillSnapshot::new(3000, OrderSide::Sell, dec!(20), dec!(102), venue_order_id),
-        FillSnapshot::new(4000, OrderSide::Buy, dec!(20), dec!(101), venue_order_id),
+        FillSnapshot::new(venue_order_id, OrderSide::Sell, dec!(20), dec!(102), 3000),
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(20), dec!(101), 4000),
         // Lifecycle 3: Long
-        FillSnapshot::new(5000, OrderSide::Buy, dec!(15), dec!(103), venue_order_id),
-        FillSnapshot::new(6000, OrderSide::Sell, dec!(15), dec!(104), venue_order_id),
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(15), dec!(103), 5000),
+        FillSnapshot::new(venue_order_id, OrderSide::Sell, dec!(15), dec!(104), 6000),
         // Lifecycle 4: Short
-        FillSnapshot::new(7000, OrderSide::Sell, dec!(25), dec!(105), venue_order_id),
-        FillSnapshot::new(8000, OrderSide::Buy, dec!(25), dec!(104), venue_order_id),
+        FillSnapshot::new(venue_order_id, OrderSide::Sell, dec!(25), dec!(105), 7000),
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(25), dec!(104), 8000),
         // Lifecycle 5: Long (still open)
-        FillSnapshot::new(9000, OrderSide::Buy, dec!(30), dec!(106), venue_order_id),
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(30), dec!(106), 9000),
     ];
 
     let crossings = detect_zero_crossings(&fills);
@@ -953,32 +1139,31 @@ fn test_detect_zero_crossings_five_lifecycles() {
 }
 
 #[rstest]
-fn test_adjust_fills_five_zero_crossings(instrument: InstrumentAny) {
+fn test_adjust_fills_five_zero_crossings() {
     let venue_order_id = create_test_venue_order_id("ORDER1");
 
     // Complex scenario: 4 complete lifecycles + current open position
     let fills = vec![
         // Old lifecycles (should be filtered out)
-        FillSnapshot::new(1000, OrderSide::Buy, dec!(10), dec!(100), venue_order_id),
-        FillSnapshot::new(2000, OrderSide::Sell, dec!(10), dec!(101), venue_order_id),
-        FillSnapshot::new(3000, OrderSide::Sell, dec!(20), dec!(102), venue_order_id),
-        FillSnapshot::new(4000, OrderSide::Buy, dec!(20), dec!(101), venue_order_id),
-        FillSnapshot::new(5000, OrderSide::Buy, dec!(15), dec!(103), venue_order_id),
-        FillSnapshot::new(6000, OrderSide::Sell, dec!(15), dec!(104), venue_order_id),
-        FillSnapshot::new(7000, OrderSide::Sell, dec!(25), dec!(105), venue_order_id),
-        FillSnapshot::new(8000, OrderSide::Buy, dec!(25), dec!(104), venue_order_id),
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(10), dec!(100), 1000),
+        FillSnapshot::new(venue_order_id, OrderSide::Sell, dec!(10), dec!(101), 2000),
+        FillSnapshot::new(venue_order_id, OrderSide::Sell, dec!(20), dec!(102), 3000),
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(20), dec!(101), 4000),
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(15), dec!(103), 5000),
+        FillSnapshot::new(venue_order_id, OrderSide::Sell, dec!(15), dec!(104), 6000),
+        FillSnapshot::new(venue_order_id, OrderSide::Sell, dec!(25), dec!(105), 7000),
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(25), dec!(104), 8000),
         // Current lifecycle (should be kept)
-        FillSnapshot::new(9000, OrderSide::Buy, dec!(30), dec!(106), venue_order_id),
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(30), dec!(106), 9000),
     ];
 
     let venue_position = VenuePositionSnapshot {
-        side: OrderSide::Buy,
+        side: PositionSideSpecified::Long,
         qty: dec!(30),
         avg_px: dec!(106),
     };
 
-    let result =
-        adjust_fills_for_partial_window(&fills, &venue_position, &instrument, dec!(0.0001));
+    let result = adjust_fills_for_partial_window(&fills, &venue_position, dec!(0.0001));
 
     // Should filter to current lifecycle only (after last zero-crossing at 8000)
     match result {
@@ -996,28 +1181,27 @@ fn test_adjust_fills_five_zero_crossings(instrument: InstrumentAny) {
 }
 
 #[rstest]
-fn test_adjust_fills_alternating_long_short_positions(instrument: InstrumentAny) {
+fn test_adjust_fills_alternating_long_short_positions() {
     let venue_order_id = create_test_venue_order_id("ORDER1");
 
     // Alternating: Long -> Short -> Long -> Short -> Long
     // These are flips (sign changes) but never go to exactly zero
     let fills = vec![
-        FillSnapshot::new(1000, OrderSide::Buy, dec!(10), dec!(100), venue_order_id),
-        FillSnapshot::new(2000, OrderSide::Sell, dec!(20), dec!(102), venue_order_id), // Flip to -10
-        FillSnapshot::new(3000, OrderSide::Buy, dec!(20), dec!(101), venue_order_id), // Flip to +10
-        FillSnapshot::new(4000, OrderSide::Sell, dec!(20), dec!(103), venue_order_id), // Flip to -10
-        FillSnapshot::new(5000, OrderSide::Buy, dec!(20), dec!(102), venue_order_id), // Flip to +10
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(10), dec!(100), 1000),
+        FillSnapshot::new(venue_order_id, OrderSide::Sell, dec!(20), dec!(102), 2000), // Flip to -10
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(20), dec!(101), 3000), // Flip to +10
+        FillSnapshot::new(venue_order_id, OrderSide::Sell, dec!(20), dec!(103), 4000), // Flip to -10
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(20), dec!(102), 5000), // Flip to +10
     ];
 
     // Current position: +10 @ 102
     let venue_position = VenuePositionSnapshot {
-        side: OrderSide::Buy,
+        side: PositionSideSpecified::Long,
         qty: dec!(10),
         avg_px: dec!(102),
     };
 
-    let result =
-        adjust_fills_for_partial_window(&fills, &venue_position, &instrument, dec!(0.0001));
+    let result = adjust_fills_for_partial_window(&fills, &venue_position, dec!(0.0001));
 
     // Position never went flat (0), just flipped sides. This is treated as one
     // continuous lifecycle since no explicit close occurred. The final position
@@ -1029,27 +1213,26 @@ fn test_adjust_fills_alternating_long_short_positions(instrument: InstrumentAny)
 }
 
 #[rstest]
-fn test_adjust_fills_with_flat_crossings(instrument: InstrumentAny) {
+fn test_adjust_fills_with_flat_crossings() {
     let venue_order_id = create_test_venue_order_id("ORDER1");
 
     // Proper lifecycle boundaries with flat crossings (position goes to exactly 0)
     let fills = vec![
-        FillSnapshot::new(1000, OrderSide::Buy, dec!(10), dec!(100), venue_order_id),
-        FillSnapshot::new(2000, OrderSide::Sell, dec!(10), dec!(102), venue_order_id), // Close to 0
-        FillSnapshot::new(3000, OrderSide::Sell, dec!(10), dec!(101), venue_order_id), // New short
-        FillSnapshot::new(4000, OrderSide::Buy, dec!(10), dec!(99), venue_order_id),   // Close to 0
-        FillSnapshot::new(5000, OrderSide::Buy, dec!(10), dec!(98), venue_order_id),   // New long
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(10), dec!(100), 1000),
+        FillSnapshot::new(venue_order_id, OrderSide::Sell, dec!(10), dec!(102), 2000), // Close to 0
+        FillSnapshot::new(venue_order_id, OrderSide::Sell, dec!(10), dec!(101), 3000), // New short
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(10), dec!(99), 4000),   // Close to 0
+        FillSnapshot::new(venue_order_id, OrderSide::Buy, dec!(10), dec!(98), 5000),   // New long
     ];
 
     // Current position: +10 @ 98
     let venue_position = VenuePositionSnapshot {
-        side: OrderSide::Buy,
+        side: PositionSideSpecified::Long,
         qty: dec!(10),
         avg_px: dec!(98),
     };
 
-    let result =
-        adjust_fills_for_partial_window(&fills, &venue_position, &instrument, dec!(0.0001));
+    let result = adjust_fills_for_partial_window(&fills, &venue_position, dec!(0.0001));
 
     // Position went flat at ts=2000 and ts=4000
     // Current lifecycle starts after last flat (4000)
@@ -1068,29 +1251,28 @@ fn test_adjust_fills_with_flat_crossings(instrument: InstrumentAny) {
 }
 
 #[rstest]
-fn test_replace_current_lifecycle_uses_first_venue_order_id(instrument: InstrumentAny) {
+fn test_replace_current_lifecycle_uses_first_venue_order_id() {
     let order_id_1 = create_test_venue_order_id("ORDER1");
     let order_id_2 = create_test_venue_order_id("ORDER2");
     let order_id_3 = create_test_venue_order_id("ORDER3");
 
     // Previous lifecycle closes, then current lifecycle has fills from multiple orders
     let fills = vec![
-        FillSnapshot::new(1000, OrderSide::Buy, dec!(10), dec!(100), order_id_1),
-        FillSnapshot::new(2000, OrderSide::Sell, dec!(10), dec!(102), order_id_1), // Close to 0
+        FillSnapshot::new(order_id_1, OrderSide::Buy, dec!(10), dec!(100), 1000),
+        FillSnapshot::new(order_id_1, OrderSide::Sell, dec!(10), dec!(102), 2000), // Close to 0
         // Current lifecycle: fills from different venue order IDs
-        FillSnapshot::new(3000, OrderSide::Buy, dec!(5), dec!(103), order_id_2),
-        FillSnapshot::new(4000, OrderSide::Buy, dec!(5), dec!(104), order_id_3),
+        FillSnapshot::new(order_id_2, OrderSide::Buy, dec!(5), dec!(103), 3000),
+        FillSnapshot::new(order_id_3, OrderSide::Buy, dec!(5), dec!(104), 4000),
     ];
 
     // Venue position differs from simulated (+10 @ 103.5) to trigger replacement
     let venue_position = VenuePositionSnapshot {
-        side: OrderSide::Buy,
+        side: PositionSideSpecified::Long,
         qty: dec!(15),
         avg_px: dec!(105),
     };
 
-    let result =
-        adjust_fills_for_partial_window(&fills, &venue_position, &instrument, dec!(0.0001));
+    let result = adjust_fills_for_partial_window(&fills, &venue_position, dec!(0.0001));
 
     // Should replace with synthetic fill using first fill's venue_order_id (order_id_2)
     match result {
@@ -1183,6 +1365,39 @@ fn test_external_order_status_event_generation(
 }
 
 #[rstest]
+fn test_external_order_rejected_due_post_only() {
+    let instrument = crypto_perpetual_ethusdt();
+    let order = OrderTestBuilder::new(OrderType::Limit)
+        .instrument_id(instrument.id())
+        .side(OrderSide::Buy)
+        .quantity(Quantity::from("1.0"))
+        .price(Price::from("100.00"))
+        .build();
+    let mut report = make_test_report(
+        instrument.id(),
+        OrderType::Limit,
+        OrderStatus::Rejected,
+        "0",
+        false,
+    );
+    report.cancel_reason = Some("post would execute".to_string());
+
+    let events = generate_external_order_status_events(
+        &order,
+        &report,
+        &AccountId::from("TEST-001"),
+        &InstrumentAny::CryptoPerpetual(instrument),
+        UnixNanos::from(2_000_000),
+    );
+
+    assert_eq!(events.len(), 1);
+    match events.last().unwrap() {
+        OrderEventAny::Rejected(rejected) => assert!(rejected.due_post_only),
+        other => panic!("Expected Rejected event, was {other:?}"),
+    }
+}
+
+#[rstest]
 #[case::market(OrderType::Market, false, LiquiditySide::Taker)]
 #[case::stop_market(OrderType::StopMarket, false, LiquiditySide::Taker)]
 #[case::trailing_stop_market(OrderType::TrailingStopMarket, false, LiquiditySide::Taker)]
@@ -1231,7 +1446,7 @@ fn test_inferred_fill_liquidity_side(
     let fill = create_inferred_fill(
         &order,
         &report,
-        &AccountId::from("TEST-001"),
+        AccountId::from("TEST-001"),
         &InstrumentAny::CryptoPerpetual(instrument),
         UnixNanos::from(2_000_000),
         None,
@@ -1276,13 +1491,254 @@ fn test_inferred_fill_no_price_returns_none() {
     let fill = create_inferred_fill(
         &order,
         &report,
-        &AccountId::from("TEST-001"),
+        AccountId::from("TEST-001"),
         &InstrumentAny::CryptoPerpetual(instrument),
         UnixNanos::from(2_000_000),
         None,
     );
 
     assert!(fill.is_none());
+}
+
+/// A binary option with an explicit `[0.001, 0.999]` price band, as the
+/// Polymarket adapter sets, so the inferred-fill price clamp has bounds to apply.
+fn bounded_binary_option() -> InstrumentAny {
+    let mut bo = binary_option();
+    bo.max_price = Some(Price::from("0.999"));
+    bo.min_price = Some(Price::from("0.001"));
+    InstrumentAny::BinaryOption(bo)
+}
+
+#[rstest]
+fn test_incremental_inferred_fill_clamps_out_of_range_price() {
+    // A tiny qty difference between the cached order and the venue report, with
+    // rounded average prices, makes backing the incremental price out of the
+    // notional difference blow up well outside the instrument's price band; the
+    // inferred fill must be capped at the instrument's max price.
+    let instrument = bounded_binary_option();
+
+    let account_id = AccountId::from("TEST-001");
+    let venue_order_id = VenueOrderId::from("V-001");
+
+    let mut order = OrderTestBuilder::new(OrderType::Limit)
+        .instrument_id(instrument.id())
+        .side(OrderSide::Buy)
+        .quantity(Quantity::from("100.00"))
+        .price(Price::from("0.500"))
+        .build();
+    submit_accept(&mut order, account_id, venue_order_id);
+    apply_fill(
+        &mut order,
+        &instrument,
+        TradeId::from("T-1"),
+        Quantity::from("5.00"),
+        Price::from("0.500"),
+    );
+
+    // Report: 5.01 filled @ avg 0.510 -> incremental qty 0.01, notional back-out
+    // 0.0551 / 0.01 = 5.51 (out of [0.001, 0.999]); clamped to max_price.
+    let report = OrderStatusReport::new(
+        account_id,
+        instrument.id(),
+        None,
+        venue_order_id,
+        OrderSide::Buy,
+        OrderType::Limit,
+        TimeInForce::Gtc,
+        OrderStatus::PartiallyFilled,
+        Quantity::from("100.00"),
+        Quantity::from("5.01"),
+        UnixNanos::from(1_000_000),
+        UnixNanos::from(1_000_000),
+        UnixNanos::from(1_000_000),
+        None,
+    )
+    .with_avg_px(0.510)
+    .unwrap();
+
+    let fill = create_incremental_inferred_fill(
+        &order,
+        &report,
+        &account_id,
+        &instrument,
+        UnixNanos::from(2_000_000),
+        None,
+    );
+
+    let filled = match fill.expect("expected an inferred fill") {
+        OrderEventAny::Filled(f) => f,
+        other => panic!("Expected Filled event, was {other:?}"),
+    };
+    assert_eq!(filled.last_px, instrument.max_price().unwrap());
+}
+
+#[rstest]
+fn test_inferred_fill_clamps_out_of_range_avg_px() {
+    // A synthetic order recovered during partial-window position reconciliation
+    // can carry an avg_px derived from value/dust-qty that lies far outside the
+    // instrument's band. The inferred fill must be clamped to the price band.
+    let instrument = bounded_binary_option();
+
+    let account_id = AccountId::from("TEST-001");
+
+    let order = OrderTestBuilder::new(OrderType::Market)
+        .instrument_id(instrument.id())
+        .side(OrderSide::Sell)
+        .quantity(Quantity::from("0.01"))
+        .build();
+
+    // Out-of-range avg_px (e.g. 43.642 observed live from value/dust-qty).
+    let report = OrderStatusReport::new(
+        account_id,
+        instrument.id(),
+        None,
+        VenueOrderId::from("V-001"),
+        OrderSide::Sell,
+        OrderType::Market,
+        TimeInForce::Gtc,
+        OrderStatus::Filled,
+        Quantity::from("0.01"),
+        Quantity::from("0.01"),
+        UnixNanos::from(1_000_000),
+        UnixNanos::from(1_000_000),
+        UnixNanos::from(1_000_000),
+        None,
+    )
+    .with_avg_px(43.642)
+    .unwrap();
+
+    let fill = create_inferred_fill(
+        &order,
+        &report,
+        account_id,
+        &instrument,
+        UnixNanos::from(2_000_000),
+        None,
+    );
+
+    let filled = match fill.expect("expected an inferred fill") {
+        OrderEventAny::Filled(f) => f,
+        other => panic!("Expected Filled event, was {other:?}"),
+    };
+    assert_eq!(filled.last_px, instrument.max_price().unwrap());
+}
+
+#[rstest]
+fn test_synthetic_partial_window_reports_clamp_out_of_range_price() {
+    // Partial-window reconciliation can synthesise an opening fill whose price is
+    // value/dust-qty (30.41 observed live). The synthetic order and fill reports
+    // must be capped at the instrument's max price.
+    let instrument = bounded_binary_option();
+
+    let account_id = AccountId::from("TEST-001");
+    let venue_order_id = VenueOrderId::from("S-1");
+
+    let synthetic = FillSnapshot::new(
+        venue_order_id,
+        OrderSide::Sell,
+        dec!(0.000089), // dust qty
+        dec!(30.41),    // blown-up price
+        1_000_000,
+    );
+
+    let fill = create_synthetic_fill_report(
+        &synthetic,
+        account_id,
+        instrument.id(),
+        &instrument,
+        venue_order_id,
+    )
+    .unwrap();
+    assert_eq!(fill.last_px, instrument.max_price().unwrap());
+
+    let order = create_synthetic_order_report(
+        &synthetic,
+        account_id,
+        instrument.id(),
+        &instrument,
+        venue_order_id,
+    )
+    .unwrap();
+    assert_eq!(
+        order.avg_px,
+        Some(instrument.max_price().unwrap().as_decimal())
+    );
+}
+
+#[rstest]
+fn test_inferred_fill_for_qty_clamps_out_of_range_avg_px() {
+    // The third inferred-fill chokepoint must also cap an out-of-range report
+    // avg_px at the instrument's max price.
+    let instrument = bounded_binary_option();
+    let account_id = AccountId::from("TEST-001");
+
+    let order = OrderTestBuilder::new(OrderType::Market)
+        .instrument_id(instrument.id())
+        .side(OrderSide::Buy)
+        .quantity(Quantity::from("0.05"))
+        .build();
+
+    let report = OrderStatusReport::new(
+        account_id,
+        instrument.id(),
+        None,
+        VenueOrderId::from("V-001"),
+        OrderSide::Buy,
+        OrderType::Market,
+        TimeInForce::Gtc,
+        OrderStatus::Filled,
+        Quantity::from("0.05"),
+        Quantity::from("0.05"),
+        UnixNanos::from(1_000_000),
+        UnixNanos::from(1_000_000),
+        UnixNanos::from(1_000_000),
+        None,
+    )
+    .with_avg_px(43.642)
+    .unwrap();
+
+    let fill = create_inferred_fill_for_qty(
+        &order,
+        &report,
+        &account_id,
+        &instrument,
+        Quantity::from("0.05"),
+        UnixNanos::from(2_000_000),
+        None,
+    );
+
+    let filled = match fill.expect("expected an inferred fill") {
+        OrderEventAny::Filled(f) => f,
+        other => panic!("Expected Filled event, was {other:?}"),
+    };
+    assert_eq!(filled.last_px, instrument.max_price().unwrap());
+}
+
+#[rstest]
+#[case(dec!(30.41), "0.99")] // blow-up well above max -> floored cap
+#[case(dec!(0.999), "0.99")] // equals 3dp max on a 2dp instrument -> floored cap
+#[case(dec!(0.995), "0.99")] // below max but would round up to 1.00 -> floored cap
+#[case(dec!(0.50), "0.50")] // genuinely in-band -> unchanged
+#[case(dec!(-0.05), "-0.05")] // negative price -> untouched (lower bound preserved)
+fn test_cap_price_floors_to_precision_so_it_cannot_round_above_max(
+    #[case] px: Decimal,
+    #[case] expected: &str,
+) {
+    // A 2dp instrument whose max_price is 0.999 (3dp): the cap is the max floored
+    // to 2dp (0.99), so rebuilding a Price at 2dp cannot round back above max.
+    let mut bo = binary_option();
+    bo.price_precision = 2;
+    bo.price_increment = Price::from("0.01");
+    bo.max_price = Some(Price::from("0.999"));
+    let instrument = InstrumentAny::BinaryOption(bo);
+
+    let capped = cap_price_at_instrument_max(px, &instrument);
+    let rebuilt = Price::from_decimal_dp(capped, instrument.price_precision()).unwrap();
+    assert!(
+        rebuilt <= instrument.max_price().unwrap(),
+        "{rebuilt} exceeds max"
+    );
+    assert_eq!(rebuilt, Price::from(expected));
 }
 
 // Tests for reconcile_fill_report
@@ -1361,7 +1817,7 @@ fn test_reconcile_fill_report_duplicate_detected(instrument: InstrumentAny) {
     let trade_id = TradeId::from("T-001");
 
     // Submit the order first
-    let submitted = OrderSubmitted::new(
+    let submitted = build_order_submitted(
         order.trader_id(),
         order.strategy_id(),
         order.instrument_id(),
@@ -1374,7 +1830,7 @@ fn test_reconcile_fill_report_duplicate_detected(instrument: InstrumentAny) {
     order.apply(OrderEventAny::Submitted(submitted)).unwrap();
 
     // Accept the order
-    let accepted = OrderAccepted::new(
+    let accepted = build_order_accepted(
         order.trader_id(),
         order.strategy_id(),
         order.instrument_id(),
@@ -1389,7 +1845,7 @@ fn test_reconcile_fill_report_duplicate_detected(instrument: InstrumentAny) {
     order.apply(OrderEventAny::Accepted(accepted)).unwrap();
 
     // Now apply a fill to the order
-    let filled_event = OrderFilled::new(
+    let filled_event = build_order_filled(
         order.trader_id(),
         order.strategy_id(),
         order.instrument_id(),
@@ -1727,6 +2183,36 @@ fn create_test_order_status_report(
     None,
     false
 )]
+#[case::limit_report_price_none_no_drift(
+    OrderType::Limit,
+    Quantity::from(100),
+    Some(Price::from("1.00000")),
+    None,
+    Quantity::from(100),
+    None,
+    None,
+    false
+)]
+#[case::stop_limit_report_fields_none_no_drift(
+    OrderType::StopLimit,
+    Quantity::from(100),
+    Some(Price::from("1.00000")),
+    Some(Price::from("0.99000")),
+    Quantity::from(100),
+    None,
+    None,
+    false
+)]
+#[case::stop_market_report_trigger_none_no_drift(
+    OrderType::StopMarket,
+    Quantity::from(100),
+    None,
+    Some(Price::from("0.99000")),
+    Quantity::from(100),
+    None,
+    None,
+    false
+)]
 fn test_should_reconciliation_update(
     instrument: InstrumentAny,
     #[case] order_type: OrderType,
@@ -1772,7 +2258,7 @@ fn test_should_reconciliation_update(
             .build(),
     };
 
-    let submitted = OrderSubmitted::new(
+    let submitted = build_order_submitted(
         order.trader_id(),
         order.strategy_id(),
         order.instrument_id(),
@@ -1784,7 +2270,7 @@ fn test_should_reconciliation_update(
     );
     order.apply(OrderEventAny::Submitted(submitted)).unwrap();
 
-    let accepted = OrderAccepted::new(
+    let accepted = build_order_accepted(
         order.trader_id(),
         order.strategy_id(),
         order.instrument_id(),
@@ -1826,7 +2312,7 @@ fn test_reconcile_order_report_already_in_sync(instrument: InstrumentAny) {
         .price(Price::from("1.00000"))
         .build();
 
-    let submitted = OrderSubmitted::new(
+    let submitted = build_order_submitted(
         order.trader_id(),
         order.strategy_id(),
         order.instrument_id(),
@@ -1838,7 +2324,7 @@ fn test_reconcile_order_report_already_in_sync(instrument: InstrumentAny) {
     );
     order.apply(OrderEventAny::Submitted(submitted)).unwrap();
 
-    let accepted = OrderAccepted::new(
+    let accepted = build_order_accepted(
         order.trader_id(),
         order.strategy_id(),
         order.instrument_id(),
@@ -1880,7 +2366,7 @@ fn test_reconcile_order_report_generates_canceled(instrument: InstrumentAny) {
         .price(Price::from("1.00000"))
         .build();
 
-    let submitted = OrderSubmitted::new(
+    let submitted = build_order_submitted(
         order.trader_id(),
         order.strategy_id(),
         order.instrument_id(),
@@ -1892,7 +2378,7 @@ fn test_reconcile_order_report_generates_canceled(instrument: InstrumentAny) {
     );
     order.apply(OrderEventAny::Submitted(submitted)).unwrap();
 
-    let accepted = OrderAccepted::new(
+    let accepted = build_order_accepted(
         order.trader_id(),
         order.strategy_id(),
         order.instrument_id(),
@@ -1922,6 +2408,182 @@ fn test_reconcile_order_report_generates_canceled(instrument: InstrumentAny) {
 }
 
 #[rstest]
+#[case(OrderStatus::PendingUpdate)]
+#[case(OrderStatus::PendingCancel)]
+fn test_reconcile_canceled_forwarded_while_mid_command(
+    instrument: InstrumentAny,
+    #[case] pending_status: OrderStatus,
+) {
+    // A Canceled for the order's current venue_order_id is authoritative and applies even
+    // while locally PendingUpdate/PendingCancel. The cancel-half of a cancel-replace is
+    // caught by venue_order_id provenance, not by deferring on local pending state.
+    let client_order_id = ClientOrderId::from("O-001");
+    let venue_order_id = VenueOrderId::from("V-001");
+    let account_id = AccountId::from("SIM-001");
+
+    let mut order = OrderTestBuilder::new(OrderType::Limit)
+        .instrument_id(instrument.id())
+        .client_order_id(client_order_id)
+        .side(OrderSide::Buy)
+        .quantity(Quantity::from(100))
+        .price(Price::from("1.00000"))
+        .build();
+    submit_accept(&mut order, account_id, venue_order_id);
+
+    match pending_status {
+        OrderStatus::PendingUpdate => {
+            let pending_update = build_order_pending_update(
+                order.trader_id(),
+                order.strategy_id(),
+                order.instrument_id(),
+                order.client_order_id(),
+                account_id,
+                UUID4::new(),
+                UnixNanos::default(),
+                UnixNanos::default(),
+                false,
+                Some(venue_order_id),
+            );
+            order
+                .apply(OrderEventAny::PendingUpdate(pending_update))
+                .unwrap();
+        }
+        OrderStatus::PendingCancel => {
+            let pending_cancel = build_order_pending_cancel(
+                order.trader_id(),
+                order.strategy_id(),
+                order.instrument_id(),
+                order.client_order_id(),
+                account_id,
+                UUID4::new(),
+                UnixNanos::default(),
+                UnixNanos::default(),
+                false,
+                Some(venue_order_id),
+            );
+            order
+                .apply(OrderEventAny::PendingCancel(pending_cancel))
+                .unwrap();
+        }
+        other => panic!("unexpected pending status {other:?}"),
+    }
+    assert_eq!(order.status(), pending_status);
+
+    let report = create_test_order_status_report(
+        client_order_id,
+        venue_order_id,
+        instrument.id(),
+        OrderType::Limit,
+        OrderStatus::Canceled,
+        Quantity::from(100),
+        Quantity::from(0),
+    );
+
+    let result = reconcile_order_report(&order, &report, Some(&instrument), UnixNanos::default());
+    assert!(matches!(result, Some(OrderEventAny::Canceled(_))));
+}
+
+#[rstest]
+fn test_reconcile_canceled_suppressed_for_previously_promoted_venue_order_id(
+    instrument: InstrumentAny,
+) {
+    // Cancel-replace modify promoted the cache from V-001 to V-002. A late
+    // Canceled report on the old V-001 leg must be suppressed, since the
+    // successor V-002 is still live.
+    let client_order_id = ClientOrderId::from("O-001");
+    let old_venue_order_id = VenueOrderId::from("V-001");
+    let new_venue_order_id = VenueOrderId::from("V-002");
+    let account_id = AccountId::from("SIM-001");
+
+    let order = build_order_promoted_to_new_leg(
+        &instrument,
+        client_order_id,
+        old_venue_order_id,
+        new_venue_order_id,
+        account_id,
+    );
+    assert_eq!(order.venue_order_id(), Some(new_venue_order_id));
+    assert_eq!(order.status(), OrderStatus::Accepted);
+
+    let report = create_test_order_status_report(
+        client_order_id,
+        old_venue_order_id,
+        instrument.id(),
+        OrderType::Limit,
+        OrderStatus::Canceled,
+        Quantity::from(100),
+        Quantity::from(0),
+    );
+
+    let result = reconcile_order_report(&order, &report, Some(&instrument), UnixNanos::default());
+    assert!(result.is_none());
+}
+
+#[rstest]
+fn test_reconcile_canceled_forwarded_for_current_venue_order_id(instrument: InstrumentAny) {
+    // After the same V-001 -> V-002 promotion, a genuine cancel of the live
+    // successor (V-002, the current cached leg) must still be forwarded.
+    let client_order_id = ClientOrderId::from("O-001");
+    let old_venue_order_id = VenueOrderId::from("V-001");
+    let new_venue_order_id = VenueOrderId::from("V-002");
+    let account_id = AccountId::from("SIM-001");
+
+    let order = build_order_promoted_to_new_leg(
+        &instrument,
+        client_order_id,
+        old_venue_order_id,
+        new_venue_order_id,
+        account_id,
+    );
+
+    let report = create_test_order_status_report(
+        client_order_id,
+        new_venue_order_id,
+        instrument.id(),
+        OrderType::Limit,
+        OrderStatus::Canceled,
+        Quantity::from(100),
+        Quantity::from(0),
+    );
+
+    let result = reconcile_order_report(&order, &report, Some(&instrument), UnixNanos::default());
+    assert!(matches!(result, Some(OrderEventAny::Canceled(_))));
+}
+
+#[rstest]
+fn test_reconcile_canceled_forwarded_for_untracked_venue_order_id(instrument: InstrumentAny) {
+    // A Canceled report on a venue_order_id the order never tracked is a real
+    // external cancel, not a stale cancel-replace leg, so it is forwarded. This
+    // pins the history check that keeps the suppression from over-firing.
+    let client_order_id = ClientOrderId::from("O-001");
+    let venue_order_id = VenueOrderId::from("V-001");
+    let untracked_venue_order_id = VenueOrderId::from("V-999");
+    let account_id = AccountId::from("SIM-001");
+
+    let mut order = OrderTestBuilder::new(OrderType::Limit)
+        .instrument_id(instrument.id())
+        .client_order_id(client_order_id)
+        .side(OrderSide::Buy)
+        .quantity(Quantity::from(100))
+        .price(Price::from("1.00000"))
+        .build();
+    submit_accept(&mut order, account_id, venue_order_id);
+
+    let report = create_test_order_status_report(
+        client_order_id,
+        untracked_venue_order_id,
+        instrument.id(),
+        OrderType::Limit,
+        OrderStatus::Canceled,
+        Quantity::from(100),
+        Quantity::from(0),
+    );
+
+    let result = reconcile_order_report(&order, &report, Some(&instrument), UnixNanos::default());
+    assert!(matches!(result, Some(OrderEventAny::Canceled(_))));
+}
+
+#[rstest]
 fn test_generate_reconciliation_order_events_accepts_before_cancel(instrument: InstrumentAny) {
     let client_order_id = ClientOrderId::from("O-001");
     let venue_order_id = VenueOrderId::from("V-001");
@@ -1934,7 +2596,7 @@ fn test_generate_reconciliation_order_events_accepts_before_cancel(instrument: I
         .price(Price::from("1.00000"))
         .build();
 
-    let submitted = OrderSubmitted::new(
+    let submitted = build_order_submitted(
         order.trader_id(),
         order.strategy_id(),
         order.instrument_id(),
@@ -1981,7 +2643,7 @@ fn test_generate_reconciliation_order_events_accepts_before_fill(instrument: Ins
         .price(Price::from("1.00000"))
         .build();
 
-    let submitted = OrderSubmitted::new(
+    let submitted = build_order_submitted(
         order.trader_id(),
         order.strategy_id(),
         order.instrument_id(),
@@ -2031,7 +2693,7 @@ fn test_generate_reconciliation_order_events_does_not_accept_before_reject(
         .price(Price::from("1.00000"))
         .build();
 
-    let submitted = OrderSubmitted::new(
+    let submitted = build_order_submitted(
         order.trader_id(),
         order.strategy_id(),
         order.instrument_id(),
@@ -2078,7 +2740,7 @@ fn test_reconcile_order_report_generates_expired(instrument: InstrumentAny) {
         .price(Price::from("1.00000"))
         .build();
 
-    let submitted = OrderSubmitted::new(
+    let submitted = build_order_submitted(
         order.trader_id(),
         order.strategy_id(),
         order.instrument_id(),
@@ -2090,7 +2752,7 @@ fn test_reconcile_order_report_generates_expired(instrument: InstrumentAny) {
     );
     order.apply(OrderEventAny::Submitted(submitted)).unwrap();
 
-    let accepted = OrderAccepted::new(
+    let accepted = build_order_accepted(
         order.trader_id(),
         order.strategy_id(),
         order.instrument_id(),
@@ -2132,7 +2794,7 @@ fn test_reconcile_order_report_generates_rejected(instrument: InstrumentAny) {
         .price(Price::from("1.00000"))
         .build();
 
-    let submitted = OrderSubmitted::new(
+    let submitted = build_order_submitted(
         order.trader_id(),
         order.strategy_id(),
         order.instrument_id(),
@@ -2159,7 +2821,7 @@ fn test_reconcile_order_report_generates_rejected(instrument: InstrumentAny) {
     assert!(result.is_some());
     if let OrderEventAny::Rejected(rejected) = result.unwrap() {
         assert_eq!(rejected.reason.as_str(), "INSUFFICIENT_MARGIN");
-        assert_eq!(rejected.reconciliation, 1);
+        assert!(rejected.reconciliation);
     } else {
         panic!("Expected Rejected event");
     }
@@ -2178,7 +2840,7 @@ fn test_reconcile_order_report_generates_updated(instrument: InstrumentAny) {
         .price(Price::from("1.00000"))
         .build();
 
-    let submitted = OrderSubmitted::new(
+    let submitted = build_order_submitted(
         order.trader_id(),
         order.strategy_id(),
         order.instrument_id(),
@@ -2190,7 +2852,7 @@ fn test_reconcile_order_report_generates_updated(instrument: InstrumentAny) {
     );
     order.apply(OrderEventAny::Submitted(submitted)).unwrap();
 
-    let accepted = OrderAccepted::new(
+    let accepted = build_order_accepted(
         order.trader_id(),
         order.strategy_id(),
         order.instrument_id(),
@@ -2234,7 +2896,7 @@ fn test_reconcile_order_report_generates_fill_for_qty_mismatch(instrument: Instr
         .price(Price::from("1.00000"))
         .build();
 
-    let submitted = OrderSubmitted::new(
+    let submitted = build_order_submitted(
         order.trader_id(),
         order.strategy_id(),
         order.instrument_id(),
@@ -2246,7 +2908,7 @@ fn test_reconcile_order_report_generates_fill_for_qty_mismatch(instrument: Instr
     );
     order.apply(OrderEventAny::Submitted(submitted)).unwrap();
 
-    let accepted = OrderAccepted::new(
+    let accepted = build_order_accepted(
         order.trader_id(),
         order.strategy_id(),
         order.instrument_id(),
@@ -2290,7 +2952,7 @@ fn test_create_reconciliation_rejected_with_reason() {
         .price(Price::from("1.00000"))
         .build();
 
-    let submitted = OrderSubmitted::new(
+    let submitted = build_order_submitted(
         order.trader_id(),
         order.strategy_id(),
         order.instrument_id(),
@@ -2307,8 +2969,44 @@ fn test_create_reconciliation_rejected_with_reason() {
     assert!(result.is_some());
     if let OrderEventAny::Rejected(rejected) = result.unwrap() {
         assert_eq!(rejected.reason.as_str(), "MARGIN_CALL");
-        assert_eq!(rejected.reconciliation, 1);
-        assert_eq!(rejected.due_post_only, 0);
+        assert!(rejected.reconciliation);
+        assert!(!rejected.due_post_only);
+    } else {
+        panic!("Expected Rejected event");
+    }
+}
+
+#[rstest]
+fn test_create_reconciliation_rejected_due_post_only() {
+    let instrument = InstrumentAny::CurrencyPair(audusd_sim());
+    let client_order_id = ClientOrderId::from("O-001");
+
+    let mut order = OrderTestBuilder::new(OrderType::Limit)
+        .instrument_id(instrument.id())
+        .client_order_id(client_order_id)
+        .side(OrderSide::Buy)
+        .quantity(Quantity::from(100))
+        .price(Price::from("1.00000"))
+        .build();
+
+    let submitted = build_order_submitted(
+        order.trader_id(),
+        order.strategy_id(),
+        order.instrument_id(),
+        order.client_order_id(),
+        AccountId::from("SIM-001"),
+        UUID4::new(),
+        UnixNanos::default(),
+        UnixNanos::default(),
+    );
+    order.apply(OrderEventAny::Submitted(submitted)).unwrap();
+
+    let result = create_reconciliation_rejected(&order, Some("post-only"), UnixNanos::from(1_000));
+    assert!(result.is_some());
+    if let OrderEventAny::Rejected(rejected) = result.unwrap() {
+        assert_eq!(rejected.reason.as_str(), "post-only");
+        assert!(rejected.reconciliation);
+        assert!(rejected.due_post_only);
     } else {
         panic!("Expected Rejected event");
     }
@@ -2327,7 +3025,7 @@ fn test_create_reconciliation_rejected_without_reason() {
         .price(Price::from("1.00000"))
         .build();
 
-    let submitted = OrderSubmitted::new(
+    let submitted = build_order_submitted(
         order.trader_id(),
         order.strategy_id(),
         order.instrument_id(),
@@ -2367,13 +3065,67 @@ fn test_create_reconciliation_rejected_no_account_id() {
 }
 
 #[rstest]
+fn test_create_reconciliation_accepted_no_account_id() {
+    let instrument = InstrumentAny::CurrencyPair(audusd_sim());
+    let client_order_id = ClientOrderId::from("O-001");
+    let venue_order_id = VenueOrderId::from("V-001");
+    let order = OrderTestBuilder::new(OrderType::Limit)
+        .instrument_id(instrument.id())
+        .client_order_id(client_order_id)
+        .side(OrderSide::Buy)
+        .quantity(Quantity::from(100))
+        .price(Price::from("1.00000"))
+        .build();
+    let report = create_test_order_status_report(
+        client_order_id,
+        venue_order_id,
+        instrument.id(),
+        OrderType::Limit,
+        OrderStatus::Accepted,
+        Quantity::from(100),
+        Quantity::from(0),
+    );
+
+    let result = create_reconciliation_accepted(&order, &report, UnixNanos::from(1_000));
+
+    assert!(result.is_none());
+}
+
+#[rstest]
+fn test_reconcile_order_report_accepted_no_account_id_returns_none() {
+    let instrument = InstrumentAny::CurrencyPair(audusd_sim());
+    let client_order_id = ClientOrderId::from("O-001");
+    let venue_order_id = VenueOrderId::from("V-001");
+    let order = OrderTestBuilder::new(OrderType::Limit)
+        .instrument_id(instrument.id())
+        .client_order_id(client_order_id)
+        .side(OrderSide::Buy)
+        .quantity(Quantity::from(100))
+        .price(Price::from("1.00000"))
+        .build();
+    let report = create_test_order_status_report(
+        client_order_id,
+        venue_order_id,
+        instrument.id(),
+        OrderType::Limit,
+        OrderStatus::Accepted,
+        Quantity::from(100),
+        Quantity::from(0),
+    );
+
+    let result = reconcile_order_report(&order, &report, Some(&instrument), UnixNanos::from(1_000));
+
+    assert!(result.is_none());
+}
+
+#[rstest]
 fn test_create_synthetic_venue_order_id_format() {
     let fill = FillSnapshot::new(
-        1_000_000,
+        create_test_venue_order_id("ORDER1"),
         OrderSide::Buy,
         dec!(1.25),
         dec!(100.50),
-        create_test_venue_order_id("ORDER1"),
+        1_000_000,
     );
     let id = create_synthetic_venue_order_id(&fill, InstrumentId::from("AUD/USD.SIM"));
 
@@ -2388,11 +3140,11 @@ fn test_create_synthetic_venue_order_id_format() {
 #[rstest]
 fn test_create_synthetic_trade_id_format() {
     let fill = FillSnapshot::new(
-        1_000_000,
+        create_test_venue_order_id("ORDER1"),
         OrderSide::Buy,
         dec!(1.25),
         dec!(100.50),
-        create_test_venue_order_id("ORDER1"),
+        1_000_000,
     );
 
     let id = create_synthetic_trade_id(&fill);
@@ -2408,11 +3160,11 @@ fn test_create_synthetic_trade_id_format() {
 #[rstest]
 fn test_create_synthetic_venue_order_id_is_deterministic() {
     let fill = FillSnapshot::new(
-        1_000_000,
+        create_test_venue_order_id("ORDER1"),
         OrderSide::Buy,
         dec!(1.25),
         dec!(100.50),
-        create_test_venue_order_id("ORDER1"),
+        1_000_000,
     );
     let instrument_id = InstrumentId::from("AUD/USD.SIM");
 
@@ -2425,11 +3177,11 @@ fn test_create_synthetic_venue_order_id_is_deterministic() {
 #[rstest]
 fn test_create_synthetic_venue_order_id_differs_across_instruments() {
     let fill = FillSnapshot::new(
-        1_000_000,
+        create_test_venue_order_id("ORDER1"),
         OrderSide::Buy,
         dec!(1.25),
         dec!(100.50),
-        create_test_venue_order_id("ORDER1"),
+        1_000_000,
     );
 
     let first = create_synthetic_venue_order_id(&fill, InstrumentId::from("AUD/USD.SIM"));
@@ -2441,11 +3193,11 @@ fn test_create_synthetic_venue_order_id_differs_across_instruments() {
 #[rstest]
 fn test_create_synthetic_trade_id_is_deterministic() {
     let fill = FillSnapshot::new(
-        1_000_000,
+        create_test_venue_order_id("ORDER1"),
         OrderSide::Buy,
         dec!(1.25),
         dec!(100.50),
-        create_test_venue_order_id("ORDER1"),
+        1_000_000,
     );
 
     let first = create_synthetic_trade_id(&fill);
@@ -2457,18 +3209,18 @@ fn test_create_synthetic_trade_id_is_deterministic() {
 /// Regression guard: `create_synthetic_order_report` must propagate `fill.px` to
 /// `avg_px` on the resulting report. Without this, downstream
 /// `create_inferred_fill` calls on the synthetic order see both `avg_px` and
-/// `price` as `None` and emit "no avg_px or price available" warnings, producing
+/// `price` as `None` and emit "no `avg_px` or price available" warnings, producing
 /// no reconciliation fill for the position gap.
 #[rstest]
 fn test_create_synthetic_order_report_populates_avg_px() {
     let instrument = InstrumentAny::CryptoPerpetual(crypto_perpetual_ethusdt());
     let venue_order_id = create_test_venue_order_id("ORDER1");
     let fill = FillSnapshot::new(
-        1_000_000,
+        venue_order_id,
         OrderSide::Sell,
         dec!(0.042),
         dec!(2355.8),
-        venue_order_id,
+        1_000_000,
     );
 
     let report = create_synthetic_order_report(
@@ -3075,21 +3827,21 @@ fn test_create_inferred_reconciliation_trade_id_varies_with_each_field() {
 fn test_create_synthetic_venue_order_id_varies_with_each_field() {
     let instrument_id = InstrumentId::from("AUD/USD.SIM");
     let baseline_fill = FillSnapshot::new(
-        1_000_000,
+        create_test_venue_order_id("ORDER1"),
         OrderSide::Buy,
         dec!(1.25),
         dec!(100.50),
-        create_test_venue_order_id("ORDER1"),
+        1_000_000,
     );
 
     let baseline = create_synthetic_venue_order_id(&baseline_fill, instrument_id);
 
     let ts_changed = FillSnapshot::new(
-        2_000_000,
+        create_test_venue_order_id("ORDER1"),
         OrderSide::Buy,
         dec!(1.25),
         dec!(100.50),
-        create_test_venue_order_id("ORDER1"),
+        2_000_000,
     );
     assert_ne!(
         baseline,
@@ -3098,11 +3850,11 @@ fn test_create_synthetic_venue_order_id_varies_with_each_field() {
     );
 
     let side_changed = FillSnapshot::new(
-        1_000_000,
+        create_test_venue_order_id("ORDER1"),
         OrderSide::Sell,
         dec!(1.25),
         dec!(100.50),
-        create_test_venue_order_id("ORDER1"),
+        1_000_000,
     );
     assert_ne!(
         baseline,
@@ -3111,11 +3863,11 @@ fn test_create_synthetic_venue_order_id_varies_with_each_field() {
     );
 
     let qty_changed = FillSnapshot::new(
-        1_000_000,
+        create_test_venue_order_id("ORDER1"),
         OrderSide::Buy,
         dec!(2.50),
         dec!(100.50),
-        create_test_venue_order_id("ORDER1"),
+        1_000_000,
     );
     assert_ne!(
         baseline,
@@ -3124,11 +3876,11 @@ fn test_create_synthetic_venue_order_id_varies_with_each_field() {
     );
 
     let px_changed = FillSnapshot::new(
-        1_000_000,
+        create_test_venue_order_id("ORDER1"),
         OrderSide::Buy,
         dec!(1.25),
         dec!(200.00),
-        create_test_venue_order_id("ORDER1"),
+        1_000_000,
     );
     assert_ne!(
         baseline,
@@ -3137,11 +3889,11 @@ fn test_create_synthetic_venue_order_id_varies_with_each_field() {
     );
 
     let venue_order_changed = FillSnapshot::new(
-        1_000_000,
+        create_test_venue_order_id("ORDER2"),
         OrderSide::Buy,
         dec!(1.25),
         dec!(100.50),
-        create_test_venue_order_id("ORDER2"),
+        1_000_000,
     );
     assert_ne!(
         baseline,
@@ -3153,20 +3905,20 @@ fn test_create_synthetic_venue_order_id_varies_with_each_field() {
 #[rstest]
 fn test_create_synthetic_trade_id_varies_with_each_field() {
     let baseline_fill = FillSnapshot::new(
-        1_000_000,
+        create_test_venue_order_id("ORDER1"),
         OrderSide::Buy,
         dec!(1.25),
         dec!(100.50),
-        create_test_venue_order_id("ORDER1"),
+        1_000_000,
     );
     let baseline = create_synthetic_trade_id(&baseline_fill);
 
     let ts_changed = FillSnapshot::new(
-        2_000_000,
+        create_test_venue_order_id("ORDER1"),
         OrderSide::Buy,
         dec!(1.25),
         dec!(100.50),
-        create_test_venue_order_id("ORDER1"),
+        2_000_000,
     );
     assert_ne!(
         baseline,
@@ -3175,11 +3927,11 @@ fn test_create_synthetic_trade_id_varies_with_each_field() {
     );
 
     let side_changed = FillSnapshot::new(
-        1_000_000,
+        create_test_venue_order_id("ORDER1"),
         OrderSide::Sell,
         dec!(1.25),
         dec!(100.50),
-        create_test_venue_order_id("ORDER1"),
+        1_000_000,
     );
     assert_ne!(
         baseline,
@@ -3188,11 +3940,11 @@ fn test_create_synthetic_trade_id_varies_with_each_field() {
     );
 
     let qty_changed = FillSnapshot::new(
-        1_000_000,
+        create_test_venue_order_id("ORDER1"),
         OrderSide::Buy,
         dec!(2.50),
         dec!(100.50),
-        create_test_venue_order_id("ORDER1"),
+        1_000_000,
     );
     assert_ne!(
         baseline,
@@ -3201,11 +3953,11 @@ fn test_create_synthetic_trade_id_varies_with_each_field() {
     );
 
     let px_changed = FillSnapshot::new(
-        1_000_000,
+        create_test_venue_order_id("ORDER1"),
         OrderSide::Buy,
         dec!(1.25),
         dec!(200.00),
-        create_test_venue_order_id("ORDER1"),
+        1_000_000,
     );
     assert_ne!(
         baseline,
@@ -3214,11 +3966,11 @@ fn test_create_synthetic_trade_id_varies_with_each_field() {
     );
 
     let venue_order_changed = FillSnapshot::new(
-        1_000_000,
+        create_test_venue_order_id("ORDER2"),
         OrderSide::Buy,
         dec!(1.25),
         dec!(100.50),
-        create_test_venue_order_id("ORDER2"),
+        1_000_000,
     );
     assert_ne!(
         baseline,
@@ -3714,7 +4466,7 @@ fn test_create_inferred_fill_with_commission() {
     let fill = create_inferred_fill(
         &order,
         &report,
-        &AccountId::from("TEST-001"),
+        AccountId::from("TEST-001"),
         &InstrumentAny::CryptoPerpetual(instrument),
         UnixNanos::from(2_000_000),
         commission,
@@ -3748,7 +4500,7 @@ fn test_create_inferred_fill_none_commission() {
     let fill = create_inferred_fill(
         &order,
         &report,
-        &AccountId::from("TEST-001"),
+        AccountId::from("TEST-001"),
         &InstrumentAny::CryptoPerpetual(instrument),
         UnixNanos::from(2_000_000),
         None,
@@ -3968,7 +4720,7 @@ fn test_status_vs_qty_mismatch_emits_updated(instrument: InstrumentAny) {
         other => panic!("expected OrderUpdated, was {other:?}"),
     };
     assert_eq!(updated.quantity, Quantity::from(10));
-    assert_eq!(updated.reconciliation, 1);
+    assert!(updated.reconciliation);
 
     order.apply(event).unwrap();
     assert_eq!(order.quantity(), Quantity::from(10));
@@ -4192,4 +4944,479 @@ fn test_reconcile_closed_order_within_tolerance_is_noop(instrument: InstrumentAn
         result.is_none(),
         "closed order with sub-tolerance jitter must not emit a new fill",
     );
+}
+
+fn apply_events(order: &OrderAny, events: &[OrderEventAny]) -> OrderAny {
+    let mut working = order.clone();
+    for event in events {
+        working
+            .apply(event.clone())
+            .expect("reconciliation event must apply cleanly");
+    }
+    working
+}
+
+#[rstest]
+fn test_continuous_reconciliation_converges_quantity_with_partial_fill(instrument: InstrumentAny) {
+    // The venue reports both a new partial fill AND an increased total quantity
+    // for the same order. A single reconciliation pass must converge the local
+    // projection so quantity matches the venue. Emitting only the inferred fill
+    // leaves quantity stale and forces the next cycle to repair it (the
+    // `reconcile_left_drift` + `reconcile_not_idempotent` failure observed
+    // under DST soak).
+    let client_order_id = ClientOrderId::from("O-001");
+    let venue_order_id = VenueOrderId::from("V-001");
+    let account_id = AccountId::from("SIM-001");
+
+    let mut order = OrderTestBuilder::new(OrderType::Limit)
+        .instrument_id(instrument.id())
+        .client_order_id(client_order_id)
+        .side(OrderSide::Buy)
+        .quantity(Quantity::from(131))
+        .price(Price::from("1.00000"))
+        .build();
+    submit_accept(&mut order, account_id, venue_order_id);
+
+    let mut report = create_test_order_status_report(
+        client_order_id,
+        venue_order_id,
+        instrument.id(),
+        OrderType::Limit,
+        OrderStatus::PartiallyFilled,
+        Quantity::from(1021),
+        Quantity::from(50),
+    );
+    report.price = Some(Price::from("1.00000"));
+    report.avg_px = Some(dec!(1.0));
+
+    let events = generate_reconciliation_order_events(
+        &order,
+        &report,
+        Some(&instrument),
+        UnixNanos::default(),
+    );
+
+    let after = apply_events(&order, &events);
+    assert_eq!(
+        after.quantity(),
+        Quantity::from(1021),
+        "single reconciliation pass must converge local quantity to venue projection",
+    );
+    assert_eq!(after.filled_qty(), Quantity::from(50));
+    assert_eq!(after.status(), OrderStatus::PartiallyFilled);
+}
+
+#[rstest]
+fn test_continuous_reconciliation_converges_price_with_partial_fill(instrument: InstrumentAny) {
+    // Same convergence requirement as quantity, but for the limit price. Venue
+    // amended the price and produced a fill in the same window; one pass must
+    // bring the local price into sync.
+    let client_order_id = ClientOrderId::from("O-001");
+    let venue_order_id = VenueOrderId::from("V-001");
+    let account_id = AccountId::from("SIM-001");
+
+    let mut order = OrderTestBuilder::new(OrderType::Limit)
+        .instrument_id(instrument.id())
+        .client_order_id(client_order_id)
+        .side(OrderSide::Buy)
+        .quantity(Quantity::from(684))
+        .price(Price::from("0.31970"))
+        .build();
+    submit_accept(&mut order, account_id, venue_order_id);
+
+    let mut report = create_test_order_status_report(
+        client_order_id,
+        venue_order_id,
+        instrument.id(),
+        OrderType::Limit,
+        OrderStatus::PartiallyFilled,
+        Quantity::from(684),
+        Quantity::from(50),
+    );
+    report.price = Some(Price::from("2.48460"));
+    report.avg_px = Some(dec!(0.31970));
+
+    let events = generate_reconciliation_order_events(
+        &order,
+        &report,
+        Some(&instrument),
+        UnixNanos::default(),
+    );
+
+    let after = apply_events(&order, &events);
+    assert_eq!(
+        after.price(),
+        Some(Price::from("2.48460")),
+        "single reconciliation pass must converge local price to venue projection",
+    );
+    assert_eq!(after.filled_qty(), Quantity::from(50));
+}
+
+#[rstest]
+fn test_continuous_reconciliation_idempotent_after_drift_recovery(instrument: InstrumentAny) {
+    // After the first pass converges the local projection a second pass over
+    // the same venue snapshot must be a no-op. A trailing OrderUpdated/Filled
+    // event here is the `reconcile_not_idempotent` companion symptom.
+    let client_order_id = ClientOrderId::from("O-001");
+    let venue_order_id = VenueOrderId::from("V-001");
+    let account_id = AccountId::from("SIM-001");
+
+    let mut order = OrderTestBuilder::new(OrderType::Limit)
+        .instrument_id(instrument.id())
+        .client_order_id(client_order_id)
+        .side(OrderSide::Buy)
+        .quantity(Quantity::from(131))
+        .price(Price::from("1.00000"))
+        .build();
+    submit_accept(&mut order, account_id, venue_order_id);
+
+    let mut report = create_test_order_status_report(
+        client_order_id,
+        venue_order_id,
+        instrument.id(),
+        OrderType::Limit,
+        OrderStatus::PartiallyFilled,
+        Quantity::from(1021),
+        Quantity::from(50),
+    );
+    report.price = Some(Price::from("1.00000"));
+    report.avg_px = Some(dec!(1.0));
+
+    let pass1 = generate_reconciliation_order_events(
+        &order,
+        &report,
+        Some(&instrument),
+        UnixNanos::default(),
+    );
+    let after = apply_events(&order, &pass1);
+
+    let pass2 = generate_reconciliation_order_events(
+        &after,
+        &report,
+        Some(&instrument),
+        UnixNanos::default(),
+    );
+    assert!(
+        pass2.is_empty(),
+        "second pass over an unchanged venue snapshot must emit no events, found {pass2:?}",
+    );
+}
+
+#[rstest]
+fn test_continuous_reconciliation_amend_before_closing_fill(instrument: InstrumentAny) {
+    // Venue increased total quantity from 100 to 150 and reported a fill of
+    // 100 in the same window. Applying the inferred fill against the stale
+    // local quantity would close the order at qty=100/Filled and drop the
+    // remaining 50 leaves; the amendment must apply first so the fill lands
+    // against qty=150 and the order ends PartiallyFilled with 50 leaves.
+    let client_order_id = ClientOrderId::from("O-001");
+    let venue_order_id = VenueOrderId::from("V-001");
+    let account_id = AccountId::from("SIM-001");
+
+    let mut order = OrderTestBuilder::new(OrderType::Limit)
+        .instrument_id(instrument.id())
+        .client_order_id(client_order_id)
+        .side(OrderSide::Buy)
+        .quantity(Quantity::from(100))
+        .price(Price::from("1.00000"))
+        .build();
+    submit_accept(&mut order, account_id, venue_order_id);
+
+    let mut report = create_test_order_status_report(
+        client_order_id,
+        venue_order_id,
+        instrument.id(),
+        OrderType::Limit,
+        OrderStatus::PartiallyFilled,
+        Quantity::from(150),
+        Quantity::from(100),
+    );
+    report.price = Some(Price::from("1.00000"));
+    report.avg_px = Some(dec!(1.0));
+
+    let events = generate_reconciliation_order_events(
+        &order,
+        &report,
+        Some(&instrument),
+        UnixNanos::default(),
+    );
+
+    let after = apply_events(&order, &events);
+    assert_eq!(after.quantity(), Quantity::from(150));
+    assert_eq!(after.filled_qty(), Quantity::from(100));
+    assert_eq!(after.leaves_qty(), Quantity::from(50));
+    assert_eq!(after.status(), OrderStatus::PartiallyFilled);
+}
+
+#[rstest]
+fn test_continuous_reconciliation_skips_pre_emit_when_local_pending_cancel(
+    instrument: InstrumentAny,
+) {
+    // PendingCancel has no Updated transition, so the local_accepts_amendment
+    // guard must skip the pre-emit rather than fail apply silently. The
+    // inferred Filled still flows; qty drift persists as a documented
+    // limitation until the pending cancel resolves.
+
+    let client_order_id = ClientOrderId::from("O-001");
+    let venue_order_id = VenueOrderId::from("V-001");
+    let account_id = AccountId::from("SIM-001");
+
+    let mut order = OrderTestBuilder::new(OrderType::Limit)
+        .instrument_id(instrument.id())
+        .client_order_id(client_order_id)
+        .side(OrderSide::Buy)
+        .quantity(Quantity::from(100))
+        .price(Price::from("1.00000"))
+        .build();
+    submit_accept(&mut order, account_id, venue_order_id);
+
+    let pending_cancel = build_order_pending_cancel(
+        order.trader_id(),
+        order.strategy_id(),
+        order.instrument_id(),
+        order.client_order_id(),
+        account_id,
+        UUID4::new(),
+        UnixNanos::default(),
+        UnixNanos::default(),
+        false,
+        Some(venue_order_id),
+    );
+    order
+        .apply(OrderEventAny::PendingCancel(pending_cancel))
+        .unwrap();
+    assert_eq!(order.status(), OrderStatus::PendingCancel);
+
+    let mut report = create_test_order_status_report(
+        client_order_id,
+        venue_order_id,
+        instrument.id(),
+        OrderType::Limit,
+        OrderStatus::PartiallyFilled,
+        Quantity::from(150),
+        Quantity::from(50),
+    );
+    report.price = Some(Price::from("1.00000"));
+    report.avg_px = Some(dec!(1.0));
+
+    let events = generate_reconciliation_order_events(
+        &order,
+        &report,
+        Some(&instrument),
+        UnixNanos::default(),
+    );
+
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, OrderEventAny::Updated(_))),
+        "pending-cancel local must not receive a pre-emit OrderUpdated, found {events:?}",
+    );
+}
+
+#[rstest]
+fn test_continuous_reconciliation_skips_update_when_local_pending_update(
+    instrument: InstrumentAny,
+) {
+    // Local order is PendingUpdate (cache reflects an outbound amend) and the
+    // venue echoes PendingUpdate with the requested values. Until the venue
+    // surfaces a confirmed status, reconciliation must not synthesize an
+    // OrderUpdated; doing so resolves the local PendingUpdate back to the
+    // previous status and mutates qty/price ahead of venue confirmation.
+
+    let client_order_id = ClientOrderId::from("O-001");
+    let venue_order_id = VenueOrderId::from("V-001");
+    let account_id = AccountId::from("SIM-001");
+
+    let mut order = OrderTestBuilder::new(OrderType::Limit)
+        .instrument_id(instrument.id())
+        .client_order_id(client_order_id)
+        .side(OrderSide::Buy)
+        .quantity(Quantity::from(100))
+        .price(Price::from("1.00000"))
+        .build();
+    submit_accept(&mut order, account_id, venue_order_id);
+
+    let pending_update = build_order_pending_update(
+        order.trader_id(),
+        order.strategy_id(),
+        order.instrument_id(),
+        order.client_order_id(),
+        account_id,
+        UUID4::new(),
+        UnixNanos::default(),
+        UnixNanos::default(),
+        false,
+        Some(venue_order_id),
+    );
+    order
+        .apply(OrderEventAny::PendingUpdate(pending_update))
+        .unwrap();
+    assert_eq!(order.status(), OrderStatus::PendingUpdate);
+
+    let mut report = create_test_order_status_report(
+        client_order_id,
+        venue_order_id,
+        instrument.id(),
+        OrderType::Limit,
+        OrderStatus::PendingUpdate,
+        Quantity::from(150),
+        Quantity::from(0),
+    );
+    report.price = Some(Price::from("1.00100"));
+
+    let events = generate_reconciliation_order_events(
+        &order,
+        &report,
+        Some(&instrument),
+        UnixNanos::default(),
+    );
+
+    assert!(
+        events.is_empty(),
+        "matching pending statuses must not drive local mutations, found {events:?}",
+    );
+}
+
+#[rstest]
+fn test_continuous_reconciliation_skips_update_for_pending_status(instrument: InstrumentAny) {
+    // Venue reports PendingUpdate while echoing the requested qty/price. The
+    // amendment is unconfirmed, so reconciliation must not mutate the local
+    // projection until the venue surfaces an Accepted/PartiallyFilled state;
+    // the rejected-amend case otherwise leaves the cache holding values the
+    // venue never actually applied.
+    let client_order_id = ClientOrderId::from("O-001");
+    let venue_order_id = VenueOrderId::from("V-001");
+    let account_id = AccountId::from("SIM-001");
+
+    let mut order = OrderTestBuilder::new(OrderType::Limit)
+        .instrument_id(instrument.id())
+        .client_order_id(client_order_id)
+        .side(OrderSide::Buy)
+        .quantity(Quantity::from(100))
+        .price(Price::from("1.00000"))
+        .build();
+    submit_accept(&mut order, account_id, venue_order_id);
+
+    let mut report = create_test_order_status_report(
+        client_order_id,
+        venue_order_id,
+        instrument.id(),
+        OrderType::Limit,
+        OrderStatus::PendingUpdate,
+        Quantity::from(150),
+        Quantity::from(0),
+    );
+    report.price = Some(Price::from("1.00100"));
+
+    let events = generate_reconciliation_order_events(
+        &order,
+        &report,
+        Some(&instrument),
+        UnixNanos::default(),
+    );
+
+    assert!(
+        events.is_empty(),
+        "pending venue states must not drive local mutations, found {events:?}",
+    );
+}
+
+#[rstest]
+fn test_continuous_reconciliation_detects_drift_on_if_touched_orders(instrument: InstrumentAny) {
+    // LimitIfTouched and MarketIfTouched both expose price/trigger amendments
+    // through OrderUpdated, so should_reconciliation_update must register
+    // drift on them or the projection silently lags the venue snapshot.
+    let venue_order_id = VenueOrderId::from("V-001");
+    let account_id = AccountId::from("SIM-001");
+
+    let mut limit_if_touched = OrderTestBuilder::new(OrderType::LimitIfTouched)
+        .instrument_id(instrument.id())
+        .client_order_id(ClientOrderId::from("O-LIT"))
+        .side(OrderSide::Buy)
+        .quantity(Quantity::from(100))
+        .price(Price::from("1.00000"))
+        .trigger_price(Price::from("0.99000"))
+        .build();
+    submit_accept(&mut limit_if_touched, account_id, venue_order_id);
+    let mut report = create_test_order_status_report(
+        ClientOrderId::from("O-LIT"),
+        venue_order_id,
+        instrument.id(),
+        OrderType::LimitIfTouched,
+        OrderStatus::Accepted,
+        Quantity::from(100),
+        Quantity::from(0),
+    );
+    report.price = Some(Price::from("1.00100"));
+    report.trigger_price = Some(Price::from("0.99000"));
+    assert!(should_reconciliation_update(&limit_if_touched, &report));
+
+    let mut market_if_touched = OrderTestBuilder::new(OrderType::MarketIfTouched)
+        .instrument_id(instrument.id())
+        .client_order_id(ClientOrderId::from("O-MIT"))
+        .side(OrderSide::Buy)
+        .quantity(Quantity::from(100))
+        .trigger_price(Price::from("0.99000"))
+        .build();
+    submit_accept(&mut market_if_touched, account_id, venue_order_id);
+    let mut report = create_test_order_status_report(
+        ClientOrderId::from("O-MIT"),
+        venue_order_id,
+        instrument.id(),
+        OrderType::MarketIfTouched,
+        OrderStatus::Accepted,
+        Quantity::from(100),
+        Quantity::from(0),
+    );
+    report.trigger_price = Some(Price::from("0.98000"));
+    assert!(should_reconciliation_update(&market_if_touched, &report));
+}
+
+#[rstest]
+fn test_continuous_reconciliation_converges_quantity_on_working_order(instrument: InstrumentAny) {
+    // Venue amended quantity on a still-working (Accepted) order without any
+    // fill change. Single-event convergence here is already covered by the
+    // existing OrderUpdated path, but we lock it in alongside the fill+drift
+    // cases so a regression is caught uniformly.
+    let client_order_id = ClientOrderId::from("O-001");
+    let venue_order_id = VenueOrderId::from("V-001");
+    let account_id = AccountId::from("SIM-001");
+
+    let mut order = OrderTestBuilder::new(OrderType::Limit)
+        .instrument_id(instrument.id())
+        .client_order_id(client_order_id)
+        .side(OrderSide::Buy)
+        .quantity(Quantity::from(131))
+        .price(Price::from("1.77100"))
+        .build();
+    submit_accept(&mut order, account_id, venue_order_id);
+
+    let mut report = create_test_order_status_report(
+        client_order_id,
+        venue_order_id,
+        instrument.id(),
+        OrderType::Limit,
+        OrderStatus::Accepted,
+        Quantity::from(1021),
+        Quantity::from(0),
+    );
+    report.price = Some(Price::from("1.77100"));
+
+    let events = generate_reconciliation_order_events(
+        &order,
+        &report,
+        Some(&instrument),
+        UnixNanos::default(),
+    );
+    let after = apply_events(&order, &events);
+    assert_eq!(after.quantity(), Quantity::from(1021));
+
+    let pass2 = generate_reconciliation_order_events(
+        &after,
+        &report,
+        Some(&instrument),
+        UnixNanos::default(),
+    );
+    assert!(pass2.is_empty(), "second pass must be a no-op");
 }

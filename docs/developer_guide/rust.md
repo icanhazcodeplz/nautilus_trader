@@ -81,6 +81,34 @@ Mismatches in any of these cause full rebuilds:
 
 When adding new build targets or modifying existing ones, maintain alignment with the testing/linting group to preserve fast incremental builds.
 
+### Generated FFI bindings and precision mode
+
+The `nautilus-model` build script regenerates `nautilus_trader/core/includes/model.h` and
+`nautilus_trader/core/rust/model.pxd` when the `ffi` feature is enabled. Those files encode
+whether the generated C/Cython bindings use high precision. The committed generated files use
+high precision. Local cargo commands that compile `nautilus-model` with `ffi` should either
+include the `high-precision` feature or avoid regenerating those files.
+
+Make targets that use `BASE_FEATURES`, such as `make build-debug-v2`, already include
+`high-precision`. The drift risk mainly comes from ad-hoc cargo commands that enable `ffi`
+without the aligned feature set.
+
+Use the Rust feature for narrow checks that do not include the full aligned feature set. Keep the
+environment override in the command so a stale shell value cannot force standard-precision bindings:
+
+```bash
+env HIGH_PRECISION=true cargo check -p nautilus-model --features ffi,python,high-precision
+```
+
+Before committing FFI-related work, verify those generated files did not drift:
+
+```bash
+git diff -- nautilus_trader/core/includes/model.h nautilus_trader/core/rust/model.pxd
+```
+
+If they changed only because a command ran without high precision, rerun the cargo command
+with `HIGH_PRECISION=true`. Do not hand-edit the generated files.
+
 ## Module organization
 
 - Keep modules focused on a single responsibility.
@@ -176,7 +204,7 @@ The `check_anyhow_usage.sh` pre-commit hook enforces these anyhow conventions au
 - Start messages with a capitalised word, prefer complete sentences, and omit terminal periods (e.g. `"Processing batch"`, not `"Processing batch."`).
 
 :::info[Automated enforcement]
-The `check_logging_macro_usage.sh` pre-commit hook enforces fully qualified logging macros.
+The `check_logging_conventions.sh` pre-commit hook enforces fully qualified logging macros.
 :::
 
 ### Error handling
@@ -464,6 +492,39 @@ Always use the `FAILED` constant for `.expect_display()` messages on
 use nautilus_core::correctness::{CorrectnessResult, CorrectnessResultExt, FAILED};
 ```
 
+#### Fluent builders for many-optional constructors
+
+Types with large constructors dominated by optional fields (the `instruments`
+domain types) also expose a fluent `bon` builder, so callers set only the fields
+they need instead of passing a long run of `None`. Put `#[bon::bon]` on the
+inherent impl and add a builder method that delegates to `new_checked`, which
+keeps a single validated construction path:
+
+```rust
+#[bon::bon]
+impl CryptoPerpetual {
+    // new_checked / new as above
+
+    /// Returns a fluent builder for a [`CryptoPerpetual`] instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any input validation fails (see [`CryptoPerpetual::new_checked`]).
+    #[builder(start_fn = builder, finish_fn = build)]
+    pub fn build_checked(/* same parameters as new_checked */) -> CorrectnessResult<Self> {
+        Self::new_checked(/* forward verbatim */)
+    }
+}
+```
+
+Callers write `CryptoPerpetual::builder().instrument_id(..)..build()?`. Required
+(non-`Option`) parameters are enforced at compile time by bon's typestate;
+`Option` parameters are omittable and default exactly as `new_checked` applies
+them. `build()` returns the same `CorrectnessResult` as `new_checked`, so every
+correctness check still runs. Unlike the test-only event specs, this builder lives
+on the production type, ships in production builds, and returns a `Result` rather
+than the value. Keep `new()` and `new_checked()` in place; the builder is additive.
+
 ### Type conversion patterns
 
 For types that parse from strings, provide both fallible and infallible conversions:
@@ -709,6 +770,59 @@ cache.insert(other_key, other_value);  // Data race
    - Immutable after construction: use `Arc<AHashMap<K, V>>`
    - Concurrent access needed: use `Arc<DashMap<K, V>>`
    - Single-threaded access: use plain `AHashMap<K, V>`
+
+### Shared mutability storage
+
+Code ported from Cython often cloned values out of a container before mutating them.
+That pattern produces silent staleness: the local clone diverges from the canonical
+entry the moment another code path applies an event to it.
+
+Reach for `Rc<RefCell<T>>` (single-threaded) or `Arc<RwLock<T>>` (multi-threaded)
+storage only when all three hold:
+
+- The value is mutated after insertion.
+- Multiple holders need to observe each other's writes.
+- A handle must outlive the container's borrow scope.
+
+Orders in `Cache` use this shape internally for per-key borrow tracking. Storage
+is `AHashMap<ClientOrderId, SharedCell<OrderAny>>`; the smart-pointer leak stays
+internal. Public accessors return scoped newtypes that hide it: `Cache::order`
+returns `OrderRef<'_>` (read borrow), `Cache::order_mut` returns `OrderRefMut<'_>`
+(exclusive write borrow, requires `&mut Cache`), and `Cache::order_owned` returns
+an owned `OrderAny` snapshot when a value must cross a boundary. Use
+`Cache::try_order` or `Cache::try_order_owned` when a missing order is an error;
+they return `OrderLookupError` instead of forcing each caller to build an ad hoc
+not-found error. Engines drop the borrow before dispatching events and re-read
+the cache for post-event state, which keeps the dispatch a clean transaction
+boundary.
+
+`Cache::order_mut` takes `&mut Cache`, which means strategies and adapters
+receiving a `CacheView` (which only exposes immutable cache borrows) cannot reach
+it. Order mutation is reserved for the data and execution engines that hold the
+cache directly; the type system enforces that contract.
+
+Otherwise prefer the simpler shape:
+
+- Read-mostly and set once: `Rc<T>` or `Arc<T>` (no interior mutability).
+- Owned snapshots suffice for callers: store `T`, clone on read.
+- Single owner, no mutation: plain field.
+
+Costs of `Rc<RefCell<T>>` worth weighing before adopting it:
+
+- Every access pays a runtime borrow check.
+- The smart-pointer type leaks at write boundaries.
+- Misuse panics at runtime instead of failing to compile.
+- `Rc<RefCell<T>>` is `!Send`; cross-thread storage needs `Arc<RwLock<T>>`
+  (or `Arc<Mutex<T>>` when reads are rare).
+
+**Decision tree:**
+
+1. Mutable, multi-observer, and handle outlives container borrow?
+   - Single-threaded: `Rc<RefCell<T>>`.
+   - Multi-threaded: `Arc<RwLock<T>>` (or `Arc<Mutex<T>>` when reads are rare).
+2. Read-mostly and set once: `Rc<T>` or `Arc<T>`.
+3. Owned snapshots fine: store `T`, clone on read.
+4. Single owner, no mutation: plain field.
 
 ### Re-export patterns
 
@@ -1101,9 +1215,9 @@ This section documents best practices for handling Python objects in Rust callba
 
 **Problem**: Using `Arc<PyObject>` in callback-holding structs creates circular references:
 
-1. **Rust `Arc` holds Python objects** → increases Python reference count.
-2. **Python objects might reference Rust objects** → creates cycles.
-3. **Neither side can be garbage collected** → memory leak.
+1. **Rust `Arc` holds Python objects** -> increases Python reference count.
+2. **Python objects might reference Rust objects** -> creates cycles.
+3. **Neither side can be garbage collected** -> memory leak.
 
 **Example of problematic pattern**:
 
@@ -1467,7 +1581,7 @@ When modifying schemas:
    ```bash
    make regen-capnp
    # or
-   ./scripts/regen_capnp.sh
+   ./scripts/regen-capnp.sh
    ```
 
 3. Review changes:

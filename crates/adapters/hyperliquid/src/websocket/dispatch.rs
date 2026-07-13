@@ -22,7 +22,7 @@
 //!    when it submits an order, and refreshes the cached venue order id when a
 //!    modify is sent so the WebSocket consumer can detect cancel-replace.
 //! 2. Incoming [`OrderStatusReport`] and [`FillReport`] messages are routed
-//!    through [`dispatch_order_status_report`] and [`dispatch_fill_report`].
+//!    through [`dispatch_order_event`] and [`dispatch_order_fill`].
 //!    For tracked orders these build typed [`OrderEventAny`] events and emit
 //!    them via [`ExecutionEventEmitter::send_order_event`]. For untracked /
 //!    external orders the dispatch falls back to forwarding the raw report.
@@ -41,16 +41,24 @@
 //! observe a spurious termination.
 //!
 //! The pending-modify marker (keyed on `client_order_id`) is set by
-//! `modify_order` only after a successful HTTP round-trip and cleared on the
-//! matching `ACCEPTED`. It lets dispatch skip an early
-//! `CANCELED(old_voi)` that arrives before the replacement `ACCEPTED(new_voi)`
-//! on the WebSocket. The documented transport-timeout + WS-race window still
-//! applies: if the modify HTTP call fails but the venue actually accepted it,
-//! no marker is set, so a cancel-before-accept race in that window would
-//! surface as `OrderCanceled`. This matches the Python behaviour we are
-//! porting and is the simplest correct answer; verifying the venue-side
-//! outcome before emitting would require speculative waiting that drops
-//! latency without improving correctness.
+//! `modify_order` before the HTTP call and cleared on either the matching
+//! `ACCEPTED(new_voi)` or any modify failure. It lets dispatch skip an
+//! early `CANCELED(old_voi)` that arrives before the replacement
+//! `ACCEPTED(new_voi)` on the WebSocket, regardless of whether the WS
+//! message races ahead of the HTTP response.
+//!
+//! A fill carrying the replacement `venue_order_id` during an in-flight modify
+//! promotes the binding directly (the same `OrderUpdated` path as the
+//! replacement `ACCEPTED`), so a dropped `ACCEPTED` does not strand the fill.
+//! A fill is buffered into [`WsDispatchState::buffered_fills`] only when the
+//! identity has no price to promote with; `handle_accepted` drains the buffer
+//! on the replacement `ACCEPTED`. A delayed earlier-leg fill during a chained
+//! modify is a known limitation. See GH-3972.
+//!
+//! When neither the replacement `ACCEPTED` nor a fill arrives, a query that
+//! resolves the replacement by `cloid` promotes the binding the same way via
+//! [`promote_replacement_from_query`], so a dropped `ACCEPTED` with no fill
+//! cannot leave the order bound to the canceled leg.
 
 use std::{
     collections::VecDeque,
@@ -76,6 +84,8 @@ use nautilus_model::{
     types::{Price, Quantity},
 };
 use ustr::Ustr;
+
+use crate::http::models::HyperliquidExecPlaceOrderRequest;
 
 pub const DEDUP_CAPACITY: usize = 10_000;
 
@@ -195,6 +205,9 @@ pub struct WsDispatchState {
     /// Bounded FIFO dedup to bound memory while keeping recent trade ids
     /// deduped across reconnects.
     pub emitted_trades: Mutex<BoundedDedup<TradeId>>,
+    /// Raw Hyperliquid CLOIDs that reached a terminal state through the post
+    /// response path before the matching `orderUpdates` event arrived.
+    pub terminal_cloids: Mutex<BoundedDedup<Ustr>>,
     /// Last venue order id observed for a tracked client order id.
     ///
     /// Populated on the first `OrderAccepted` and refreshed on every
@@ -203,15 +216,32 @@ pub struct WsDispatchState {
     /// replacement leg of a Hyperliquid modify and emitted as `OrderUpdated`.
     pub cached_venue_order_ids: DashMap<ClientOrderId, VenueOrderId>,
     /// Maps `client_order_id` to the old venue order id of an in-flight
-    /// modify. Populated by `modify_order` only after a successful HTTP
-    /// round-trip and cleared on the matching `ACCEPTED(new_voi)`. A
-    /// `CANCELED(old_voi)` arriving while the marker is set is treated as
-    /// the cancel leg of a cancel-before-accept race and suppressed so the
-    /// later `ACCEPTED(new_voi)` can flow through the `OrderUpdated` path.
+    /// modify. Populated by `modify_order` before the HTTP call so the WS
+    /// cancel handler sees the marker even when `CANCELED(old_voi)` arrives
+    /// before the HTTP response. Cleared on the matching `ACCEPTED(new_voi)`
+    /// or on any modify failure. A `CANCELED(old_voi)` arriving while the
+    /// marker is set is treated as the cancel leg of a cancel-before-accept
+    /// race and suppressed so the later `ACCEPTED(new_voi)` can flow through
+    /// the `OrderUpdated` path.
     pub pending_modify_keys: DashMap<ClientOrderId, VenueOrderId>,
+    /// User-intended absolute total qty for an in-flight modify; the
+    /// cancel-replace promotion uses it instead of the venue's
+    /// remaining-only `report.quantity`.
+    pub pending_modify_target_qty: DashMap<ClientOrderId, Quantity>,
+    /// `FillReport`s buffered only when a cancel-replace fill cannot be promoted
+    /// (the identity carries no price); drained by the cancel-replace branch of
+    /// `handle_accepted`. The common path promotes on the fill instead. See
+    /// GH-3972.
+    pub buffered_fills: DashMap<ClientOrderId, Vec<FillReport>>,
     /// Cumulative filled quantity per tracked order. Compared against
     /// `OrderIdentity::quantity` to decide when to clean up tracked state.
     pub order_filled_qty: DashMap<ClientOrderId, Quantity>,
+    /// Exact venue request sent for an in-flight modify, used by the
+    /// cancel-replace promotion to build a corrective reduce.
+    pub pending_modify_request: DashMap<ClientOrderId, HyperliquidExecPlaceOrderRequest>,
+    /// Corrective reduce queued by the cancel-replace promotion: client order
+    /// id to (new venue order id, reduced request). Drained by the WS loop.
+    pub pending_corrective: DashMap<ClientOrderId, (u64, HyperliquidExecPlaceOrderRequest)>,
     clearing: AtomicBool,
 }
 
@@ -222,9 +252,14 @@ impl Default for WsDispatchState {
             emitted_accepted: DashSet::default(),
             filled_orders: DashSet::default(),
             emitted_trades: Mutex::new(BoundedDedup::new(DEDUP_CAPACITY)),
+            terminal_cloids: Mutex::new(BoundedDedup::new(DEDUP_CAPACITY)),
             cached_venue_order_ids: DashMap::new(),
             pending_modify_keys: DashMap::new(),
+            pending_modify_target_qty: DashMap::new(),
+            buffered_fills: DashMap::new(),
             order_filled_qty: DashMap::new(),
+            pending_modify_request: DashMap::new(),
+            pending_corrective: DashMap::new(),
             clearing: AtomicBool::new(false),
         }
     }
@@ -274,10 +309,13 @@ impl WsDispatchState {
         self.emitted_accepted.insert(cid);
     }
 
-    /// Marks an order as having reached the filled terminal state.
-    pub fn insert_filled(&self, cid: ClientOrderId) {
+    /// Marks an order as having reached a terminal state.
+    ///
+    /// Returns `true` when this call claimed the terminal state, and `false`
+    /// when another path had already claimed it.
+    pub fn insert_filled(&self, cid: ClientOrderId) -> bool {
         self.evict_if_full(&self.filled_orders);
-        self.filled_orders.insert(cid);
+        self.filled_orders.insert(cid)
     }
 
     /// Atomically inserts a trade id into the dedup set.
@@ -291,6 +329,33 @@ impl WsDispatchState {
     pub fn check_and_insert_trade(&self, trade_id: TradeId) -> bool {
         let mut set = self.emitted_trades.lock().expect(MUTEX_POISONED);
         set.insert(trade_id)
+    }
+
+    /// Records a terminal raw Hyperliquid CLOID.
+    ///
+    /// Used when the post response rejects an order before the WebSocket
+    /// `orderUpdates` message. The normal CLOID mapping can be removed while a
+    /// late unresolved order update still gets suppressed instead of forwarded
+    /// as an external report.
+    #[allow(
+        clippy::missing_panics_doc,
+        reason = "terminal cloid mutex poisoning is not expected"
+    )]
+    pub fn insert_terminal_cloid(&self, cloid: Ustr) {
+        let mut set = self.terminal_cloids.lock().expect(MUTEX_POISONED);
+        set.insert(cloid);
+    }
+
+    /// Returns whether a raw Hyperliquid CLOID reached a terminal state through
+    /// the post response path.
+    #[allow(
+        clippy::missing_panics_doc,
+        reason = "terminal cloid mutex poisoning is not expected"
+    )]
+    #[must_use]
+    pub fn terminal_cloid_seen(&self, cloid: &Ustr) -> bool {
+        let set = self.terminal_cloids.lock().expect(MUTEX_POISONED);
+        set.contains(cloid)
     }
 
     /// Caches the venue order id observed for a tracked client order id.
@@ -309,25 +374,106 @@ impl WsDispatchState {
         self.cached_venue_order_ids.get(client_order_id).map(|r| *r)
     }
 
-    /// Marks an in-flight modify for cancel-before-accept suppression.
+    /// Marks an in-flight modify for cancel-before-accept suppression and
+    /// records the target absolute total qty for the cancel-replace promotion.
     pub fn mark_pending_modify(
         &self,
         client_order_id: ClientOrderId,
         old_venue_order_id: VenueOrderId,
+        target_qty: Quantity,
     ) {
         self.pending_modify_keys
             .insert(client_order_id, old_venue_order_id);
+        self.pending_modify_target_qty
+            .insert(client_order_id, target_qty);
     }
 
     /// Clears the pending modify marker for a client order id.
     pub fn clear_pending_modify(&self, client_order_id: &ClientOrderId) {
         self.pending_modify_keys.remove(client_order_id);
+        self.pending_modify_target_qty.remove(client_order_id);
+        self.pending_modify_request.remove(client_order_id);
+    }
+
+    /// Stashes the exact venue request sent for an in-flight modify.
+    pub fn stash_modify_request(
+        &self,
+        client_order_id: ClientOrderId,
+        request: HyperliquidExecPlaceOrderRequest,
+    ) {
+        self.pending_modify_request.insert(client_order_id, request);
+    }
+
+    /// Returns a clone of the stashed in-flight modify request, if any.
+    #[must_use]
+    pub fn modify_request(
+        &self,
+        client_order_id: &ClientOrderId,
+    ) -> Option<HyperliquidExecPlaceOrderRequest> {
+        self.pending_modify_request
+            .get(client_order_id)
+            .map(|r| r.clone())
+    }
+
+    /// Queues a corrective reduce for the WebSocket consumer loop to post.
+    pub fn queue_corrective(
+        &self,
+        client_order_id: ClientOrderId,
+        oid: u64,
+        request: HyperliquidExecPlaceOrderRequest,
+    ) {
+        self.pending_corrective
+            .insert(client_order_id, (oid, request));
+    }
+
+    /// Removes and returns a queued corrective reduce, if any.
+    #[must_use]
+    pub fn take_corrective(
+        &self,
+        client_order_id: &ClientOrderId,
+    ) -> Option<(u64, HyperliquidExecPlaceOrderRequest)> {
+        self.pending_corrective
+            .remove(client_order_id)
+            .map(|(_, v)| v)
     }
 
     /// Returns the pending modify marker for a client order id, if any.
     #[must_use]
     pub fn pending_modify(&self, client_order_id: &ClientOrderId) -> Option<VenueOrderId> {
         self.pending_modify_keys.get(client_order_id).map(|r| *r)
+    }
+
+    /// Returns the recorded target absolute total qty, if any.
+    #[must_use]
+    pub fn pending_modify_target_qty(&self, client_order_id: &ClientOrderId) -> Option<Quantity> {
+        self.pending_modify_target_qty
+            .get(client_order_id)
+            .map(|r| *r)
+    }
+
+    /// Buffers a `FillReport` arrived during an in-flight cancel-replace.
+    pub fn buffer_fill(&self, client_order_id: ClientOrderId, fill: FillReport) {
+        self.buffered_fills
+            .entry(client_order_id)
+            .or_default()
+            .push(fill);
+    }
+
+    /// Removes and returns buffered fills for the cid, in arrival order.
+    #[must_use]
+    pub fn drain_buffered_fills(&self, client_order_id: &ClientOrderId) -> Vec<FillReport> {
+        self.buffered_fills
+            .remove(client_order_id)
+            .map(|(_, v)| v)
+            .unwrap_or_default()
+    }
+
+    /// Number of buffered fills for the cid.
+    #[must_use]
+    pub fn buffered_fill_count(&self, client_order_id: &ClientOrderId) -> usize {
+        self.buffered_fills
+            .get(client_order_id)
+            .map_or(0, |r| r.len())
     }
 
     /// Records cumulative filled quantity for a tracked order.
@@ -350,6 +496,10 @@ impl WsDispatchState {
         self.emitted_accepted.remove(client_order_id);
         self.cached_venue_order_ids.remove(client_order_id);
         self.pending_modify_keys.remove(client_order_id);
+        self.pending_modify_target_qty.remove(client_order_id);
+        self.pending_modify_request.remove(client_order_id);
+        self.pending_corrective.remove(client_order_id);
+        self.buffered_fills.remove(client_order_id);
         self.order_filled_qty.remove(client_order_id);
     }
 
@@ -393,7 +543,7 @@ pub enum DispatchOutcome {
 ///
 /// [`External`]: DispatchOutcome::External
 /// [`Skip`]: DispatchOutcome::Skip
-pub fn dispatch_order_status_report(
+pub fn dispatch_order_event(
     report: &OrderStatusReport,
     state: &WsDispatchState,
     emitter: &ExecutionEventEmitter,
@@ -406,6 +556,17 @@ pub fn dispatch_order_status_report(
     if state.filled_orders.contains(&client_order_id) {
         log::debug!(
             "Skipping stale report for filled order: cid={client_order_id}, status={:?}",
+            report.order_status,
+        );
+        return DispatchOutcome::Skip;
+    }
+
+    let client_order_id_str = client_order_id.as_str();
+    if client_order_id_str.starts_with("0x")
+        && state.terminal_cloid_seen(&Ustr::from(client_order_id_str))
+    {
+        log::debug!(
+            "Skipping stale terminal report for raw cloid: cid={client_order_id}, status={:?}",
             report.order_status,
         );
         return DispatchOutcome::Skip;
@@ -456,7 +617,7 @@ pub fn dispatch_order_status_report(
 ///
 /// [`External`]: DispatchOutcome::External
 /// [`Skip`]: DispatchOutcome::Skip
-pub fn dispatch_fill_report(
+pub fn dispatch_order_fill(
     report: &FillReport,
     state: &WsDispatchState,
     emitter: &ExecutionEventEmitter,
@@ -474,9 +635,58 @@ pub fn dispatch_fill_report(
         return DispatchOutcome::Skip;
     }
 
-    let Some(identity) = state.lookup_identity(&client_order_id) else {
+    let Some(mut identity) = state.lookup_identity(&client_order_id) else {
         return DispatchOutcome::External;
     };
+
+    // Set when a fill promotes, so the corrective-reduce runs after the fill applies
+    let mut promoted_corrective: Option<(Quantity, HyperliquidExecPlaceOrderRequest)> = None;
+
+    // Promote the binding from the fill so a dropped replacement ACCEPTED cannot
+    // strand it (see module docs).
+    if state.pending_modify(&client_order_id).is_some()
+        && let Some(cached_voi) = state.cached_venue_order_id(&client_order_id)
+        && report.venue_order_id != cached_voi
+    {
+        let target = state.pending_modify_target_qty(&client_order_id);
+        let sent_request = state.modify_request(&client_order_id);
+        // Prefer the modify target price over the stale cached identity price
+        let price = sent_request
+            .as_ref()
+            .zip(identity.price)
+            .and_then(|(r, cached)| Price::from_decimal_dp(r.price, cached.precision).ok())
+            .or(identity.price);
+        let Some(price) = price else {
+            log::warn!(
+                "Cannot promote cancel-replace for {client_order_id} from fill: no target \
+                 or cached price; buffering until the replacement ACCEPTED arrives",
+            );
+            state.buffer_fill(client_order_id, report.clone());
+            return DispatchOutcome::Tracked;
+        };
+        let updated_quantity = target.unwrap_or(identity.quantity);
+        promote_cancel_replace(
+            client_order_id,
+            &identity,
+            state,
+            emitter,
+            report.venue_order_id,
+            report.account_id,
+            price,
+            updated_quantity,
+            None,
+            report.ts_event,
+            ts_init,
+        );
+        // Re-read the identity advanced by the promotion (quantity and price)
+        if let Some(updated) = state.lookup_identity(&client_order_id) {
+            identity = updated;
+        }
+
+        if let (Some(target), Some(sent_request)) = (target, sent_request) {
+            promoted_corrective = Some((target, sent_request));
+        }
+    }
 
     if state.check_and_insert_trade(report.trade_id) {
         log::debug!(
@@ -484,6 +694,16 @@ pub fn dispatch_fill_report(
             report.trade_id
         );
         return DispatchOutcome::Tracked;
+    }
+
+    let previous = state
+        .previous_filled_qty(&client_order_id)
+        .unwrap_or_else(|| Quantity::zero(report.last_qty.precision));
+    let cumulative = previous + report.last_qty;
+
+    let is_terminal_fill = cumulative >= identity.quantity;
+    if is_terminal_fill && !claim_terminal_order(client_order_id, state, OrderStatus::Filled) {
+        return DispatchOutcome::Skip;
     }
 
     ensure_accepted_emitted(
@@ -520,14 +740,20 @@ pub fn dispatch_fill_report(
     );
     emitter.send_order_event(OrderEventAny::Filled(filled));
 
-    let previous = state
-        .previous_filled_qty(&client_order_id)
-        .unwrap_or_else(|| Quantity::zero(report.last_qty.precision));
-    let cumulative = previous + report.last_qty;
     state.record_filled_qty(client_order_id, cumulative);
 
-    if cumulative >= identity.quantity {
-        state.insert_filled(client_order_id);
+    // Cumulative now includes this fill, so the reduce sizes against the true remaining
+    if let Some((target, sent_request)) = promoted_corrective {
+        maybe_queue_corrective_reduce(
+            state,
+            client_order_id,
+            report.venue_order_id,
+            target,
+            sent_request,
+        );
+    }
+
+    if is_terminal_fill {
         state.cleanup_terminal(&client_order_id);
     }
 
@@ -562,29 +788,36 @@ fn handle_accepted(
             return DispatchOutcome::Skip;
         };
 
-        state.record_venue_order_id(client_order_id, venue_order_id);
-        state.update_identity_quantity(&client_order_id, report.quantity);
-        state.update_identity_price(&client_order_id, Some(price));
-        state.clear_pending_modify(&client_order_id);
+        // Prefer user target over venue's remaining-only `report.quantity`;
+        // fall back when no marker (external modify).
+        let target_total_qty = state.pending_modify_target_qty(&client_order_id);
+        let updated_quantity = target_total_qty.unwrap_or(report.quantity);
+        let sent_request = state.modify_request(&client_order_id);
 
-        let updated = OrderUpdated::new(
-            emitter.trader_id(),
-            identity.strategy_id,
-            identity.instrument_id,
+        promote_cancel_replace(
             client_order_id,
-            report.quantity,
-            UUID4::new(),
+            identity,
+            state,
+            emitter,
+            venue_order_id,
+            account_id,
+            price,
+            updated_quantity,
+            report.trigger_price,
             ts_event,
             ts_init,
-            false,
-            Some(venue_order_id),
-            Some(account_id),
-            Some(price),
-            report.trigger_price,
-            None,
-            false,
         );
-        emitter.send_order_event(OrderEventAny::Updated(updated));
+
+        if let (Some(target), Some(sent_request)) = (target_total_qty, sent_request) {
+            maybe_queue_corrective_reduce(
+                state,
+                client_order_id,
+                venue_order_id,
+                target,
+                sent_request,
+            );
+        }
+
         return DispatchOutcome::Tracked;
     }
 
@@ -614,6 +847,163 @@ fn handle_accepted(
     );
     emitter.send_order_event(OrderEventAny::Accepted(accepted));
     DispatchOutcome::Tracked
+}
+
+// Shared by the ACCEPTED branch and the fill path (dropped-ACCEPTED recovery) so the
+// cancel-replace binding is recovered from whichever arrives first. See GH-3827, GH-3972.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "promotion needs the full OrderUpdated field set, sourced from two report shapes"
+)]
+fn promote_cancel_replace(
+    client_order_id: ClientOrderId,
+    identity: &OrderIdentity,
+    state: &WsDispatchState,
+    emitter: &ExecutionEventEmitter,
+    venue_order_id: VenueOrderId,
+    account_id: AccountId,
+    price: Price,
+    quantity: Quantity,
+    trigger_price: Option<Price>,
+    ts_event: UnixNanos,
+    ts_init: UnixNanos,
+) {
+    state.record_venue_order_id(client_order_id, venue_order_id);
+    state.update_identity_quantity(&client_order_id, quantity);
+    state.update_identity_price(&client_order_id, Some(price));
+    state.clear_pending_modify(&client_order_id);
+
+    let updated = OrderUpdated::new(
+        emitter.trader_id(),
+        identity.strategy_id,
+        identity.instrument_id,
+        client_order_id,
+        quantity,
+        UUID4::new(),
+        ts_event,
+        ts_init,
+        false,
+        Some(venue_order_id),
+        Some(account_id),
+        Some(price),
+        trigger_price,
+        None,
+        false,
+    );
+    emitter.send_order_event(OrderEventAny::Updated(updated));
+
+    // Drain fills buffered before the binding advanced. Bypasses
+    // `handle_execution_report`; FIFO-bounded caches make any residue benign.
+    let buffered = state.drain_buffered_fills(&client_order_id);
+    for fill in buffered {
+        dispatch_order_fill(&fill, state, emitter, ts_init);
+    }
+}
+
+/// Promotes a cancel-replace replacement surfaced by a query during an in-flight modify.
+///
+/// When the query returns the replacement leg (`Accepted`, `venue_order_id` diverging from the
+/// cached one, modify tracked), emits the `OrderUpdated` that rebinds the order, so a dropped
+/// replacement `Accepted` with no fill cannot strand the binding on the canceled leg. Returns
+/// `true` when promoted; the caller still forwards the report so the engine confirms the order.
+pub fn promote_replacement_from_query(
+    report: &OrderStatusReport,
+    state: &WsDispatchState,
+    emitter: &ExecutionEventEmitter,
+    ts_init: UnixNanos,
+) -> bool {
+    if report.order_status != OrderStatus::Accepted {
+        return false;
+    }
+
+    let Some(client_order_id) = report.client_order_id else {
+        return false;
+    };
+
+    if state.pending_modify(&client_order_id).is_none() {
+        return false;
+    }
+
+    let Some(cached_voi) = state.cached_venue_order_id(&client_order_id) else {
+        return false;
+    };
+
+    if report.venue_order_id == cached_voi {
+        return false;
+    }
+
+    let Some(identity) = state.lookup_identity(&client_order_id) else {
+        return false;
+    };
+
+    let Some(price) = report.price.or(identity.price) else {
+        log::warn!(
+            "Cannot promote cancel-replace from query for {client_order_id}: \
+             no price on report and no cached price on identity",
+        );
+        return false;
+    };
+
+    // Prefer the user target over the venue's remaining-only `report.quantity`
+    let updated_quantity = state
+        .pending_modify_target_qty(&client_order_id)
+        .unwrap_or(report.quantity);
+
+    promote_cancel_replace(
+        client_order_id,
+        &identity,
+        state,
+        emitter,
+        report.venue_order_id,
+        report.account_id,
+        price,
+        updated_quantity,
+        report.trigger_price,
+        report.ts_last,
+        ts_init,
+    );
+
+    log::debug!("Promoted cancel-replace replacement for {client_order_id} from query");
+
+    true
+}
+
+// Queue a corrective reduce when a fill that raced the modify left the replacement
+// oversized. Reached from both promotion paths; the engine overfill guard backstops.
+fn maybe_queue_corrective_reduce(
+    state: &WsDispatchState,
+    client_order_id: ClientOrderId,
+    venue_order_id: VenueOrderId,
+    target: Quantity,
+    sent_request: HyperliquidExecPlaceOrderRequest,
+) {
+    let Ok(new_oid) = venue_order_id.as_str().parse::<u64>() else {
+        return;
+    };
+
+    let filled = state
+        .previous_filled_qty(&client_order_id)
+        .unwrap_or_else(|| Quantity::zero(target.precision));
+    if filled >= target {
+        return;
+    }
+
+    let remaining = (target - filled).as_decimal().normalize();
+
+    let sent_size = sent_request.size;
+    if sent_size > remaining {
+        let mut corrective = sent_request;
+        corrective.size = remaining;
+
+        state.mark_pending_modify(client_order_id, venue_order_id, target);
+        state.stash_modify_request(client_order_id, corrective.clone());
+        state.queue_corrective(client_order_id, new_oid, corrective);
+
+        log::warn!(
+            "Cancel-replace left {client_order_id} oversized on {venue_order_id} \
+             (sent {sent_size}, remaining {remaining}); queuing corrective reduce",
+        );
+    }
 }
 
 fn handle_triggered(
@@ -686,15 +1076,19 @@ fn handle_canceled(
 
     // Cancel-before-accept race: an in-flight modify may deliver
     // CANCELED(old_voi) before the replacement ACCEPTED(new_voi). The
-    // pending marker (set only after a confirmed modify HTTP success) lets
-    // us suppress the old leg so the later ACCEPTED can route through
-    // OrderUpdated. See GH-3827.
+    // pending marker (set before the modify HTTP call and cleared on
+    // failure) lets us suppress the old leg so the later ACCEPTED can route
+    // through OrderUpdated. See GH-3827.
     if let Some(pending_old) = state.pending_modify(&client_order_id)
         && pending_old == venue_order_id
     {
         log::debug!(
             "Skipping cancel-before-accept leg for {client_order_id}: venue_order_id={venue_order_id}",
         );
+        return DispatchOutcome::Skip;
+    }
+
+    if !claim_terminal_order(client_order_id, state, report.order_status) {
         return DispatchOutcome::Skip;
     }
 
@@ -723,9 +1117,6 @@ fn handle_canceled(
     );
     emitter.send_order_event(OrderEventAny::Canceled(canceled));
 
-    // Retain the filled marker so any late replay of the cancel is
-    // suppressed even after the identity state has been cleaned up.
-    state.insert_filled(client_order_id);
     state.cleanup_terminal(&client_order_id);
     DispatchOutcome::Tracked
 }
@@ -738,6 +1129,10 @@ fn handle_expired(
     emitter: &ExecutionEventEmitter,
     ts_init: UnixNanos,
 ) -> DispatchOutcome {
+    if !claim_terminal_order(client_order_id, state, report.order_status) {
+        return DispatchOutcome::Skip;
+    }
+
     ensure_accepted_emitted(
         client_order_id,
         report.venue_order_id,
@@ -762,7 +1157,6 @@ fn handle_expired(
         Some(report.account_id),
     );
     emitter.send_order_event(OrderEventAny::Expired(expired));
-    state.insert_filled(client_order_id);
     state.cleanup_terminal(&client_order_id);
     DispatchOutcome::Tracked
 }
@@ -775,6 +1169,10 @@ fn handle_rejected(
     emitter: &ExecutionEventEmitter,
     ts_init: UnixNanos,
 ) -> DispatchOutcome {
+    if !claim_terminal_order(client_order_id, state, report.order_status) {
+        return DispatchOutcome::Skip;
+    }
+
     let reason = report
         .cancel_reason
         .clone()
@@ -793,9 +1191,21 @@ fn handle_rejected(
         false,
     );
     emitter.send_order_event(OrderEventAny::Rejected(rejected));
-    state.insert_filled(client_order_id);
     state.cleanup_terminal(&client_order_id);
     DispatchOutcome::Tracked
+}
+
+fn claim_terminal_order(
+    client_order_id: ClientOrderId,
+    state: &WsDispatchState,
+    status: OrderStatus,
+) -> bool {
+    let claimed = state.insert_filled(client_order_id);
+    if !claimed {
+        log::debug!("Skipping duplicate terminal event for {client_order_id}: status={status:?}",);
+    }
+
+    claimed
 }
 
 fn handle_filled_marker(
@@ -803,7 +1213,7 @@ fn handle_filled_marker(
     _state: &WsDispatchState,
 ) -> DispatchOutcome {
     // A status-only `FILLED` marker does not carry fill data; the actual
-    // `OrderFilled` is emitted from `dispatch_fill_report` when the matching
+    // `OrderFilled` is emitted from `dispatch_order_fill` when the matching
     // trade arrives. Do *not* set `filled_orders` here, otherwise the
     // follow-up fill would be classified as a stale replay and dropped
     // before the terminal `OrderFilled` event can be emitted. The fill
@@ -855,8 +1265,12 @@ fn ensure_accepted_emitted(
 mod tests {
     use nautilus_model::identifiers::{ClientOrderId, InstrumentId, StrategyId, TradeId};
     use rstest::rstest;
+    use rust_decimal::Decimal;
 
     use super::*;
+    use crate::http::models::{
+        HyperliquidExecLimitParams, HyperliquidExecOrderKind, HyperliquidExecTif,
+    };
 
     fn make_identity() -> OrderIdentity {
         OrderIdentity {
@@ -929,12 +1343,16 @@ mod tests {
         let state = WsDispatchState::new();
         let cid = ClientOrderId::new("O-010");
         let voi = VenueOrderId::new("v-1");
+        let target_qty = Quantity::from("0.0001");
 
         assert!(state.pending_modify(&cid).is_none());
-        state.mark_pending_modify(cid, voi);
+        assert!(state.pending_modify_target_qty(&cid).is_none());
+        state.mark_pending_modify(cid, voi, target_qty);
         assert_eq!(state.pending_modify(&cid), Some(voi));
+        assert_eq!(state.pending_modify_target_qty(&cid), Some(target_qty));
         state.clear_pending_modify(&cid);
         assert!(state.pending_modify(&cid).is_none());
+        assert!(state.pending_modify_target_qty(&cid).is_none());
     }
 
     #[rstest]
@@ -943,12 +1361,44 @@ mod tests {
         let cid = ClientOrderId::new("O-020");
         state.register_identity(cid, make_identity());
         state.insert_accepted(cid);
+        state.mark_pending_modify(cid, VenueOrderId::new("v-1"), Quantity::from("0.0001"));
         state.insert_filled(cid);
         state.cleanup_terminal(&cid);
 
         assert!(state.lookup_identity(&cid).is_none());
         assert!(!state.emitted_accepted.contains(&cid));
+        assert!(state.pending_modify(&cid).is_none());
+        assert!(state.pending_modify_target_qty(&cid).is_none());
         // `filled_orders` outlives `cleanup_terminal` so replays stay suppressed.
         assert!(state.filled_orders.contains(&cid));
+    }
+
+    #[rstest]
+    fn test_cleanup_terminal_clears_corrective_state() {
+        let state = WsDispatchState::new();
+        let cid = ClientOrderId::new("O-021");
+        let request = HyperliquidExecPlaceOrderRequest {
+            asset: 0,
+            is_buy: true,
+            price: "100".parse::<Decimal>().unwrap(),
+            size: Decimal::from(1),
+            reduce_only: false,
+            kind: HyperliquidExecOrderKind::Limit {
+                limit: HyperliquidExecLimitParams {
+                    tif: HyperliquidExecTif::Gtc,
+                },
+            },
+            cloid: None,
+        };
+        state.mark_pending_modify(cid, VenueOrderId::new("v-1"), Quantity::from("1"));
+        state.stash_modify_request(cid, request.clone());
+        state.queue_corrective(cid, 1, request);
+        assert!(state.modify_request(&cid).is_some());
+
+        state.cleanup_terminal(&cid);
+
+        assert!(state.modify_request(&cid).is_none());
+        assert!(state.take_corrective(&cid).is_none());
+        assert!(state.pending_modify(&cid).is_none());
     }
 }

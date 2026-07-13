@@ -15,16 +15,19 @@
 
 //! Example demonstrating dynamic instrument discovery and trade subscription.
 //!
-//! Uses an [`EventSlugFilter`] on the config so the provider only loads
-//! "Presidential Election Winner 2028" instruments from the Gamma API (instead
-//! of all 72K+ markets). A custom [`DataActor`] then reads the discovered
-//! instruments from the cache and subscribes to live trades for each.
+//! Uses an [`EventSlugFilter`] on the config so the provider only loads the
+//! configured event's instruments from the Gamma API (instead of all 72K+
+//! markets). A custom [`DataActor`] then reads the discovered instruments from
+//! the cache and subscribes to live trades for each.
 //!
-//! # Usage
+//! Edit the constants below to change the target event.
 //!
-//! ```sh
-//! cargo run --example polymarket-election-subscriber --package nautilus-polymarket --features examples
-//! ```
+//! Run with: `cargo run --example polymarket-election-subscriber --package nautilus-polymarket --features examples`
+//!
+//! Credentials are read from the environment when set:
+//! - `POLYMARKET_API_KEY`.
+//! - `POLYMARKET_API_SECRET`.
+//! - `POLYMARKET_PASSPHRASE`.
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -38,18 +41,22 @@ use nautilus_common::{
 use nautilus_live::node::LiveNode;
 use nautilus_model::{
     data::TradeTick,
-    identifiers::{ClientId, InstrumentId, TraderId, Venue},
+    identifiers::{ClientId, InstrumentId, TraderId},
     instruments::{Instrument, InstrumentAny},
 };
-use nautilus_network::websocket::TransportBackend;
 use nautilus_polymarket::{
-    common::models::PolymarketLabel, config::PolymarketDataClientConfig,
-    factories::PolymarketDataClientFactory, filters::EventSlugFilter,
+    common::{
+        consts::{POLYMARKET_CLIENT_ID, POLYMARKET_VENUE},
+        models::PolymarketLabel,
+    },
+    config::PolymarketDataClientConfig,
+    factories::PolymarketDataClientFactory,
+    filters::EventSlugFilter,
 };
 
-// ---------------------------------------------------------------------------
-// Custom DataActor: discovers instruments from cache and subscribes to trades
-// ---------------------------------------------------------------------------
+const TRADER_ID: &str = "TESTER-001";
+const NODE_NAME: &str = "POLYMARKET-ELECTION-SUB-001";
+const EVENT_SLUG: &str = "presidential-election-winner-2028";
 
 /// Configuration for the election trade subscriber actor.
 #[derive(Debug, Clone)]
@@ -84,7 +91,7 @@ nautilus_actor!(ElectionTradeSubscriber);
 
 impl DataActor for ElectionTradeSubscriber {
     fn on_start(&mut self) -> anyhow::Result<()> {
-        let venue = Venue::from("POLYMARKET");
+        let venue = *POLYMARKET_VENUE;
         let client_id = Some(self.config.client_id);
 
         // Read instruments from cache and build human-readable label index
@@ -94,7 +101,6 @@ impl DataActor for ElectionTradeSubscriber {
             .iter()
             .map(|i| (i.id(), PolymarketLabel::from_instrument(i)))
             .collect();
-        drop(cache); // Release borrow before calling subscribe methods
 
         log::info!(
             "Found {} instruments from filtered provider, subscribing to trades",
@@ -144,26 +150,20 @@ impl DataActor for ElectionTradeSubscriber {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Main: wire up LiveNode with filtered factory + custom actor
-// ---------------------------------------------------------------------------
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
 
     let environment = Environment::Live;
-    let trader_id = TraderId::from("TESTER-001");
-    let client_id = ClientId::new("POLYMARKET");
+    let trader_id = TraderId::from(TRADER_ID);
+    let client_id = *POLYMARKET_CLIENT_ID;
 
-    let event_filter =
-        EventSlugFilter::from_slugs(vec!["presidential-election-winner-2028".to_string()]);
+    let event_filter = EventSlugFilter::from_slugs(vec![EVENT_SLUG.to_string()]);
 
     let client_factory = PolymarketDataClientFactory;
 
     let polymarket_config = PolymarketDataClientConfig {
         filters: vec![Arc::new(event_filter)],
-        transport_backend: TransportBackend::Sockudo,
         ..Default::default()
     };
 
@@ -173,7 +173,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let mut node = LiveNode::builder(trader_id, environment)?
-        .with_name("POLYMARKET-ELECTION-SUB-001".to_string())
+        .with_name(NODE_NAME.to_string())
         .with_logging(log_config)
         .with_delay_post_stop_secs(2)
         .add_data_client(None, Box::new(client_factory), Box::new(polymarket_config))?

@@ -20,6 +20,11 @@ NautilusTrader operates primarily on granular order book data for the highest re
 in execution simulations. Backtests can also run on any supported market data type,
 depending on the desired simulation fidelity.
 
+When data flows over the message bus, topic-addressable data stays under the `data`
+root. Live streams use `data.<kind>...`; the data pipeline path uses
+`data.pipeline.<kind>...`. See [Message Bus](message_bus.md#topic-hierarchy) for
+the topic hierarchy.
+
 ## Order books
 
 A high-performance order book implemented in Rust is available to maintain order book state based on provided data.
@@ -57,57 +62,11 @@ delta is emitted.
 
 ## Instruments
 
-NautilusTrader supports a variety of instrument types across spot, derivatives, and specialty markets:
+All market data belongs to an instrument. The instrument definition supplies the
+identity, precision, price and size increments, limits, currencies, and contract
+semantics that make the data meaningful.
 
-```mermaid
-flowchart TD
-    I[Instrument Types]
-    I --> Spot
-    I --> Derivatives
-    I --> Other
-
-    Spot --> Equity
-    Spot --> CurrencyPair
-    Spot --> Commodity
-    Spot --> IndexInstrument
-
-    Derivatives --> Futures
-    Derivatives --> Options
-    Derivatives --> Cfd
-
-    Futures --> FuturesContract
-    Futures --> FuturesSpread
-    Futures --> CryptoFuture
-    Futures --> CryptoPerpetual
-    Futures --> PerpetualContract
-
-    Options --> OptionContract
-    Options --> OptionSpread
-    Options --> CryptoOption
-    Options --> BinaryOption
-
-    Other --> BettingInstrument
-    Other --> SyntheticInstrument
-```
-
-| Instrument           | Description                                                                      |
-|----------------------|----------------------------------------------------------------------------------|
-| `Equity`             | Generic equity instrument.                                                       |
-| `CurrencyPair`       | Currency pair in a spot/cash market.                                             |
-| `Commodity`          | Commodity in a spot/cash market.                                                 |
-| `IndexInstrument`    | Spot index (reference price, not directly tradable).                             |
-| `FuturesContract`    | Generic deliverable futures contract.                                            |
-| `FuturesSpread`      | Deliverable futures spread.                                                      |
-| `CryptoFuture`       | Deliverable futures with crypto assets as underlying and settlement.             |
-| `CryptoPerpetual`    | Crypto perpetual futures (perpetual swap).                                       |
-| `PerpetualContract`  | Asset‑class agnostic perpetual swap (any underlying).                            |
-| `OptionContract`     | Generic option contract.                                                         |
-| `OptionSpread`       | Generic option spread.                                                           |
-| `CryptoOption`       | Crypto option contract.                                                          |
-| `BinaryOption`       | Binary option instrument.                                                        |
-| `Cfd`                | Contract for Difference (CFD).                                                   |
-| `BettingInstrument`  | Instrument in a betting market.                                                  |
-| `SyntheticInstrument`| Synthetic instrument with prices derived from component instruments via formula. |
+See [Instruments](instruments/) for the instrument taxonomy and per-type guides.
 
 ## Bars and aggregation
 
@@ -210,8 +169,21 @@ NautilusTrader defines a unique *bar type* (`BarType` class) based on the follow
   - `step`: Defines the interval or frequency of each bar.
   - `aggregation`: Specifies the method used for data aggregation (see the above table).
   - `price_type`: Indicates the price basis of the bar (e.g., bid, ask, mid, last).
-- **Aggregation Source** (`AggregationSource`): Indicates whether the bar was aggregated internally (within Nautilus).
-- or externally (by a trading venue or data provider).
+- **Aggregation Source** (`AggregationSource`): Indicates whether the bar was aggregated internally (within Nautilus)
+  or externally (by a trading venue or data provider).
+
+:::note
+`BarSpecification` validates fixed-subunit time aggregations so bars align cleanly with their
+parent clock or calendar unit. `MILLISECOND` steps must divide 1000 and be less than 1000;
+`SECOND` and `MINUTE` steps must divide 60 and be less than 60; `HOUR` steps must divide 24 and
+be less than 24; and `MONTH` steps must divide 12 and be less than 12. Use the next larger
+aggregation when the step equals a parent unit, such as `1-HOUR` instead of `60-MINUTE`.
+`DAY`, `WEEK`, `YEAR`, threshold, information, and `RENKO` bars are not restricted by this
+fixed-subunit rule.
+
+A future version will allow advanced users to override this validation for arbitrary bar periods
+that do not align to clock or calendar boundaries.
+:::
 
 Bar types can also be classified as either *standard* or *composite*:
 
@@ -356,11 +328,25 @@ NautilusTrader provides two distinct operations for working with bars:
 - **`request_aggregated_bars()`**: Fetches historical data for a dependency-ordered list of bar
   types, building internal bars on the fly.
 - **`subscribe_bars()`**: Establishes a real-time data feed processed by the `on_bar()` handler.
+  It expects the instrument for the `BarType` to already be loaded in the cache.
+
+The same cache precondition applies to quote, trade, order book, and other live
+subscriptions.
 
 These methods work together in a typical workflow:
 
 1. First, `request_bars()` loads historical data to initialize indicators or state of strategy with past market behavior.
 2. Then, `subscribe_bars()` ensures the strategy continues receiving new bars as they form in real-time.
+
+:::tip[Request and subscribe ordering]
+
+When `validate_data_sequence=True` (common with live adapters such as Interactive Brokers),
+calling `subscribe_bars()` immediately after `request_bars()` can cause a race condition:
+live bars arriving before the historical batch may cause the validator to discard older
+warmup bars. To avoid it, pass a `callback` to `request_bars()` and subscribe from inside
+it, as shown in the example below.
+
+:::
 
 Example usage in `on_start()`:
 
@@ -375,11 +361,14 @@ def on_start(self) -> None:
 
     # Request historical data to initialize indicators
     # These bars will be delivered to the on_historical_data(...) handler in strategy
-    self.request_bars(bar_type, start=start)
-
-    # Subscribe to real-time updates
-    # New bars will be delivered to the on_bar(...) handler in strategy
-    self.subscribe_bars(bar_type)
+    # Subscribe to real-time bars as a callback to the request so the live stream
+    # only starts once history is loaded (see tip above)
+    # New live bars will be delivered to the on_bar(...) handler in strategy
+    self.request_bars(
+        bar_type,
+        start=start,
+        callback=lambda _: self.subscribe_bars(bar_type),
+    )
 ```
 
 Required handlers in your strategy to receive the data:
@@ -444,9 +433,9 @@ self.register_indicator_for_bars(bar_type, self.ema)
 ### Performance considerations
 
 Bar aggregators track OHLC prices via the fixed-point `Price` type. Threshold comparisons for
-tick and volume aggregators use integer arithmetic, while value-based and imbalance/runs aggregators
-currently use `f64` for notional value and signed accumulation (these are being migrated to
-fixed-point integer arithmetic). The choice of aggregation method has a modest impact on per-update
+tick and volume aggregators, including their imbalance and runs variants, use integer arithmetic,
+while value-based aggregators (value, value imbalance, and value runs) currently use `f64` for
+notional value and signed accumulation (these are being migrated to fixed-point integer arithmetic). The choice of aggregation method has a modest impact on per-update
 overhead:
 
 - **Time bars** are the most efficient for high-throughput data. The aggregator accumulates
@@ -502,6 +491,7 @@ These timestamps serve distinct purposes and help maintain precise timing inform
 | `QuoteTick`      | Time when quote occurred at the exchange.             | Time when Nautilus received the quote data. |
 | `OrderBookDelta` | Time when order book update occurred at the exchange. | Time when Nautilus received the order book update. |
 | `Bar`            | Time of the bar's closing (exact minute/hour).        | Time when Nautilus generated (for internal bars) or received the bar data (for external bars). |
+| `DefiData`       | Time the block or pool event occurred.                | Time when Nautilus created the object from the chain data. |
 | `OrderFilled`    | Time when order was filled at the exchange.           | Time when Nautilus received and processed the fill confirmation. |
 | `OrderCanceled`  | Time when cancellation was processed at the exchange. | Time when Nautilus received and processed the cancellation confirmation. |
 | `NewsEvent`      | Time when the news was published.                     | Time when the event object was created (if internal event) or received (if external event) in Nautilus. |
@@ -530,6 +520,8 @@ The dual timestamp system enables latency analysis within the platform:
 #### Backtesting environment
 
 - Data is ordered by `ts_init` using a stable sort.
+- DeFi data (`DefiData`) breaks `ts_init` ties by on-chain position (block number, transaction
+  index, log index) so events from the same block replay in canonical chain order.
 - This behavior ensures deterministic processing order and simulates realistic system behavior, including latencies.
 
 #### Live trading environment
@@ -1430,7 +1422,7 @@ The NautilusTrader data catalog provides market data management:
 
 - **Dual Backend**: Rust performance + Python flexibility.
 - **Multi-Protocol**: Local, S3, GCS, Azure storage.
-- **Streaming**: Feather → Parquet conversion pipeline.
+- **Streaming**: Feather -> Parquet conversion pipeline.
 - **Operations**: Reset file names, consolidate data, period-based organization.
 
 **Key use cases**:
@@ -1913,7 +1905,7 @@ class GreeksData(Data):
 
 ## Related guides
 
-- [Instruments](instruments.md) - Financial instruments referenced by data.
+- [Instruments](instruments/) - Financial instruments referenced by data.
 - [Options](options.md) - Option instruments, chain subscriptions, and strike filtering.
 - [Greeks](greeks.md) - Venue-provided and locally computed option Greeks.
 - [Cache](cache.md) - Data storage and retrieval.

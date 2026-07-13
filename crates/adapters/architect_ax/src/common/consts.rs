@@ -17,11 +17,17 @@
 
 use std::sync::LazyLock;
 
-use nautilus_model::identifiers::Venue;
+use nautilus_model::identifiers::{ClientId, Venue};
 use ustr::Ustr;
 
+/// Venue identifier string.
 pub const AX: &str = "AX";
+
+/// Static venue instance.
 pub static AX_VENUE: LazyLock<Venue> = LazyLock::new(|| Venue::new(Ustr::from(AX)));
+
+/// Static client ID instance.
+pub static AX_CLIENT_ID: LazyLock<ClientId> = LazyLock::new(|| ClientId::new(Ustr::from(AX)));
 
 /// Order tag identifying orders placed by NautilusTrader.
 pub const AX_NAUTILUS_TAG: &str = "Nautilus";
@@ -52,5 +58,8 @@ pub const AX_ACCOUNT_REGISTRATION_TIMEOUT_SECS: f64 = 30.0;
 /// Default lookback for funding rate polling (days).
 pub const AX_FUNDING_RATE_LOOKBACK_DAYS: i64 = 7;
 
+/// Maximum lookback span (days) accepted by the AX `/fills` endpoint.
+pub const AX_FILLS_MAX_LOOKBACK_DAYS: i64 = 7;
+
 // Error message substrings for detecting specific rejection reasons
-pub const AX_POST_ONLY_REJECT: &str = "Order may participate but not initiate in the market";
+pub const AX_POST_ONLY_REJECT: &str = "post-only order would cross the book";

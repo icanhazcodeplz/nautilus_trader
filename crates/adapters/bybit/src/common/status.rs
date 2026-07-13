@@ -89,7 +89,7 @@ pub fn diff_and_emit_statuses(
     }
 }
 
-fn emit_status(
+pub(crate) fn emit_status(
     sender: &tokio::sync::mpsc::UnboundedSender<DataEvent>,
     instrument_id: InstrumentId,
     action: MarketStatusAction,
@@ -190,7 +190,7 @@ mod tests {
             UnixNanos::default(),
         );
 
-        assert!(rx.try_recv().is_err());
+        rx.try_recv().unwrap_err();
     }
 
     #[rstest]

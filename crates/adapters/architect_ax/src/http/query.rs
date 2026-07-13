@@ -147,6 +147,29 @@ impl GetFundingRatesParams {
     }
 }
 
+/// Parameters for the GET /fills endpoint.
+///
+/// # References
+/// - <https://docs.architect.exchange/api-reference/order-management/get-order-fills>
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct GetFillsParams {
+    /// Start timestamp in nanoseconds.
+    pub start_timestamp_ns: i64,
+    /// End timestamp in nanoseconds.
+    pub end_timestamp_ns: i64,
+}
+
+impl GetFillsParams {
+    /// Creates a new [`GetFillsParams`].
+    #[must_use]
+    pub fn new(start_timestamp_ns: i64, end_timestamp_ns: i64) -> Self {
+        Self {
+            start_timestamp_ns,
+            end_timestamp_ns,
+        }
+    }
+}
+
 /// Parameters for the GET /transactions endpoint.
 ///
 /// # References
@@ -209,17 +232,17 @@ impl GetBookParams {
 
 /// Parameters for the GET /order-status endpoint.
 ///
-/// Exactly one of `order_id` or `client_order_id` must be provided.
+/// Exactly one of `oid` or `cid` must be provided.
 ///
 /// # References
 /// - <https://docs.architect.exchange/api-reference/order-management/get-order-status>
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct GetOrderStatusParams {
     /// Order ID (e.g. "O-01ARZ3NDEKTSV4RRFFQ69G5FAV").
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "oid", skip_serializing_if = "Option::is_none")]
     pub order_id: Option<String>,
     /// Client order ID (64-bit integer).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "cid", skip_serializing_if = "Option::is_none")]
     pub client_order_id: Option<u64>,
 }
 
@@ -331,6 +354,14 @@ mod tests {
     }
 
     #[rstest]
+    fn test_get_fills_params_serialization() {
+        let params = GetFillsParams::new(1000000000, 2000000000);
+        let qs = serde_urlencoded::to_string(&params).unwrap();
+        assert!(qs.contains("start_timestamp_ns=1000000000"));
+        assert!(qs.contains("end_timestamp_ns=2000000000"));
+    }
+
+    #[rstest]
     fn test_get_trades_params_serialization() {
         let params = GetTradesParams::new(Ustr::from("BTC-PERP"), Some(50));
         let qs = serde_urlencoded::to_string(&params).unwrap();
@@ -357,14 +388,13 @@ mod tests {
     fn test_get_order_status_by_order_id_serialization() {
         let params = GetOrderStatusParams::by_order_id("O-01ARZ3NDEKTSV4RRFFQ69G5FAV");
         let qs = serde_urlencoded::to_string(&params).unwrap();
-        assert!(qs.contains("order_id=O-01ARZ3NDEKTSV4RRFFQ69G5FAV"));
-        assert!(!qs.contains("client_order_id"));
+        assert_eq!(qs, "oid=O-01ARZ3NDEKTSV4RRFFQ69G5FAV");
     }
 
     #[rstest]
     fn test_get_order_status_by_client_order_id_serialization() {
         let params = GetOrderStatusParams::by_client_order_id(12345);
         let qs = serde_urlencoded::to_string(&params).unwrap();
-        assert_eq!(qs, "client_order_id=12345");
+        assert_eq!(qs, "cid=12345");
     }
 }

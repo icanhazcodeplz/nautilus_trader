@@ -37,7 +37,7 @@ use serde::{Deserialize, Serialize};
 )]
 #[cfg_attr(
     feature = "python",
-    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.binance")
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.adapters.binance")
 )]
 pub enum BinanceProductType {
     /// Spot trading (api.binance.com).
@@ -128,12 +128,12 @@ impl Display for BinanceProductType {
 )]
 #[cfg_attr(
     feature = "python",
-    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.binance")
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.adapters.binance")
 )]
 pub enum BinanceEnvironment {
-    /// Production/mainnet environment.
+    /// Live exchange environment.
     #[default]
-    Mainnet,
+    Live,
     /// Testnet environment.
     Testnet,
     /// Demo trading environment.
@@ -198,7 +198,7 @@ impl From<BinanceSide> for OrderSide {
 )]
 #[cfg_attr(
     feature = "python",
-    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.binance")
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.adapters.binance")
 )]
 pub enum BinancePositionSide {
     /// Single position mode (both).
@@ -229,7 +229,7 @@ pub enum BinancePositionSide {
 )]
 #[cfg_attr(
     feature = "python",
-    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.binance")
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.adapters.binance")
 )]
 pub enum BinanceMarginType {
     /// Cross margin.
@@ -585,6 +585,8 @@ impl From<BinanceTradingStatus> for MarketStatusAction {
 pub enum BinanceContractStatus {
     /// Trading is active.
     Trading,
+    /// Trading is halted for an otherwise active contract.
+    TradingHalt,
     /// Pending trading.
     PendingTrading,
     /// Pre-delivering.
@@ -614,6 +616,7 @@ impl From<BinanceContractStatus> for MarketStatusAction {
     fn from(status: BinanceContractStatus) -> Self {
         match status {
             BinanceContractStatus::Trading => Self::Trading,
+            BinanceContractStatus::TradingHalt => Self::Halt,
             BinanceContractStatus::PendingTrading => Self::PreOpen,
             BinanceContractStatus::PreDelivering
             | BinanceContractStatus::PreDelisting
@@ -783,7 +786,7 @@ pub enum BinanceFilterType {
 impl Display for BinanceEnvironment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Mainnet => write!(f, "Mainnet"),
+            Self::Live => write!(f, "Live"),
             Self::Testnet => write!(f, "Testnet"),
             Self::Demo => write!(f, "Demo"),
         }
@@ -997,6 +1000,16 @@ mod tests {
     }
 
     #[rstest]
+    fn test_contract_status_trading_halt_deserializes_and_maps() {
+        // Binance reports `TRADING_HALT` for a temporarily halted active contract.
+        // It must deserialize to the explicit variant (not the `Unknown` fallback)
+        // and map deliberately to `Halt`.
+        let status: BinanceContractStatus = serde_json::from_str("\"TRADING_HALT\"").unwrap();
+        assert_eq!(status, BinanceContractStatus::TradingHalt);
+        assert_eq!(MarketStatusAction::from(status), MarketStatusAction::Halt);
+    }
+
+    #[rstest]
     fn test_rate_limit_enums_serialize_to_binance_strings() {
         assert_eq!(
             serde_json::to_value(BinanceRateLimitType::RequestWeight).unwrap(),
@@ -1056,6 +1069,6 @@ mod tests {
     #[case("invalid")]
     #[case("")]
     fn test_price_match_from_param_invalid(#[case] input: &str) {
-        assert!(BinancePriceMatch::from_param(input).is_err());
+        BinancePriceMatch::from_param(input).unwrap_err();
     }
 }

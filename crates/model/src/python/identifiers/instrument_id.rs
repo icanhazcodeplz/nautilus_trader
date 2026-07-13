@@ -19,7 +19,7 @@ use std::{
     str::FromStr,
 };
 
-use nautilus_core::python::{IntoPyObjectNautilusExt, to_pyvalue_err};
+use nautilus_core::python::{IntoPyObjectNautilusExt, correctness_error_to_pyvalue_err};
 use pyo3::{
     IntoPyObjectExt,
     prelude::*,
@@ -27,7 +27,11 @@ use pyo3::{
     types::{PyString, PyTuple},
 };
 
-use crate::identifiers::{InstrumentId, Symbol, Venue};
+use crate::{
+    enums::InstrumentClass,
+    identifiers::{InstrumentId, Symbol, Venue},
+    python::instrument_id_error_to_pyvalue_err,
+};
 
 #[pymethods]
 #[pyo3_stub_gen::derive::gen_stub_pymethods]
@@ -48,14 +52,14 @@ impl InstrumentId {
                 .cast::<PyString>()?
                 .extract::<&str>()?,
         )
-        .map_err(to_pyvalue_err)?;
+        .map_err(correctness_error_to_pyvalue_err)?;
         self.venue = Venue::new_checked(
             py_tuple
                 .get_item(1)?
                 .cast::<PyString>()?
                 .extract::<&str>()?,
         )
-        .map_err(to_pyvalue_err)?;
+        .map_err(correctness_error_to_pyvalue_err)?;
         Ok(())
     }
 
@@ -124,11 +128,26 @@ impl InstrumentId {
     #[staticmethod]
     #[pyo3(name = "from_str")]
     fn py_from_str(value: &str) -> PyResult<Self> {
-        Self::from_str(value).map_err(to_pyvalue_err)
+        Self::from_str(value).map_err(instrument_id_error_to_pyvalue_err)
     }
 
     #[pyo3(name = "is_synthetic")]
     fn py_is_synthetic(&self) -> bool {
         self.is_synthetic()
+    }
+
+    /// Returns the parent-symbol components `(root, class)` if this id has
+    /// a recognised parent shape `<root>.<class>` in its symbol component.
+    ///
+    /// Returns `None` when the symbol has zero or more than one `.`, or when
+    /// the suffix is not a recognised `InstrumentClass` parent suffix
+    /// (see `InstrumentClass.try_from_parent_suffix`).
+    ///
+    /// Used to gate parent-style subscription fan-out: a `None` return means
+    /// the id does not refer to a parent group and must not be expanded.
+    #[pyo3(name = "parse_parent_components")]
+    fn py_parse_parent_components(&self) -> Option<(String, InstrumentClass)> {
+        self.parse_parent_components()
+            .map(|(root, class)| (root.to_string(), class))
     }
 }

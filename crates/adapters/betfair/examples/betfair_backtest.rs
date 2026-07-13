@@ -24,10 +24,14 @@
 //! The actor computes a running bid/ask quoted volume imbalance per runner.
 //! In Betfair terms: bids = "back" orders, asks = "lay" orders.
 //!
+//! Edit the constants below to change the data file and imbalance log interval.
+//!
 //! Run with: `cargo run -p nautilus-betfair --features examples --example betfair-backtest`
 //!
 //! Or pass a custom file path:
 //!   `cargo run -p nautilus-betfair --features examples --example betfair-backtest -- path/to/file.gz`
+//!
+//! No credentials are required.
 
 use std::path::PathBuf;
 
@@ -36,15 +40,21 @@ use nautilus_backtest::{
     config::{BacktestEngineConfig, SimulatedVenueConfig},
     engine::BacktestEngine,
 };
-use nautilus_betfair::loader::{BetfairDataItem, BetfairDataLoader};
+use nautilus_betfair::{
+    common::consts::BETFAIR_VENUE,
+    loader::{BetfairDataItem, BetfairDataLoader},
+};
 use nautilus_model::{
     data::{Data, OrderBookDeltas_API},
     enums::{AccountType, BookType, OmsType},
-    identifiers::{InstrumentId, Venue},
+    identifiers::InstrumentId,
     instruments::{Instrument, InstrumentAny},
     types::{Currency, Money},
 };
 use nautilus_trading::examples::actors::BookImbalanceActor;
+
+const DATA_FILE: &str = "tests/test_data/local/betfair/1.253378068.gz";
+const LOG_INTERVAL: u64 = 5000;
 
 /// Loads a Betfair `.gz` streaming file and separates instruments from data.
 ///
@@ -108,7 +118,7 @@ fn resolve_filepath() -> PathBuf {
                 .ancestors()
                 .nth(3)
                 .unwrap()
-                .join("tests/test_data/local/betfair/1.253378068.gz")
+                .join(DATA_FILE)
         },
         PathBuf::from,
     )
@@ -138,23 +148,19 @@ fn main() -> anyhow::Result<()> {
 
     engine.add_venue(
         SimulatedVenueConfig::builder()
-            .venue(Venue::from("BETFAIR"))
+            .venue(*BETFAIR_VENUE)
             .oms_type(OmsType::Netting)
             .account_type(AccountType::Cash)
             .book_type(BookType::L2_MBP)
             .starting_balances(vec![Money::from("1_000_000 GBP")])
-            .build(),
+            .build()?,
     )?;
 
     for instrument in instruments.values() {
         engine.add_instrument(instrument)?;
     }
 
-    let log_interval: u64 = std::env::var("IMBALANCE_LOG_INTERVAL")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(5000);
-    let actor = BookImbalanceActor::new(instrument_ids, log_interval, None);
+    let actor = BookImbalanceActor::new(instrument_ids, LOG_INTERVAL, None);
     engine.add_actor(actor)?;
     engine.add_data(data, None, true, true)?;
 

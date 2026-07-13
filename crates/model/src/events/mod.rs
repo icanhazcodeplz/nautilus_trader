@@ -16,7 +16,9 @@
 //! Events for the trading domain model.
 
 pub mod account;
+pub mod funding;
 pub mod order;
+pub mod portfolio;
 pub mod position;
 
 use nautilus_core::UnixNanos;
@@ -25,16 +27,33 @@ use crate::data::HasTsInit;
 // Re-exports
 pub use crate::events::{
     account::state::AccountState,
+    funding::settlement::FundingSettlement,
     order::{
-        OrderEvent, OrderEventType, accepted::OrderAccepted, accepted_batch::OrderAcceptedBatch,
-        any::OrderEventAny, cancel_rejected::OrderCancelRejected, canceled::OrderCanceled,
-        canceled_batch::OrderCanceledBatch, denied::OrderDenied, emulated::OrderEmulated,
-        expired::OrderExpired, filled::OrderFilled, initialized::OrderInitialized,
-        modify_rejected::OrderModifyRejected, pending_cancel::OrderPendingCancel,
-        pending_update::OrderPendingUpdate, rejected::OrderRejected, released::OrderReleased,
-        snapshot::OrderSnapshot, submitted::OrderSubmitted, submitted_batch::OrderSubmittedBatch,
-        triggered::OrderTriggered, updated::OrderUpdated,
+        OrderEvent, OrderEventType,
+        accepted::OrderAccepted,
+        accepted_batch::OrderAcceptedBatch,
+        any::OrderEventAny,
+        cancel_rejected::OrderCancelRejected,
+        canceled::OrderCanceled,
+        canceled_batch::OrderCanceledBatch,
+        denied::OrderDenied,
+        denied_reason::{OrderDeniedCode, OrderDeniedReason},
+        emulated::OrderEmulated,
+        expired::OrderExpired,
+        filled::OrderFilled,
+        initialized::OrderInitialized,
+        modify_rejected::OrderModifyRejected,
+        pending_cancel::OrderPendingCancel,
+        pending_update::OrderPendingUpdate,
+        rejected::OrderRejected,
+        released::OrderReleased,
+        snapshot::OrderSnapshot,
+        submitted::OrderSubmitted,
+        submitted_batch::OrderSubmittedBatch,
+        triggered::OrderTriggered,
+        updated::OrderUpdated,
     },
+    portfolio::snapshot::PortfolioSnapshot,
     position::{
         PositionEvent, adjusted::PositionAdjusted, changed::PositionChanged,
         closed::PositionClosed, opened::PositionOpened, snapshot::PositionSnapshot,
@@ -42,6 +61,12 @@ pub use crate::events::{
 };
 
 impl HasTsInit for AccountState {
+    fn ts_init(&self) -> UnixNanos {
+        self.ts_init
+    }
+}
+
+impl HasTsInit for FundingSettlement {
     fn ts_init(&self) -> UnixNanos {
         self.ts_init
     }
@@ -179,6 +204,12 @@ impl HasTsInit for PositionSnapshot {
     }
 }
 
+impl HasTsInit for PortfolioSnapshot {
+    fn ts_init(&self) -> UnixNanos {
+        self.ts_init
+    }
+}
+
 crate::impl_catalog_path_prefix!(AccountState, "account_state");
 crate::impl_catalog_path_prefix!(OrderInitialized, "order_initialized");
 crate::impl_catalog_path_prefix!(OrderDenied, "order_denied");
@@ -202,3 +233,4 @@ crate::impl_catalog_path_prefix!(PositionClosed, "position_closed");
 crate::impl_catalog_path_prefix!(PositionAdjusted, "position_adjusted");
 crate::impl_catalog_path_prefix!(OrderSnapshot, "order_snapshot");
 crate::impl_catalog_path_prefix!(PositionSnapshot, "position_snapshot");
+crate::impl_catalog_path_prefix!(PortfolioSnapshot, "portfolio_snapshot");

@@ -17,8 +17,9 @@
 
 use std::{any::Any, cell::RefCell, fmt::Debug, path::PathBuf, rc::Rc};
 
+use indexmap::IndexMap;
 use nautilus_common::{
-    cache::Cache,
+    cache::CacheView,
     clients::DataClient,
     clock::Clock,
     factories::{ClientConfig, DataClientFactory},
@@ -30,7 +31,7 @@ use nautilus_core::{
 use nautilus_model::identifiers::ClientId;
 
 use crate::{
-    common::Credential,
+    common::{Credential, DATABENTO},
     data::{DatabentoDataClient, DatabentoDataClientConfig},
     historical::DatabentoHistoricalClient,
 };
@@ -46,13 +47,16 @@ use crate::{
 )]
 #[cfg_attr(
     feature = "python",
-    pyo3_stub_gen::derive::gen_stub_pyclass(module = "nautilus_trader.databento")
+    pyo3_stub_gen::derive::gen_stub_pyclass(module = "nautilus_trader.adapters.databento")
 )]
 pub struct DatabentoLiveClientConfig {
     /// Databento API credential.
     credential: Credential,
     /// Path to publishers.json file.
     pub publishers_filepath: PathBuf,
+    /// Venue-to-dataset overrides applied on top of the mappings populated from Databento's
+    /// canonical publishers.json (keys are venue codes, values are dataset codes).
+    pub venue_dataset_map: IndexMap<String, String>,
     /// Whether to use exchange as venue for GLBX instruments.
     pub use_exchange_as_venue: bool,
     /// Whether to timestamp bars on close.
@@ -64,6 +68,7 @@ impl Debug for DatabentoLiveClientConfig {
         f.debug_struct(stringify!(DatabentoLiveClientConfig))
             .field("credential", &REDACTED)
             .field("publishers_filepath", &self.publishers_filepath)
+            .field("venue_dataset_map", &self.venue_dataset_map)
             .field("use_exchange_as_venue", &self.use_exchange_as_venue)
             .field("bars_timestamp_on_close", &self.bars_timestamp_on_close)
             .finish()
@@ -82,6 +87,7 @@ impl DatabentoLiveClientConfig {
         Self {
             credential: Credential::new(api_key),
             publishers_filepath,
+            venue_dataset_map: IndexMap::new(),
             use_exchange_as_venue,
             bars_timestamp_on_close,
         }
@@ -117,7 +123,7 @@ impl ClientConfig for DatabentoLiveClientConfig {
 )]
 #[cfg_attr(
     feature = "python",
-    pyo3_stub_gen::derive::gen_stub_pyclass(module = "nautilus_trader.databento")
+    pyo3_stub_gen::derive::gen_stub_pyclass(module = "nautilus_trader.adapters.databento")
 )]
 pub struct DatabentoDataClientFactory;
 
@@ -176,7 +182,7 @@ impl DataClientFactory for DatabentoDataClientFactory {
         &self,
         name: &str,
         config: &dyn ClientConfig,
-        _cache: Rc<RefCell<Cache>>,
+        _cache: CacheView,
         _clock: Rc<RefCell<dyn Clock>>,
     ) -> anyhow::Result<Box<dyn DataClient>> {
         let databento_config = config
@@ -189,19 +195,20 @@ impl DataClientFactory for DatabentoDataClientFactory {
             })?;
 
         let client_id = ClientId::from(name);
-        let config = DatabentoDataClientConfig::new(
+        let mut config = DatabentoDataClientConfig::new(
             databento_config.api_key(),
             databento_config.publishers_filepath.clone(),
             databento_config.use_exchange_as_venue,
             databento_config.bars_timestamp_on_close,
         );
+        config.venue_dataset_map = databento_config.venue_dataset_map.clone();
 
         let client = DatabentoDataClient::new(client_id, config, get_atomic_clock_realtime())?;
         Ok(Box::new(client))
     }
 
     fn name(&self) -> &'static str {
-        "DATABENTO"
+        DATABENTO
     }
 
     fn config_type(&self) -> &'static str {

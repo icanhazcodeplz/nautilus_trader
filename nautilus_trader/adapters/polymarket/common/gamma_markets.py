@@ -18,6 +18,16 @@ Thin Gamma Markets API client utilities for Polymarket.
 Provides functions to fetch markets using server-side filters, returning
 raw market dictionaries ready for further client-side filtering.
 
+Gamma `/markets` server-side constraints honored here and by the provider:
+
+- `limit` is silently capped at 100 items per page, so a larger requested
+  `limit` makes the "last page" check (`len < limit`) trip after page one.
+- `offset > 10000` is rejected with HTTP 422, so bulk paging cannot walk
+  the full universe; callers fetching many markets must use `condition_ids`
+  filtering.
+- `condition_ids` accepts at most 100 IDs per request, so larger sets must
+  be chunked and unioned.
+
 References
 ----------
 - Gamma Get Markets docs: https://docs.polymarket.com/developers/gamma-markets-api/get-markets
@@ -38,6 +48,8 @@ from nautilus_trader.core.nautilus_pyo3 import HttpResponse
 
 
 DEFAULT_GAMMA_BASE_URL = os.getenv("GAMMA_API_URL", "https://gamma-api.polymarket.com")
+
+_GAMMA_MARKETS_PAGE_LIMIT = 100
 
 
 def _normalize_base_url(base_url: str | None) -> str:
@@ -155,7 +167,11 @@ async def iter_markets(
     """
     base = _normalize_base_url(base_url)
     params = build_markets_query(filters)
-    limit = int(filters.get("limit", 500)) if filters else 500
+    limit = (
+        int(filters.get("limit", _GAMMA_MARKETS_PAGE_LIMIT))
+        if filters
+        else _GAMMA_MARKETS_PAGE_LIMIT
+    )
     offset = int(filters.get("offset", 0)) if filters else 0
 
     while True:
@@ -245,9 +261,10 @@ def normalize_gamma_market_to_clob_format(gamma_market: dict[str, Any]) -> dict[
         "active": gamma_market.get("active", False),
         "closed": gamma_market.get("closed", False),
         "archived": gamma_market.get("archived", False),
-        # Dates
-        "end_date_iso": gamma_market.get("endDateIso"),
-        "game_start_time": gamma_market.get("startDateIso"),
+        # Dates: `endDate`/`eventStartTime` carry the full timestamp; the `*Iso`
+        # variants are date-only and would truncate `expiration_ns` to midnight.
+        "end_date_iso": gamma_market.get("endDate") or gamma_market.get("endDateIso"),
+        "game_start_time": gamma_market.get("eventStartTime") or gamma_market.get("startDateIso"),
         # Fee structure
         "maker_base_fee": 0,
         "taker_base_fee": 0,
@@ -298,7 +315,7 @@ async def list_markets(
 
 
 # Maximum number of condition_ids Gamma accepts per request
-_GAMMA_CONDITION_IDS_BATCH_SIZE = 100
+GAMMA_CONDITION_IDS_BATCH_SIZE = 100
 
 
 async def fetch_fee_schedules(
@@ -342,8 +359,8 @@ async def fetch_fee_schedules(
 
     results: dict[str, dict[str, Any]] = {}
 
-    for start in range(0, len(unique_ids), _GAMMA_CONDITION_IDS_BATCH_SIZE):
-        batch = unique_ids[start : start + _GAMMA_CONDITION_IDS_BATCH_SIZE]
+    for start in range(0, len(unique_ids), GAMMA_CONDITION_IDS_BATCH_SIZE):
+        batch = unique_ids[start : start + GAMMA_CONDITION_IDS_BATCH_SIZE]
         markets = await list_markets(
             http_client=http_client,
             filters={"condition_ids": batch},

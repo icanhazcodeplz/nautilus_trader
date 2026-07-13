@@ -19,6 +19,7 @@ from typing import Any
 from nautilus_trader.adapters.okx.config import OKXDataClientConfig
 from nautilus_trader.adapters.okx.constants import OKX_VENUE
 from nautilus_trader.adapters.okx.providers import OKXInstrumentProvider
+from nautilus_trader.adapters.okx.types import GREEKS_CONVENTION_TO_TYPE
 from nautilus_trader.adapters.okx.types import OKX_INSTRUMENT_TYPES
 from nautilus_trader.adapters.okx.types import OkxInstrument
 from nautilus_trader.cache.cache import Cache
@@ -33,6 +34,7 @@ from nautilus_trader.core.datetime import ensure_pydatetime_utc
 from nautilus_trader.core.nautilus_pyo3 import GreeksConvention
 from nautilus_trader.core.nautilus_pyo3 import OKXEnvironment
 from nautilus_trader.core.nautilus_pyo3 import OKXGreeksType
+from nautilus_trader.core.nautilus_pyo3 import OKXRegion
 from nautilus_trader.data.messages import RequestBars
 from nautilus_trader.data.messages import RequestForwardPrices
 from nautilus_trader.data.messages import RequestFundingRates
@@ -77,14 +79,9 @@ from nautilus_trader.model.enums import BookType
 from nautilus_trader.model.enums import book_type_to_str
 from nautilus_trader.model.identifiers import ClientId
 from nautilus_trader.model.identifiers import InstrumentId
+from nautilus_trader.model.instruments import CryptoFuture
 from nautilus_trader.model.instruments import CryptoPerpetual
 from nautilus_trader.model.instruments import Instrument
-
-
-_GREEKS_CONVENTION_TO_TYPE: dict[GreeksConvention, OKXGreeksType] = {
-    GreeksConvention.BLACK_SCHOLES: OKXGreeksType.BS,
-    GreeksConvention.PRICE_ADJUSTED: OKXGreeksType.PA,
-}
 
 
 class OKXDataClient(LiveMarketDataClient):
@@ -141,12 +138,8 @@ class OKXDataClient(LiveMarketDataClient):
             [c.name.upper() for c in config.contract_types] if config.contract_types else None
         )
 
-        # Resolve environment: explicit setting takes precedence over is_demo
-        self._environment = (
-            config.environment
-            if config.environment is not None
-            else (OKXEnvironment.DEMO if config.is_demo else OKXEnvironment.LIVE)
-        )
+        self._environment = config.environment or OKXEnvironment.LIVE
+        self._region = config.region or OKXRegion.GLOBAL
 
         # Configuration
         self._config = config
@@ -154,6 +147,7 @@ class OKXDataClient(LiveMarketDataClient):
         self._log.info(f"{config.instrument_families=}", LogColor.BLUE)
         self._log.info(f"config.contract_types={contract_types}", LogColor.BLUE)
         self._log.info(f"environment={self._environment}", LogColor.BLUE)
+        self._log.info(f"region={self._region}", LogColor.BLUE)
         self._log.info(f"{config.http_timeout_secs=}", LogColor.BLUE)
         self._log.info(f"{config.max_retries=}", LogColor.BLUE)
         self._log.info(f"{config.retry_delay_initial_ms=}", LogColor.BLUE)
@@ -170,7 +164,8 @@ class OKXDataClient(LiveMarketDataClient):
 
         # WebSocket API
         self._ws_client = nautilus_pyo3.OKXWebSocketClient(
-            url=config.base_url_ws or nautilus_pyo3.get_okx_ws_url_public(self._environment),
+            url=config.base_url_ws
+            or nautilus_pyo3.get_okx_ws_url_public(self._environment, self._region),
             api_key=None,
             api_secret=None,
             api_passphrase=None,
@@ -182,7 +177,10 @@ class OKXDataClient(LiveMarketDataClient):
         self._option_greeks_instrument_ids: set[InstrumentId] = set()
 
         # WebSocket API for business data (bars/candlesticks)
-        _public_url = config.base_url_ws or nautilus_pyo3.get_okx_ws_url_public(self._environment)
+        _public_url = config.base_url_ws or nautilus_pyo3.get_okx_ws_url_public(
+            self._environment,
+            self._region,
+        )
         self._ws_business_client = nautilus_pyo3.OKXWebSocketClient(
             url=nautilus_pyo3.derive_okx_ws_url(_public_url, "business"),
             api_key=config.api_key,
@@ -343,14 +341,13 @@ class OKXDataClient(LiveMarketDataClient):
         await self._ws_client.subscribe_index_prices(pyo3_instrument_id)
 
     async def _subscribe_funding_rates(self, command: SubscribeFundingRates) -> None:
-        # Funding rates only apply to perpetual swaps
+        # Funding rates apply to perpetual swaps and OKX X-Perp expiring perpetuals
         instrument = self._instrument_provider.find(command.instrument_id)
         if instrument is None:
             self._log.error(f"Cannot find instrument for {command.instrument_id}")
             return
 
-        # Check if instrument is a perpetual swap
-        if not isinstance(instrument, CryptoPerpetual):
+        if not _supports_funding_rates(instrument):
             self._log.warning(
                 f"Funding rates not applicable for {command.instrument_id} "
                 f"(instrument type: {type(instrument).__name__}), skipping subscription",
@@ -424,7 +421,7 @@ class OKXDataClient(LiveMarketDataClient):
                     f"Unrecognized greeks_convention {entry!r}, skipping",
                 )
                 continue
-            greeks_type = _GREEKS_CONVENTION_TO_TYPE[convention]
+            greeks_type = GREEKS_CONVENTION_TO_TYPE[convention]
             if greeks_type not in resolved:
                 resolved.append(greeks_type)
 
@@ -473,7 +470,7 @@ class OKXDataClient(LiveMarketDataClient):
             self._log.error(f"Cannot find instrument for {command.instrument_id}")
             return
 
-        if not isinstance(instrument, CryptoPerpetual):
+        if not _supports_funding_rates(instrument):
             self._log.warning(
                 f"Funding rates not applicable for {command.instrument_id} "
                 f"(instrument type: {type(instrument).__name__}), skipping unsubscription",
@@ -536,7 +533,10 @@ class OKXDataClient(LiveMarketDataClient):
             self._cache_instrument(pyo3_instrument)  # type: ignore[arg-type]
             instrument = transform_instrument_from_pyo3(pyo3_instrument)
         except Exception as e:
-            self._log.error(f"Failed to request instrument {request.instrument_id}: {e}")
+            if _is_instrument_definition_error(e):
+                self._log.warning(f"Failed to request instrument {request.instrument_id}: {e}")
+            else:
+                self._log.error(f"Failed to request instrument {request.instrument_id}: {e}")
             return
 
         self._handle_instrument(
@@ -592,6 +592,7 @@ class OKXDataClient(LiveMarketDataClient):
                 nautilus_pyo3.OKXInstrumentType.FUTURES,
                 nautilus_pyo3.OKXInstrumentType.SWAP,
                 nautilus_pyo3.OKXInstrumentType.OPTION,
+                nautilus_pyo3.OKXInstrumentType.EVENTS,
             )
 
             if instrument_families and supports_family:
@@ -605,6 +606,16 @@ class OKXDataClient(LiveMarketDataClient):
             else:
                 instruments = await self._fetch_instruments_for_type(inst_type)
                 all_instruments.extend(instruments)
+
+        if self._instrument_provider.load_spreads:
+            try:
+                pyo3_instruments = await self._http_client.request_spread_instruments()
+                for pyo3_instrument in pyo3_instruments:
+                    self._cache_instrument(pyo3_instrument)
+                    instrument = transform_instrument_from_pyo3(pyo3_instrument)
+                    all_instruments.append(instrument)
+            except Exception as e:
+                self._log.error(f"Failed to fetch spread instruments: {e}")
 
         self._handle_instruments(
             request.venue,
@@ -747,7 +758,7 @@ class OKXDataClient(LiveMarketDataClient):
 
     def _handle_msg(self, msg: Any) -> None:
         if isinstance(msg, nautilus_pyo3.OKXWebSocketError):
-            self._log.error(repr(msg))
+            self._log.warning(repr(msg))
             return
 
         try:
@@ -787,3 +798,21 @@ class OKXDataClient(LiveMarketDataClient):
         instrument = transform_instrument_from_pyo3(pyo3_instrument)
 
         self._handle_data(instrument)
+
+
+def _is_instrument_definition_error(error: Exception) -> bool:
+    message = str(error)
+    return (
+        "Failed to parse instrument" in message
+        or "instrument is in pre-open state" in message
+        or "unsupported instrument type" in message
+    )
+
+
+def _supports_funding_rates(instrument: Instrument) -> bool:
+    if isinstance(instrument, CryptoPerpetual):
+        return True
+    if isinstance(instrument, CryptoFuture):
+        info = instrument.info or {}
+        return str(info.get("rule_type", "")).lower() == "xperp"
+    return False

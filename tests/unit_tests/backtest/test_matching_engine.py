@@ -27,6 +27,7 @@ from nautilus_trader.common.component import MessageBus
 from nautilus_trader.common.component import TestClock
 from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.execution.engine import ExecutionEngine
+from nautilus_trader.execution.matching_core import MatchingCore
 from nautilus_trader.execution.messages import ModifyOrder
 from nautilus_trader.model.data import Bar
 from nautilus_trader.model.data import BarSpecification
@@ -55,8 +56,11 @@ from nautilus_trader.model.events import OrderFilled
 from nautilus_trader.model.events import OrderModifyRejected
 from nautilus_trader.model.events import OrderRejected
 from nautilus_trader.model.events import OrderUpdated
+from nautilus_trader.model.identifiers import ClientOrderId
+from nautilus_trader.model.identifiers import PositionId
 from nautilus_trader.model.identifiers import StrategyId
 from nautilus_trader.model.identifiers import VenueOrderId
+from nautilus_trader.model.instruments import CryptoPerpetual
 from nautilus_trader.model.objects import Price
 from nautilus_trader.model.objects import Quantity
 from nautilus_trader.model.orders import LimitOrder
@@ -64,9 +68,11 @@ from nautilus_trader.model.orders import MarketIfTouchedOrder
 from nautilus_trader.model.orders import MarketOrder
 from nautilus_trader.model.orders import StopMarketOrder
 from nautilus_trader.model.orders import TrailingStopLimitOrder
+from nautilus_trader.model.position import Position
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
 from nautilus_trader.test_kit.stubs.component import TestComponentStubs
 from nautilus_trader.test_kit.stubs.data import TestDataStubs
+from nautilus_trader.test_kit.stubs.events import TestEventStubs
 from nautilus_trader.test_kit.stubs.execution import TestExecStubs
 from nautilus_trader.test_kit.stubs.identifiers import TestIdStubs
 
@@ -166,6 +172,59 @@ class TestOrderMatchingEngine:
 
         # Assert
         assert exec_messages
+
+    def test_reset_zeroes_book_ts_last(self) -> None:
+        """
+        Regression for the L1 stale-event guard added in #3790.
+
+        ``OrderMatchingEngine.reset`` previously called ``book.clear(0, 0)``,
+        which routes through ``OrderBook.increment`` whose
+        ``ts_last = ts_event.max(self.ts_last)`` is a high-water mark. Calling
+        ``clear(0, 0)`` therefore leaves the prior run's last timestamp in
+        place. The L1 stale-event guard then drops every subsequent
+        quote/trade whose ``ts_event < ts_last``, leaving the matching core's
+        bid/ask uninitialised — every market order on the next run is
+        rejected with ``"no market for {instrument_id}"``.
+
+        The Rust matching engine ``reset`` (``crates/execution/src/
+        matching_engine/engine.rs``) calls ``book.reset()`` (which zeroes
+        ``ts_last``); this test asserts the Cython path does the same so
+        repeated runs (sweep / param-search) on the same engine instance
+        behave identically to a fresh engine.
+
+        """
+        # Arrange — seed the book with a quote so ts_last advances
+        seed_quote = TestDataStubs.quote_tick(
+            instrument=self.instrument,
+            ts_event=100,
+            ts_init=100,
+        )
+        self.matching_engine.process_quote_tick(seed_quote)
+        assert self.matching_engine.get_book().ts_last == 100
+
+        # Act
+        self.matching_engine.reset()
+
+        # Assert — book ts_last must be zero after reset
+        assert self.matching_engine.get_book().ts_last == 0, (
+            "OrderMatchingEngine.reset leaked book.ts_last; subsequent "
+            "quote/trade events with earlier ts_event will be silently "
+            "dropped by the L1 stale-event guard"
+        )
+
+        # And — a quote with an earlier ts_event than the previous run's
+        # last must be accepted (not dropped as stale) and update the book
+        replay_quote = TestDataStubs.quote_tick(
+            instrument=self.instrument,
+            bid_price=2.0,
+            ask_price=2.0,
+            ts_event=50,  # < the seed quote's ts_event=100
+            ts_init=50,
+        )
+        self.matching_engine.process_quote_tick(replay_quote)
+        assert self.matching_engine.get_book().ts_last == 50
+        assert self.matching_engine.best_bid_price() == self.instrument.make_price(2.0)
+        assert self.matching_engine.best_ask_price() == self.instrument.make_price(2.0)
 
     def test_process_order_book_depth_10(self) -> None:
         # Arrange - Create L2_MBP matching engine for depth10 data
@@ -715,6 +774,219 @@ class TestOrderMatchingEngine:
         # Assert - No fill event should be emitted due to early return
         filled_events = [m for m in messages if isinstance(m, OrderFilled)]
         assert len(filled_events) == 0  # No fill should have been generated
+
+    def test_reduce_only_stop_market_caps_cumulative_multi_level_fill(self) -> None:
+        # Arrange
+        position_qty = self.instrument.make_qty(2382.0)
+        entry_order = TestExecStubs.market_order(
+            instrument=self.instrument,
+            order_side=OrderSide.BUY,
+            quantity=position_qty,
+        )
+        entry_fill = TestEventStubs.order_filled(
+            entry_order,
+            instrument=self.instrument,
+            account_id=self.account_id,
+            position_id=PositionId("P-REDUCE-ONLY"),
+            last_qty=position_qty,
+            last_px=self.instrument.make_price(1000.0),
+        )
+        position = Position(instrument=self.instrument, fill=entry_fill)
+
+        order = StopMarketOrder(
+            trader_id=self.trader_id,
+            strategy_id=TestIdStubs.strategy_id(),
+            instrument_id=self.instrument.id,
+            client_order_id=TestIdStubs.client_order_id(),
+            order_side=OrderSide.SELL,
+            quantity=self.instrument.make_qty(7142.0),
+            trigger_price=self.instrument.make_price(900.0),
+            trigger_type=TriggerType.DEFAULT,
+            init_id=UUID4(),
+            ts_init=0,
+            reduce_only=True,
+        )
+        TestExecStubs.make_accepted_order(
+            order=order,
+            instrument=self.instrument,
+            account_id=self.account_id,
+        )
+        self.cache.add_order(order, position_id=position.id)
+
+        messages: list[Any] = []
+
+        def _handle(event):
+            messages.append(event)
+            with contextlib.suppress(Exception):
+                order.apply(event)
+
+        self.msgbus.register("ExecEngine.process", _handle)
+
+        fills = [
+            (self.instrument.make_price(900.0), self.instrument.make_qty(1000.0)),
+            (self.instrument.make_price(899.9), self.instrument.make_qty(1000.0)),
+            (self.instrument.make_price(899.8), self.instrument.make_qty(1000.0)),
+        ]
+
+        # Act
+        self.matching_engine.apply_fills(
+            order=order,
+            fills=fills,
+            liquidity_side=LiquiditySide.TAKER,
+            position=position,
+        )
+
+        # Assert
+        filled_events = [m for m in messages if isinstance(m, OrderFilled)]
+        updated_events = [m for m in messages if isinstance(m, OrderUpdated)]
+
+        assert [event.last_qty for event in filled_events] == [
+            self.instrument.make_qty(1000.0),
+            self.instrument.make_qty(1000.0),
+            self.instrument.make_qty(382.0),
+        ]
+        assert sum((event.last_qty.as_decimal() for event in filled_events), Decimal(0)) == (
+            position_qty.as_decimal()
+        )
+        assert updated_events[-1].quantity == position_qty
+        assert order.quantity == position_qty
+        assert order.filled_qty == position_qty
+
+    def test_reduce_only_market_slip_caps_remaining_position(self) -> None:
+        # Arrange
+        position_qty = self.instrument.make_qty(2.0)
+        entry_order = TestExecStubs.market_order(
+            instrument=self.instrument,
+            order_side=OrderSide.BUY,
+            quantity=position_qty,
+        )
+        entry_fill = TestEventStubs.order_filled(
+            entry_order,
+            instrument=self.instrument,
+            account_id=self.account_id,
+            position_id=PositionId("P-REDUCE-ONLY"),
+            last_qty=position_qty,
+            last_px=self.instrument.make_price(1000.0),
+        )
+        position = Position(instrument=self.instrument, fill=entry_fill)
+
+        order = StopMarketOrder(
+            trader_id=self.trader_id,
+            strategy_id=TestIdStubs.strategy_id(),
+            instrument_id=self.instrument.id,
+            client_order_id=TestIdStubs.client_order_id(),
+            order_side=OrderSide.SELL,
+            quantity=self.instrument.make_qty(5.0),
+            trigger_price=self.instrument.make_price(900.0),
+            trigger_type=TriggerType.DEFAULT,
+            init_id=UUID4(),
+            ts_init=0,
+            reduce_only=True,
+        )
+        TestExecStubs.make_accepted_order(
+            order=order,
+            instrument=self.instrument,
+            account_id=self.account_id,
+        )
+        self.cache.add_order(order, position_id=position.id)
+
+        messages: list[Any] = []
+
+        def _handle(event):
+            messages.append(event)
+            with contextlib.suppress(Exception):
+                order.apply(event)
+
+        self.msgbus.register("ExecEngine.process", _handle)
+
+        # Act
+        self.matching_engine.apply_fills(
+            order=order,
+            fills=[(self.instrument.make_price(900.0), self.instrument.make_qty(1.0))],
+            liquidity_side=LiquiditySide.TAKER,
+            position=position,
+        )
+
+        # Assert
+        filled_events = [m for m in messages if isinstance(m, OrderFilled)]
+        updated_events = [m for m in messages if isinstance(m, OrderUpdated)]
+
+        assert [event.last_qty for event in filled_events] == [
+            self.instrument.make_qty(1.0),
+            self.instrument.make_qty(1.0),
+        ]
+        assert updated_events[-1].quantity == position_qty
+        assert order.quantity == position_qty
+        assert order.filled_qty == position_qty
+
+    @pytest.mark.parametrize(
+        "liquidity_side",
+        [LiquiditySide.MAKER, LiquiditySide.TAKER],
+        ids=["maker", "taker"],
+    )
+    def test_reduce_only_limit_slip_caps_remaining_position(
+        self,
+        liquidity_side: LiquiditySide,
+    ) -> None:
+        # Arrange
+        position_qty = self.instrument.make_qty(2.0)
+        entry_order = TestExecStubs.market_order(
+            instrument=self.instrument,
+            order_side=OrderSide.BUY,
+            quantity=position_qty,
+        )
+        entry_fill = TestEventStubs.order_filled(
+            entry_order,
+            instrument=self.instrument,
+            account_id=self.account_id,
+            position_id=PositionId("P-REDUCE-ONLY"),
+            last_qty=position_qty,
+            last_px=self.instrument.make_price(1000.0),
+        )
+        position = Position(instrument=self.instrument, fill=entry_fill)
+
+        order = TestExecStubs.limit_order(
+            instrument=self.instrument,
+            order_side=OrderSide.SELL,
+            price=self.instrument.make_price(900.0),
+            quantity=self.instrument.make_qty(5.0),
+            reduce_only=True,
+        )
+        TestExecStubs.make_accepted_order(
+            order=order,
+            instrument=self.instrument,
+            account_id=self.account_id,
+        )
+        self.cache.add_order(order, position_id=position.id)
+
+        messages: list[Any] = []
+
+        def _handle(event):
+            messages.append(event)
+            with contextlib.suppress(Exception):
+                order.apply(event)
+
+        self.msgbus.register("ExecEngine.process", _handle)
+
+        # Act
+        self.matching_engine.apply_fills(
+            order=order,
+            fills=[(self.instrument.make_price(900.0), self.instrument.make_qty(1.0))],
+            liquidity_side=liquidity_side,
+            position=position,
+        )
+
+        # Assert
+        filled_events = [m for m in messages if isinstance(m, OrderFilled)]
+        updated_events = [m for m in messages if isinstance(m, OrderUpdated)]
+
+        assert [event.last_qty for event in filled_events] == [
+            self.instrument.make_qty(1.0),
+            self.instrument.make_qty(1.0),
+        ]
+        assert updated_events[-1].quantity == position_qty
+        assert order.quantity == position_qty
+        assert order.filled_qty == position_qty
 
     def test_buy_limit_fills_on_seller_trade_at_limit_price(self) -> None:
         # Regression test for GitHub issue where BUY LIMIT orders were not filling
@@ -1607,15 +1879,106 @@ class TestOrderMatchingEngine:
             quantity=self.instrument.make_qty(50.0),
         )
         matching_engine_l2.process_order(order, self.account_id)
+        matching_engine_l2.fill_limit_order(order)
 
         # Act
         matching_engine_l2.iterate(timestamp_ns=1)
 
         # Assert
+        assert not matching_engine_l2.order_exists(order.client_order_id)
+
         filled_events = [m for m in messages if isinstance(m, OrderFilled)]
         assert len(filled_events) == 1, (
             f"Expected exactly 1 fill (initial), but got {len(filled_events)} "
             f"(duplicate fill on subsequent iterate)"
+        )
+
+        for message in messages:
+            order.apply(message)
+
+        matching_engine_l2.iterate(timestamp_ns=2)
+        matching_engine_l2.fill_limit_order(order)
+
+        filled_events = [m for m in messages if isinstance(m, OrderFilled)]
+        assert len(filled_events) == 1, (
+            f"Expected exactly 1 fill after applying closure, but got {len(filled_events)} "
+            f"(duplicate fill on closed order)"
+        )
+
+    def test_closed_market_order_not_refilled_after_cached_guard_purged(self) -> None:
+        matching_engine_l2 = OrderMatchingEngine(
+            instrument=self.instrument,
+            raw_id=0,
+            fill_model=FillModel(),
+            fee_model=MakerTakerFeeModel(),
+            book_type=BookType.L2_MBP,
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            reject_stop_orders=True,
+            trade_execution=False,
+            msgbus=self.msgbus,
+            cache=self.cache,
+            clock=self.clock,
+        )
+
+        messages: list[Any] = []
+        self.msgbus.register("ExecEngine.process", messages.append)
+
+        bid_delta = OrderBookDelta(
+            instrument_id=self.instrument.id,
+            action=BookAction.ADD,
+            order=BookOrder(
+                side=OrderSide.BUY,
+                price=Price.from_str("90.00"),
+                size=Quantity.from_str("100.000"),
+                order_id=100,
+            ),
+            flags=0,
+            sequence=0,
+            ts_event=0,
+            ts_init=0,
+        )
+        matching_engine_l2.process_order_book_delta(bid_delta)
+
+        ask_delta = OrderBookDelta(
+            instrument_id=self.instrument.id,
+            action=BookAction.ADD,
+            order=BookOrder(
+                side=OrderSide.SELL,
+                price=Price.from_str("100.00"),
+                size=Quantity.from_str("50.000"),
+                order_id=1,
+            ),
+            flags=0,
+            sequence=1,
+            ts_event=0,
+            ts_init=0,
+        )
+        matching_engine_l2.process_order_book_delta(ask_delta)
+
+        order = TestExecStubs.make_submitted_order(
+            TestExecStubs.market_order(
+                instrument=self.instrument,
+                order_side=OrderSide.BUY,
+                quantity=self.instrument.make_qty(50.0),
+            ),
+        )
+        matching_engine_l2.process_order(order, self.account_id)
+        matching_engine_l2.iterate(timestamp_ns=1)
+
+        filled_events = [m for m in messages if isinstance(m, OrderFilled)]
+        assert len(filled_events) == 1
+
+        for message in messages:
+            order.apply(message)
+
+        matching_engine_l2.iterate(timestamp_ns=2)
+        matching_engine_l2.fill_market_order(order)
+
+        filled_events = [m for m in messages if isinstance(m, OrderFilled)]
+        assert len(filled_events) == 1, (
+            f"Expected exactly 1 fill after applying closure, but got {len(filled_events)} "
+            f"(duplicate market fill on closed order)"
         )
 
     def test_liquidity_consumption_tracks_fills_at_price_level(self):
@@ -3789,6 +4152,227 @@ class TestOrderMatchingEngine:
         fills = [m for m in messages if isinstance(m, OrderFilled)]
         assert len(fills) == 1
         assert fills[0].last_px == Price.from_str("90.000")
+
+
+def _ethusdt_perp_binance_with_tick(price_precision: int, increment: str) -> CryptoPerpetual:
+    base = _ETHUSDT_PERP_BINANCE
+    return CryptoPerpetual(
+        instrument_id=base.id,
+        raw_symbol=base.raw_symbol,
+        base_currency=base.base_currency,
+        quote_currency=base.quote_currency,
+        settlement_currency=base.settlement_currency,
+        is_inverse=base.is_inverse,
+        price_precision=price_precision,
+        size_precision=base.size_precision,
+        price_increment=Price.from_str(increment),
+        size_increment=base.size_increment,
+        max_quantity=base.max_quantity,
+        min_quantity=base.min_quantity,
+        max_notional=base.max_notional,
+        min_notional=base.min_notional,
+        max_price=base.max_price,
+        min_price=base.min_price,
+        margin_init=base.margin_init,
+        margin_maint=base.margin_maint,
+        maker_fee=base.maker_fee,
+        taker_fee=base.taker_fee,
+        ts_event=base.ts_event,
+        ts_init=base.ts_init,
+        tick_scheme_name=base.tick_scheme_name,
+        info=base.info,
+    )
+
+
+@pytest.mark.parametrize(
+    ("initial", "updated", "expected_precision"),
+    [
+        ("0.01", "0.001", 3),  # finer tick: numeric and precision both change
+        ("0.01", "0.05", 2),  # coarser tick at same precision: numeric only
+        ("0.01", "0.010", 3),  # numerically equal, precision-only change
+    ],
+)
+def test_matching_core_update_price_increment(
+    initial: str,
+    updated: str,
+    expected_precision: int,
+) -> None:
+    # Arrange
+    core = MatchingCore(
+        instrument_id=TestIdStubs.usdjpy_id(),
+        price_increment=Price.from_str(initial),
+        trigger_stop_order=lambda *_: None,
+        fill_market_order=lambda *_: None,
+        fill_limit_order=lambda *_: None,
+    )
+
+    # Act
+    core.update_price_increment(Price.from_str(updated))
+
+    # Assert
+    assert core.price_increment == Price.from_str(updated)
+    assert core.price_increment.precision == expected_precision
+    assert core.price_precision == expected_precision
+
+
+def test_matching_core_update_price_increment_rejects_none() -> None:
+    # Arrange
+    core = MatchingCore(
+        instrument_id=TestIdStubs.usdjpy_id(),
+        price_increment=Price.from_str("0.01"),
+        trigger_stop_order=lambda *_: None,
+        fill_market_order=lambda *_: None,
+        fill_limit_order=lambda *_: None,
+    )
+
+    # Act, Assert
+    with pytest.raises(TypeError):
+        core.update_price_increment(None)
+
+
+def test_update_instrument_propagates_tick_size_change() -> None:
+    # Arrange
+    clock = TestClock()
+    trader_id = TestIdStubs.trader_id()
+    account_id = TestIdStubs.account_id()
+    msgbus = MessageBus(trader_id=trader_id, clock=clock)
+    instrument = _ETHUSDT_PERP_BINANCE
+    cache = TestComponentStubs.cache()
+    cache.add_instrument(instrument)
+
+    matching_engine = OrderMatchingEngine(
+        instrument=instrument,
+        raw_id=0,
+        fill_model=FillModel(),
+        fee_model=MakerTakerFeeModel(),
+        book_type=BookType.L1_MBP,
+        oms_type=OmsType.NETTING,
+        account_type=AccountType.MARGIN,
+        reject_stop_orders=True,
+        trade_execution=True,
+        msgbus=msgbus,
+        cache=cache,
+        clock=clock,
+    )
+
+    exec_messages: list[Any] = []
+    msgbus.register("ExecEngine.process", lambda x: exec_messages.append(x))
+
+    matching_engine.process_quote_tick(
+        TestDataStubs.quote_tick(
+            instrument=instrument,
+            bid_price=1000.00,
+            ask_price=1000.01,
+            ts_event=0,
+            ts_init=0,
+        ),
+    )
+
+    finer = _ethusdt_perp_binance_with_tick(price_precision=3, increment="0.001")
+    cache.add_instrument(finer)
+    matching_engine.update_instrument(finer)
+
+    matching_engine.process_quote_tick(
+        TestDataStubs.quote_tick(
+            instrument=finer,
+            bid_price=1000.004,
+            ask_price=1000.005,
+            ts_event=1,
+            ts_init=1,
+        ),
+    )
+
+    taker_order = TestExecStubs.limit_order(
+        instrument=finer,
+        order_side=OrderSide.BUY,
+        price=finer.make_price(1000.005),
+        post_only=True,
+        client_order_id=ClientOrderId("O-TAKER"),
+    )
+    maker_order = TestExecStubs.limit_order(
+        instrument=finer,
+        order_side=OrderSide.BUY,
+        price=finer.make_price(1000.004),
+        post_only=True,
+        client_order_id=ClientOrderId("O-MAKER"),
+    )
+
+    # Act
+    matching_engine.process_order(taker_order, account_id)
+    rejected = next((m for m in exec_messages if isinstance(m, OrderRejected)), None)
+
+    exec_messages.clear()
+    matching_engine.process_order(maker_order, account_id)
+    accepted = next((m for m in exec_messages if isinstance(m, OrderAccepted)), None)
+
+    # Assert
+    assert rejected is not None
+    assert rejected.due_post_only is True
+    assert "bid=1000.004" in rejected.reason
+    assert "ask=1000.005" in rejected.reason
+    assert accepted is not None
+
+
+def test_update_instrument_propagates_precision_only_change() -> None:
+    # Guards the engine's `price_precision` check: `Price` numeric equality
+    # treats "0.01" and "0.010" as equal, so a guard comparing only the
+    # increment would skip the core update on a precision-only change.
+    # Arrange
+    clock = TestClock()
+    account_id = TestIdStubs.account_id()
+    msgbus = MessageBus(trader_id=TestIdStubs.trader_id(), clock=clock)
+    instrument = _ETHUSDT_PERP_BINANCE
+    cache = TestComponentStubs.cache()
+    cache.add_instrument(instrument)
+
+    matching_engine = OrderMatchingEngine(
+        instrument=instrument,
+        raw_id=0,
+        fill_model=FillModel(),
+        fee_model=MakerTakerFeeModel(),
+        book_type=BookType.L1_MBP,
+        oms_type=OmsType.NETTING,
+        account_type=AccountType.MARGIN,
+        reject_stop_orders=True,
+        trade_execution=True,
+        msgbus=msgbus,
+        cache=cache,
+        clock=clock,
+    )
+
+    exec_messages: list[Any] = []
+    msgbus.register("ExecEngine.process", lambda x: exec_messages.append(x))
+
+    # Same numeric increment (0.01 == 0.010) but precision 2 -> 3
+    repriced = _ethusdt_perp_binance_with_tick(price_precision=3, increment="0.010")
+    cache.add_instrument(repriced)
+    matching_engine.update_instrument(repriced)
+
+    matching_engine.process_quote_tick(
+        TestDataStubs.quote_tick(
+            instrument=repriced,
+            bid_price=1000.000,
+            ask_price=1000.010,
+            ts_event=0,
+            ts_init=0,
+        ),
+    )
+
+    # Act: post-only buy at the ask would take; rejection reason formats
+    # bid/ask via the core's `_price_precision`, which must now be 3
+    taker_order = TestExecStubs.limit_order(
+        instrument=repriced,
+        order_side=OrderSide.BUY,
+        price=repriced.make_price(1000.010),
+        post_only=True,
+    )
+    matching_engine.process_order(taker_order, account_id)
+
+    # Assert
+    rejected = next((m for m in exec_messages if isinstance(m, OrderRejected)), None)
+    assert rejected is not None
+    assert "bid=1000.000" in rejected.reason
+    assert "ask=1000.010" in rejected.reason
 
 
 def _create_bar_execution_matching_engine() -> OrderMatchingEngine:

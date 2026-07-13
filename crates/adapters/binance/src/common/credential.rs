@@ -79,7 +79,7 @@ pub fn resolve_credentials(
 
             // Demo shares API keys across all product types
             BinanceEnvironment::Demo => ("", "", "BINANCE_DEMO_API_KEY", "BINANCE_DEMO_API_SECRET"),
-            BinanceEnvironment::Mainnet => (
+            BinanceEnvironment::Live => (
                 "BINANCE_ED25519_API_KEY",
                 "BINANCE_ED25519_API_SECRET",
                 "BINANCE_API_KEY",
@@ -328,11 +328,11 @@ impl SigningCredential {
     pub fn new(api_key: String, api_secret: String) -> Self {
         match Ed25519Credential::new(api_key.clone(), &api_secret) {
             Ok(ed25519) => {
-                log::info!("Auto-detected Ed25519 API key");
+                log::debug!("Auto-detected Ed25519 API key");
                 Self::Ed25519(Box::new(ed25519))
             }
             Err(_) => {
-                log::info!("Using HMAC SHA256 API key");
+                log::debug!("Using HMAC SHA256 API key");
                 Self::Hmac(Credential::new(api_key, api_secret))
             }
         }

@@ -22,7 +22,7 @@ flowchart LR
 
     subgraph Strategy ["GridMarketMaker"]
         M["mid = (bid + ask) / 2"]
-        TH{{"|mid - last_mid|<br/>>= requote_threshold_bps"}}
+        TH{{"|mid - last_mid|<br/>>= requote_threshold_bps<br/>OR no resting orders"}}
         CA["cancel_all_orders()"]
         SK["skew = skew_factor * net_position"]
         GR["Geometric grid:<br/>buy_n = mid * (1 - bps/10000)^n - skew<br/>sell_n = mid * (1 + bps/10000)^n - skew"]
@@ -175,9 +175,12 @@ strategy cancels all open orders and places a fresh grid:
   orders on the fast short-term path. When `None`, orders use GTC and the
   long-term path.
 - **`on_cancel_resubmit`**: triggers a resubmission on the next quote tick
-  after an unexpected cancel (self-trade prevention, risk limits).
-  Short-term order expiry is silent and does not generate cancel events,
-  so the grid refreshes via continuous requoting rather than this flag.
+  after a cancel that the strategy did not initiate (short-term order
+  expiry from the indexer, self-trade prevention, risk limits). The
+  indexer emits a cancel event for each short-term order shortly after
+  it expires; this flag resets the requote anchor so the next quote
+  rebuilds the grid even if the mid has not moved beyond
+  `requote_threshold_bps`.
 
 ## dYdX-specific considerations
 
@@ -189,13 +192,18 @@ adapter:
 1. The adapter checks `8s < max_short_term_secs (40 blocks * ~0.5s = ~20s)`.
 2. The order is submitted as short-term with
    `GoodTilBlock = current_height + N`.
-3. The order expires silently after about eight seconds if not filled.
+3. The order expires on chain after about eight seconds if not filled.
+   Expiry costs no gas (GTB replay protection handles it on chain), but
+   the indexer still emits an `OrderCanceled` event for each expired
+   order shortly after the expiry block, so the strategy observes the
+   expiry through the normal cancel event path.
 
 This is the recommended configuration for market making because:
 
 - Short-term orders have lower latency.
-- Expiry has no gas cost (GTB replay protection handles it).
-- Continuous requoting replaces expired orders.
+- Expiry has no on-chain gas cost.
+- Continuous requoting (driven by the indexer-emitted cancel events when
+  `on_cancel_resubmit=true`) replaces expired orders.
 
 See the [order classification](../integrations/dydx.md#order-classification)
 section in the integration guide for full details.
@@ -210,9 +218,9 @@ unexpected cancels:
 2. When `on_order_canceled` fires:
    - If the order ID is in `pending_self_cancels`, it is a self-cancel
      and no action is needed.
-   - Otherwise it is unexpected (self-trade prevention or a risk limit).
-     Reset `last_quoted_mid` so the next quote triggers a full grid
-     resubmission.
+   - Otherwise it was not strategy-initiated (short-term order expiry,
+     self-trade prevention, or a risk limit). Reset `last_quoted_mid` so
+     the next quote triggers a full grid resubmission.
 
 This stops the strategy re-quoting unnecessarily during its own cancel
 waves while still responding to surprises.
@@ -258,13 +266,11 @@ DYDX_WALLET_ADDRESS=dydx1...
 ### Run the example
 
 ```bash
-# Mainnet (default)
 cargo run --example dydx-grid-mm --package nautilus-dydx --features examples
-
-# Testnet (set DYDX_NETWORK=testnet, requires testnet API trading key)
-DYDX_NETWORK=testnet \
-  cargo run --example dydx-grid-mm --package nautilus-dydx --features examples
 ```
+
+The example targets mainnet. To run against testnet, set the `DYDX_NETWORK` constant near the top
+of the example to `DydxNetwork::Testnet` (this needs a testnet API trading key) and rebuild.
 
 ### Graceful shutdown
 
@@ -281,23 +287,13 @@ The `main` function lives at
 [`crates/adapters/dydx/examples/node_grid_mm.rs`](https://github.com/nautechsystems/nautilus_trader/tree/develop/crates/adapters/dydx/examples/node_grid_mm.rs):
 
 ```rust
+const DYDX_NETWORK: DydxNetwork = DydxNetwork::Mainnet;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
 
-    let network = match std::env::var("DYDX_NETWORK") {
-        Err(_) => DydxNetwork::Mainnet,
-        Ok(value) => match value.to_ascii_lowercase().as_str() {
-            "testnet" => DydxNetwork::Testnet,
-            "mainnet" | "" => DydxNetwork::Mainnet,
-            other => {
-                return Err(format!(
-                    "DYDX_NETWORK must be 'mainnet' or 'testnet' (case-insensitive), got '{other}'",
-                )
-                .into());
-            }
-        },
-    };
+    let network = DYDX_NETWORK;
 
     let environment = Environment::Live;
     let trader_id = TraderId::from("TESTER-001");
@@ -334,13 +330,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_delay_post_stop_secs(5)
         .build()?;
 
-    let config = GridMarketMakerConfig::new(instrument_id, Quantity::from("0.10"))
-        .with_num_levels(3)
-        .with_grid_step_bps(100)
-        .with_skew_factor(0.5)
-        .with_requote_threshold_bps(10)
-        .with_expire_time_secs(8)
-        .with_on_cancel_resubmit(true);
+    let config = GridMarketMakerConfig::builder()
+        .instrument_id(instrument_id)
+        .max_position(Quantity::from("0.10"))
+        .num_levels(3)
+        .grid_step_bps(100)
+        .skew_factor(0.5)
+        .requote_threshold_bps(10)
+        .expire_time_secs(8)
+        .on_cancel_resubmit(true)
+        .build();
     let strategy = GridMarketMaker::new(config);
 
     node.add_strategy(strategy)?;
@@ -429,7 +428,7 @@ fn on_quote(&mut self, quote: &QuoteTick) -> anyhow::Result<()> {
         return Ok(()); // Mid hasn't moved enough, keep existing grid
     }
 
-    self.cancel_all_orders(instrument_id, None, None)?;
+    self.cancel_all_orders(instrument_id, None, None, None)?;
 
     let (net_position, worst_long, worst_short) = { /* ... */ };
 
@@ -441,7 +440,7 @@ fn on_quote(&mut self, quote: &QuoteTick) -> anyhow::Result<()> {
 
     let (tif, expire_time) = match self.config.expire_time_secs {
         Some(secs) => {
-            let now_ns = self.core.clock().timestamp_ns();
+            let now_ns = self.clock().timestamp_ns();
             let expire_ns = now_ns + secs * 1_000_000_000;
             (Some(TimeInForce::Gtd), Some(expire_ns))
         }
@@ -449,7 +448,7 @@ fn on_quote(&mut self, quote: &QuoteTick) -> anyhow::Result<()> {
     };
 
     for (side, price) in grid {
-        let order = self.core.order_factory().limit(
+        let order = self.order().limit(
             instrument_id,
             side,
             trade_size,
@@ -586,8 +585,9 @@ DYDX_LOG=/tmp/dydx_main.log \
    moves more than `requote_threshold_bps`.
 3. **Fills**: position updates, skew adjusts, the next requote shifts the
    grid.
-4. **Expiry**: short-term orders expire silently after about eight
-   seconds; the next requote refreshes the grid.
+4. **Expiry**: short-term orders expire on chain after about eight
+   seconds; the indexer emits a cancel event for each, and the next
+   quote refreshes the grid.
 5. **Shutdown**: all orders cancelled, positions closed, WebSocket
    disconnected.
 
@@ -607,21 +607,29 @@ Run separate `GridMarketMaker` instances per instrument. Each instance
 manages its own grid, position, and cancel state independently:
 
 ```rust
-let btc_config = GridMarketMakerConfig::new(
-    InstrumentId::from("BTC-USD-PERP.DYDX"),
-    Quantity::from("0.001"),
-)
-.with_strategy_id(StrategyId::from("GRID_MM-BTC"))
-.with_order_id_tag("BTC".to_string())
-.with_grid_step_bps(50);
+let btc_config = GridMarketMakerConfig::builder()
+    .instrument_id(InstrumentId::from("BTC-USD-PERP.DYDX"))
+    .max_position(Quantity::from("0.001"))
+    .base(
+        StrategyConfig::builder()
+            .strategy_id(StrategyId::from("GRID_MM-BTC"))
+            .order_id_tag("BTC".to_string())
+            .build(),
+    )
+    .grid_step_bps(50)
+    .build();
 
-let eth_config = GridMarketMakerConfig::new(
-    InstrumentId::from("ETH-USD-PERP.DYDX"),
-    Quantity::from("0.10"),
-)
-.with_strategy_id(StrategyId::from("GRID_MM-ETH"))
-.with_order_id_tag("ETH".to_string())
-.with_grid_step_bps(100);
+let eth_config = GridMarketMakerConfig::builder()
+    .instrument_id(InstrumentId::from("ETH-USD-PERP.DYDX"))
+    .max_position(Quantity::from("0.10"))
+    .base(
+        StrategyConfig::builder()
+            .strategy_id(StrategyId::from("GRID_MM-ETH"))
+            .order_id_tag("ETH".to_string())
+            .build(),
+    )
+    .grid_step_bps(100)
+    .build();
 
 node.add_strategy(GridMarketMaker::new(btc_config))?;
 node.add_strategy(GridMarketMaker::new(eth_config))?;
@@ -629,9 +637,9 @@ node.add_strategy(GridMarketMaker::new(eth_config))?;
 
 ### Mainnet vs testnet toggle
 
-The example reads `DYDX_NETWORK` and selects the appropriate endpoint and
-credential set. Set `DYDX_NETWORK=testnet` to run against testnet; leave
-unset for mainnet.
+The example selects the network from the `DYDX_NETWORK` constant near the top of the file
+(`DydxNetwork::Mainnet` by default). Change it to `DydxNetwork::Testnet` and rebuild to run
+against testnet.
 
 ## Further reading
 

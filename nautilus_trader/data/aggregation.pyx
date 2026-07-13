@@ -13,6 +13,7 @@
 #  limitations under the License.
 # -------------------------------------------------------------------------------------------------
 
+from decimal import ROUND_HALF_EVEN
 from decimal import Decimal
 from typing import Callable
 
@@ -39,11 +40,14 @@ from nautilus_trader.core.correctness cimport Condition
 from nautilus_trader.core.datetime cimport dt_to_unix_nanos
 from nautilus_trader.core.rust.core cimport millis_to_nanos
 from nautilus_trader.core.rust.core cimport secs_to_nanos
+from nautilus_trader.core.rust.model cimport FIXED_PRECISION
 from nautilus_trader.core.rust.model cimport FIXED_SCALAR
 from nautilus_trader.core.rust.model cimport AggressorSide
 from nautilus_trader.core.rust.model cimport InstrumentClass
 from nautilus_trader.core.rust.model cimport PriceRaw
 from nautilus_trader.core.rust.model cimport QuantityRaw
+from nautilus_trader.core.rust.model cimport price_as_f64
+from nautilus_trader.core.rust.model cimport price_new
 from nautilus_trader.model.data cimport Bar
 from nautilus_trader.model.data cimport BarAggregation
 from nautilus_trader.model.data cimport BarType
@@ -54,6 +58,7 @@ from nautilus_trader.model.greeks cimport GreeksCalculator
 from nautilus_trader.model.identifiers cimport InstrumentId
 from nautilus_trader.model.identifiers cimport generic_spread_id_to_list
 from nautilus_trader.model.identifiers cimport is_generic_spread_id
+from nautilus_trader.model.enums import ContinuousFutureAdjustmentType
 from nautilus_trader.model.instruments.base cimport Instrument
 from nautilus_trader.model.objects cimport Price
 from nautilus_trader.model.objects cimport Quantity
@@ -99,6 +104,11 @@ cdef class BarBuilder:
         self._high = None
         self._low = None
         self._close = None
+        self._adjustment_mode = None
+        self._adjustment_raw = 0
+        self._adjustment_ratio = 1.0
+        self._adjustment_active = False
+        self._adjustment_is_ratio = False
         self.volume = Quantity.zero_c(precision=self.size_precision)
 
     def __repr__(self) -> str:
@@ -132,6 +142,8 @@ cdef class BarBuilder:
         if ts_init < self.ts_last:
             return  # Not applicable
 
+        price = self._apply_adjustment_to_price(price)
+
         if self._open is None:
             # Initialize builder
             self._open = price
@@ -163,37 +175,56 @@ cdef class BarBuilder:
         if ts_init < self.ts_last:
             return  # Not applicable
 
+        cdef Price bar_open = self._apply_adjustment_to_price(bar.open)
+        cdef Price bar_high = self._apply_adjustment_to_price(bar.high)
+        cdef Price bar_low = self._apply_adjustment_to_price(bar.low)
+        cdef Price bar_close = self._apply_adjustment_to_price(bar.close)
+
         if self._open is None:
             # Initialize builder
-            self._open = bar.open
-            self._high = bar.high
-            self._low = bar.low
+            self._open = bar_open
+            self._high = bar_high
+            self._low = bar_low
             self.initialized = True
         else:
-            if bar.high > self._high:
-                self._high = bar.high
+            if bar_high._mem.raw > self._high._mem.raw:
+                self._high = bar_high
 
-            if bar.low < self._low:
-                self._low = bar.low
+            if bar_low._mem.raw < self._low._mem.raw:
+                self._low = bar_low
 
-        self._close = bar.close
+        self._close = bar_close
         self.volume._mem.raw += volume._mem.raw
         self.count += 1
         self.ts_last = ts_init
 
-    cpdef void reset(self):
-        """
-        Reset the bar builder.
+    cpdef void set_adjustment(self, object adjustment, object mode = None):
+        # Adjustment applies at ingress on subsequent update()/update_bar() calls,
+        # so running OHLC state is always in the adjusted (common) frame.
+        # Only the ratio-vs-spread distinction matters here; direction affects only
+        # the sign/magnitude of the cumulative offset, which the caller has already applied.
+        # We pre-compute the adjustment once here so the per-tick hot path is pure C math.
+        Condition.not_none(adjustment, "adjustment")
+        if mode is None:
+            mode = ContinuousFutureAdjustmentType.BACKWARD_SPREAD
 
-        All stateful fields are reset to their initial value.
-        """
-        self._open = None
-        self._high = None
-        self._low = None
-        self._close = None
+        self._adjustment_mode = ContinuousFutureAdjustmentType(mode)
+        cdef object adj_decimal = adjustment if isinstance(adjustment, Decimal) else Decimal(str(adjustment))
 
-        self.volume = Quantity.zero_c(precision=self.size_precision)
-        self.count = 0
+        if self._adjustment_mode.is_ratio:
+            self._adjustment_is_ratio = True
+            self._adjustment_ratio = float(adj_decimal)
+            self._adjustment_active = adj_decimal != 1
+            return
+
+        # Spread mode: scale the Decimal offset to FIXED_PRECISION once so the hot path
+        # can add it straight onto `price._mem.raw` (signed PriceRaw supports negatives).
+        self._adjustment_is_ratio = False
+        cdef object scaled = (adj_decimal * (Decimal(10) ** int(FIXED_PRECISION))).to_integral_value(
+            rounding=ROUND_HALF_EVEN,
+        )
+        self._adjustment_raw = <PriceRaw>int(scaled)
+        self._adjustment_active = self._adjustment_raw != 0
 
     cpdef Bar build_now(self):
         """
@@ -246,6 +277,38 @@ cdef class BarBuilder:
         self.reset()
 
         return bar
+
+    cdef Price _apply_adjustment_to_price(self, Price price):
+        # Hot path: pure C math; no Decimal / str allocations per tick.
+        if not self._adjustment_active:
+            return price
+
+        if self._adjustment_is_ratio:
+            # Multiply in double; Rust's `price_new` rounds to the target precision
+            # Float can shift 1 ULP for high-precision raws (spread mode is exact)
+            return Price.from_mem_c(
+                price_new(price_as_f64(&price._mem) * self._adjustment_ratio, price._mem.precision),
+            )
+
+        # Spread: signed raw addition. `PriceRaw` is int64/int128, so backward-spread
+        # adjustments that push prices below zero are representable (bounded by PRICE_RAW_MIN).
+        return Price.from_raw_c(price._mem.raw + self._adjustment_raw, price._mem.precision)
+
+    cpdef void reset(self):
+        """
+        Reset the bar builder.
+
+        All per-bar OHLCV state is cleared. Adjustment configuration set via
+        `set_adjustment` is retained across resets so it spans subsequent bars
+        within the same continuous-future segment.
+        """
+        self._open = None
+        self._high = None
+        self._low = None
+        self._close = None
+
+        self.volume = Quantity.zero_c(precision=self.size_precision)
+        self.count = 0
 
 
 cdef class BarAggregator:
@@ -1794,6 +1857,8 @@ cdef class SpreadQuoteAggregator:
         bint historical,
         object update_interval_seconds = None,
         int quote_build_delay = 0,
+        bint disable_vega_pricing = False,
+        int vega_pricing_timeout_seconds = 60,
     ):
         self._handler = handler
         self._clock = clock
@@ -1825,12 +1890,16 @@ cdef class SpreadQuoteAggregator:
         self.historical_mode = historical
         self._update_interval_seconds = update_interval_seconds
         self._quote_build_delay = quote_build_delay
+        self._disable_vega_pricing = disable_vega_pricing
+        self._vega_pricing_temporarily_disabled = False
+        self._vega_pricing_timeout_seconds = vega_pricing_timeout_seconds
         self.is_running = False
         self._historical_events = []
 
         # Timers on a same clock execute first based on their timer name
         # "SPREAD_QUOTE_..." < "TIME_BAR_..."
         self._timer_name = f"SPREAD_QUOTE_{self._spread_instrument_id}"
+        self._vega_pricing_timeout_timer_name = f"VEGA_PRICING_TIMEOUT_{self._spread_instrument_id}"
         self._has_update = False
 
     cpdef void set_historical_mode(self, bint historical_mode, handler: Callable[[QuoteTick], None], GreeksCalculator greeks_calculator):
@@ -1869,11 +1938,14 @@ cdef class SpreadQuoteAggregator:
         )
 
     cpdef void stop_timer(self):
-        if self._update_interval_seconds is None:
-            return
-
-        if self._timer_name in self._clock.timer_names:
+        if (
+            self._update_interval_seconds is not None
+            and self._timer_name in self._clock.timer_names
+        ):
             self._clock.cancel_timer(self._timer_name)
+
+        if self._vega_pricing_timeout_timer_name in self._clock.timer_names:
+            self._clock.cancel_timer(self._vega_pricing_timeout_timer_name)
 
     cpdef void handle_quote_tick(self, QuoteTick tick):
         if self._update_interval_seconds is not None and self.historical_mode:
@@ -1947,6 +2019,11 @@ cdef class SpreadQuoteAggregator:
         if not self._has_update:
             return
 
+        cdef bint use_vega_pricing = not (
+            self._disable_vega_pricing
+            or self._vega_pricing_temporarily_disabled
+        )
+
         for idx, leg_id in enumerate(self._leg_ids):
             tick = self._last_quotes.get(leg_id)
             if tick is None:
@@ -1966,14 +2043,15 @@ cdef class SpreadQuoteAggregator:
             if not self._is_futures_spread:
                 self._mid_prices[idx] = (ask_price + bid_price) * 0.5
                 self._bid_ask_spreads[idx] = ask_price - bid_price
-                greeks_data = self._greeks_calculator.instrument_greeks(
-                    leg_id,
-                    percent_greeks=True,
-                    use_cached_greeks=True,
-                    vega_time_weight_base=30,
-                )
-                if greeks_data is not None:
-                    self._vegas[idx] = greeks_data.vega
+                if use_vega_pricing:
+                    greeks_data = self._greeks_calculator.instrument_greeks(
+                        leg_id,
+                        percent_greeks=True,
+                        use_cached_greeks=True,
+                        vega_time_weight_base=30,
+                    )
+                    if greeks_data is not None:
+                        self._vegas[idx] = greeks_data.vega
 
         cdef tuple raw_bid_ask_prices
         if self._is_futures_spread:
@@ -1987,6 +2065,12 @@ cdef class SpreadQuoteAggregator:
         self._handler(spread_quote)
 
     cdef tuple _create_option_spread_prices(self):
+        if (
+            self._disable_vega_pricing
+            or self._vega_pricing_temporarily_disabled
+        ):
+            return self._create_futures_spread_prices()
+
         vega_multipliers = np.divide(
             self._bid_ask_spreads,
             self._vegas,
@@ -2000,8 +2084,10 @@ cdef class SpreadQuoteAggregator:
             self._log.warning(
                 f"No vega information available for the components of {self._spread_instrument_id}. "
                 f"Will generate spread quote using component quotes only. "
+                f"Vega pricing is disabled for {self._vega_pricing_timeout_seconds} seconds. "
                 f"Subscribe to some underlying price information for more precise quotes."
             )
+            self._start_vega_pricing_timeout()
             return self._create_futures_spread_prices()
 
         vega_multiplier = np.abs(non_zero_multipliers).mean()
@@ -2016,6 +2102,20 @@ cdef class SpreadQuoteAggregator:
         raw_ask_price = spread_mid_price + bid_ask_spread * 0.5
 
         return (raw_bid_price, raw_ask_price)
+
+    cdef void _clear_vega_pricing_timeout(self, TimeEvent event):
+        self._vega_pricing_temporarily_disabled = False
+
+    cdef void _start_vega_pricing_timeout(self):
+        self._vega_pricing_temporarily_disabled = True
+        if self._vega_pricing_timeout_timer_name in self._clock.timer_names:
+            return
+
+        self._clock.set_time_alert_ns(
+            name=self._vega_pricing_timeout_timer_name,
+            alert_time_ns=self._clock.timestamp_ns() + secs_to_nanos(self._vega_pricing_timeout_seconds),
+            callback=self._clear_vega_pricing_timeout,
+        )
 
     cdef tuple _create_futures_spread_prices(self):
         # Calculate spread ask: for positive ratios use ask, for negative ratios use bid

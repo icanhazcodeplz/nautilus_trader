@@ -47,6 +47,7 @@ from nautilus_trader.model.enums import AggregationSource
 from nautilus_trader.model.enums import AggressorSide
 from nautilus_trader.model.enums import AssetClass
 from nautilus_trader.model.enums import BarAggregation
+from nautilus_trader.model.enums import ContinuousFutureAdjustmentType
 from nautilus_trader.model.enums import OptionKind
 from nautilus_trader.model.enums import PriceType
 from nautilus_trader.model.greeks import GreeksCalculator
@@ -214,6 +215,124 @@ class TestBarBuilder:
 
         # Assert
         assert builder.count == 5
+
+    def test_bar_builder_applies_offset_to_bar_updates(self):
+        bar_type = TestDataStubs.bartype_btcusdt_binance_100tick_last()
+        builder = BarBuilder(BTCUSDT_BINANCE, bar_type)
+        builder.set_adjustment(Decimal("10.0"), ContinuousFutureAdjustmentType.BACKWARD_SPREAD)
+
+        input_bar = Bar(
+            bar_type=bar_type,
+            open=Price.from_str("100.00000"),
+            high=Price.from_str("101.00000"),
+            low=Price.from_str("99.00000"),
+            close=Price.from_str("100.50000"),
+            volume=Quantity.from_str("2.0"),
+            ts_event=NANOSECONDS_IN_SECOND,
+            ts_init=NANOSECONDS_IN_SECOND,
+        )
+
+        builder.update_bar(input_bar, input_bar.volume, input_bar.ts_init)
+        built_bar = builder.build_now()
+
+        assert built_bar.open == Price.from_str("110.00000")
+        assert built_bar.high == Price.from_str("111.00000")
+        assert built_bar.low == Price.from_str("109.00000")
+        assert built_bar.close == Price.from_str("110.50000")
+        assert built_bar.volume == Quantity.from_str("2.0")
+
+    def test_bar_builder_applies_multiplicative_adjustment_to_bar_updates(self):
+        bar_type = TestDataStubs.bartype_btcusdt_binance_100tick_last()
+        builder = BarBuilder(BTCUSDT_BINANCE, bar_type)
+        builder.set_adjustment(Decimal("1.10"), ContinuousFutureAdjustmentType.BACKWARD_RATIO)
+
+        input_bar = Bar(
+            bar_type=bar_type,
+            open=Price.from_str("100.00000"),
+            high=Price.from_str("101.00000"),
+            low=Price.from_str("99.00000"),
+            close=Price.from_str("100.50000"),
+            volume=Quantity.from_str("2.0"),
+            ts_event=NANOSECONDS_IN_SECOND,
+            ts_init=NANOSECONDS_IN_SECOND,
+        )
+
+        builder.update_bar(input_bar, input_bar.volume, input_bar.ts_init)
+        built_bar = builder.build_now()
+
+        assert built_bar.open == Price.from_str("110.00000")
+        assert built_bar.high == Price.from_str("111.10000")
+        assert built_bar.low == Price.from_str("108.90000")
+        assert built_bar.close == Price.from_str("110.55000")
+        assert built_bar.volume == Quantity.from_str("2.0")
+
+    def test_bar_builder_mid_bar_adjustment_change_applies_to_subsequent_updates(self):
+        bar_type = TestDataStubs.bartype_btcusdt_binance_100tick_last()
+        builder = BarBuilder(BTCUSDT_BINANCE, bar_type)
+
+        builder.set_adjustment(Decimal(0), ContinuousFutureAdjustmentType.BACKWARD_SPREAD)
+        builder.update(Price.from_str("100.00000"), Quantity.from_str("1"), 1)
+        builder.update(Price.from_str("101.00000"), Quantity.from_str("2"), 2)
+
+        # Change mid-bar: subsequent prices are adjusted, the already-aggregated OHLC is not rewritten
+        builder.set_adjustment(Decimal(10), ContinuousFutureAdjustmentType.BACKWARD_SPREAD)
+        builder.update(Price.from_str("95.00000"), Quantity.from_str("3"), 3)
+        builder.update(Price.from_str("96.00000"), Quantity.from_str("4"), 4)
+        built_bar = builder.build_now()
+
+        assert built_bar.open == Price.from_str("100.00000")
+        assert built_bar.high == Price.from_str("106.00000")
+        assert built_bar.low == Price.from_str("100.00000")
+        assert built_bar.close == Price.from_str("106.00000")
+        assert built_bar.volume == Quantity.from_str("10")
+
+    def test_bar_builder_mid_bar_ratio_adjustment_change_applies_to_subsequent_updates(self):
+        bar_type = TestDataStubs.bartype_btcusdt_binance_100tick_last()
+        builder = BarBuilder(BTCUSDT_BINANCE, bar_type)
+
+        builder.set_adjustment(Decimal(1), ContinuousFutureAdjustmentType.BACKWARD_RATIO)
+        builder.update(Price.from_str("100.00000"), Quantity.from_str("1"), 1)
+        builder.update(Price.from_str("101.00000"), Quantity.from_str("2"), 2)
+
+        # Change mid-bar to 1.10x: subsequent prices multiplied, previous OHLC stays
+        builder.set_adjustment(Decimal("1.10"), ContinuousFutureAdjustmentType.BACKWARD_RATIO)
+        builder.update(Price.from_str("95.00000"), Quantity.from_str("3"), 3)
+        builder.update(Price.from_str("96.00000"), Quantity.from_str("4"), 4)
+        built_bar = builder.build_now()
+
+        assert built_bar.open == Price.from_str("100.00000")
+        assert built_bar.high == Price.from_str("105.60000")
+        assert built_bar.low == Price.from_str("100.00000")
+        assert built_bar.close == Price.from_str("105.60000")
+        assert built_bar.volume == Quantity.from_str("10")
+
+    def test_bar_builder_spread_zero_adjustment_is_noop(self):
+        bar_type = TestDataStubs.bartype_btcusdt_binance_100tick_last()
+        builder = BarBuilder(BTCUSDT_BINANCE, bar_type)
+        builder.set_adjustment(Decimal(0), ContinuousFutureAdjustmentType.BACKWARD_SPREAD)
+
+        builder.update(Price.from_str("100.00000"), Quantity.from_str("1"), 1)
+        builder.update(Price.from_str("101.00000"), Quantity.from_str("2"), 2)
+        built_bar = builder.build_now()
+
+        assert built_bar.open == Price.from_str("100.00000")
+        assert built_bar.high == Price.from_str("101.00000")
+        assert built_bar.low == Price.from_str("100.00000")
+        assert built_bar.close == Price.from_str("101.00000")
+
+    def test_bar_builder_ratio_one_adjustment_is_noop(self):
+        bar_type = TestDataStubs.bartype_btcusdt_binance_100tick_last()
+        builder = BarBuilder(BTCUSDT_BINANCE, bar_type)
+        builder.set_adjustment(Decimal(1), ContinuousFutureAdjustmentType.BACKWARD_RATIO)
+
+        builder.update(Price.from_str("100.00000"), Quantity.from_str("1"), 1)
+        builder.update(Price.from_str("101.00000"), Quantity.from_str("2"), 2)
+        built_bar = builder.build_now()
+
+        assert built_bar.open == Price.from_str("100.00000")
+        assert built_bar.high == Price.from_str("101.00000")
+        assert built_bar.low == Price.from_str("100.00000")
+        assert built_bar.close == Price.from_str("101.00000")
 
     def test_multiple_bar_updates_correctly_increments_count(self):
         # Arrange
@@ -5998,6 +6117,7 @@ class TestSpreadQuoteAggregator:
             clock=self.clock,
             historical=False,
             update_interval_seconds=None,
+            vega_pricing_timeout_seconds=1,
         )
 
         option1_quote = QuoteTick(
@@ -6033,6 +6153,54 @@ class TestSpreadQuoteAggregator:
         # Ask = 1.10 - 2.00 = -0.90
         assert spread_quote.bid_price.as_double() == -1.10
         assert spread_quote.ask_price.as_double() == -0.90
+        assert aggregator._vega_pricing_temporarily_disabled
+
+        assert aggregator._vega_pricing_timeout_timer_name in self.clock.timer_names
+
+        events = self.clock.advance_time(self.clock.timestamp_ns() + 2 * NANOSECONDS_IN_SECOND)
+        for event in events:
+            event.handle()
+
+        assert not aggregator._vega_pricing_temporarily_disabled
+
+        cancel_handler = []
+        cancel_aggregator = SpreadQuoteAggregator(
+            spread_instrument=self.spread_instrument,
+            handler=cancel_handler.append,
+            greeks_calculator=greeks_calculator,
+            clock=self.clock,
+            historical=False,
+            update_interval_seconds=None,
+            vega_pricing_timeout_seconds=10,
+        )
+
+        cancel_aggregator.handle_quote_tick(option1_quote)
+        cancel_aggregator.handle_quote_tick(option2_quote)
+
+        assert cancel_aggregator._vega_pricing_timeout_timer_name in self.clock.timer_names
+        cancel_aggregator.stop_timer()
+        assert cancel_aggregator._vega_pricing_timeout_timer_name not in self.clock.timer_names
+
+        permanent_handler = []
+        permanent_aggregator = SpreadQuoteAggregator(
+            spread_instrument=self.spread_instrument,
+            handler=permanent_handler.append,
+            greeks_calculator=greeks_calculator,
+            clock=self.clock,
+            historical=False,
+            update_interval_seconds=None,
+            disable_vega_pricing=True,
+            vega_pricing_timeout_seconds=1,
+        )
+        permanent_aggregator._vegas[:] = [0.15, 0.12]
+
+        permanent_aggregator.handle_quote_tick(option1_quote)
+        permanent_aggregator.handle_quote_tick(option2_quote)
+
+        assert len(permanent_handler) == 1
+        assert permanent_handler[0].bid_price.as_double() == -1.10
+        assert permanent_handler[0].ask_price.as_double() == -0.90
+        assert not permanent_aggregator._vega_pricing_temporarily_disabled
 
 
 class TestSpreadQuoteAggregatorHistoricalMode:

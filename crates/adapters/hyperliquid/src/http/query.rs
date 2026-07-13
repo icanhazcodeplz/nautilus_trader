@@ -100,6 +100,12 @@ pub struct L2BookParams {
     pub coin: String,
 }
 
+/// Parameters for recent trades request.
+#[derive(Debug, Clone, Serialize)]
+pub struct RecentTradesParams {
+    pub coin: String,
+}
+
 /// Parameters for user fills request.
 #[derive(Debug, Clone, Serialize)]
 pub struct UserFillsParams {
@@ -162,6 +168,7 @@ pub struct FundingHistoryParams {
 #[serde(untagged)]
 pub enum InfoRequestParams {
     L2Book(L2BookParams),
+    RecentTrades(RecentTradesParams),
     UserFills(UserFillsParams),
     OrderStatus(OrderStatusParams),
     OpenOrders(OpenOrdersParams),
@@ -198,6 +205,14 @@ impl InfoRequest {
         }
     }
 
+    /// Creates a request to get the list of perp dexes.
+    pub fn perp_dexs() -> Self {
+        Self {
+            request_type: HyperliquidInfoRequestType::PerpDexs,
+            params: InfoRequestParams::None,
+        }
+    }
+
     /// Creates a request to get spot metadata (tokens and pairs).
     pub fn spot_meta() -> Self {
         Self {
@@ -222,11 +237,29 @@ impl InfoRequest {
         }
     }
 
+    /// Creates a request to get outcome metadata.
+    pub fn outcome_meta() -> Self {
+        Self {
+            request_type: HyperliquidInfoRequestType::OutcomeMeta,
+            params: InfoRequestParams::None,
+        }
+    }
+
     /// Creates a request to get L2 order book for a coin.
     pub fn l2_book(coin: &str) -> Self {
         Self {
             request_type: HyperliquidInfoRequestType::L2Book,
             params: InfoRequestParams::L2Book(L2BookParams {
+                coin: coin.to_string(),
+            }),
+        }
+    }
+
+    /// Creates a request to get recent public trades for a coin.
+    pub fn recent_trades(coin: &str) -> Self {
+        Self {
+            request_type: HyperliquidInfoRequestType::RecentTrades,
+            params: InfoRequestParams::RecentTrades(RecentTradesParams {
                 coin: coin.to_string(),
             }),
         }
@@ -461,12 +494,31 @@ mod tests {
     }
 
     #[rstest]
+    fn test_info_request_outcome_meta() {
+        let req = InfoRequest::outcome_meta();
+
+        assert_eq!(req.request_type, HyperliquidInfoRequestType::OutcomeMeta);
+        assert!(matches!(req.params, InfoRequestParams::None));
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(json, r#"{"type":"outcomeMeta"}"#);
+    }
+
+    #[rstest]
     fn test_info_request_l2_book() {
         let req = InfoRequest::l2_book("BTC");
 
         assert_eq!(req.request_type, HyperliquidInfoRequestType::L2Book);
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("\"coin\":\"BTC\""));
+    }
+
+    #[rstest]
+    fn test_info_request_recent_trades() {
+        let req = InfoRequest::recent_trades("BTC");
+
+        assert_eq!(req.request_type, HyperliquidInfoRequestType::RecentTrades);
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(json, r#"{"type":"recentTrades","coin":"BTC"}"#);
     }
 
     #[rstest]

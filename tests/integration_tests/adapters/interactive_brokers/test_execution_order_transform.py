@@ -13,17 +13,27 @@
 #  limitations under the License.
 # -------------------------------------------------------------------------------------------------
 
-import pytest
+from decimal import Decimal
 
+import pytest
+from ibapi.const import UNSET_DOUBLE
+
+from nautilus_trader.adapters.interactive_brokers.common import ComboLeg
+from nautilus_trader.adapters.interactive_brokers.common import IBContract
 from nautilus_trader.adapters.interactive_brokers.common import IBOrderTags
+from nautilus_trader.common.component import TestClock
+from nautilus_trader.common.factories import OrderFactory
 from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.model.enums import ContingencyType
 from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.enums import TimeInForce
+from nautilus_trader.model.enums import TrailingOffsetType
 from nautilus_trader.model.enums import TriggerType
 from nautilus_trader.model.identifiers import ClientOrderId
 from nautilus_trader.model.identifiers import OrderListId
 from nautilus_trader.model.identifiers import Venue
+from nautilus_trader.model.objects import Price
+from nautilus_trader.model.objects import Quantity
 from nautilus_trader.model.orders.limit import LimitOrder
 from nautilus_trader.model.orders.stop_market import StopMarketOrder
 from nautilus_trader.test_kit.stubs.data import TestInstrumentProvider
@@ -143,6 +153,70 @@ async def test_transform_order_to_ib_order_limit(
         f"{expected_order_type=}, but got {ib_order.orderType=}"
     )
     assert ib_order.tif == expected_tif, f"{expected_tif=}, but got {ib_order.tif=}"
+
+
+@pytest.mark.asyncio
+async def test_transform_order_to_ib_order_exchange_param(exec_client):
+    # Arrange
+    instrument = _AAPL
+    await exec_client._instrument_provider.load_async(instrument.id)
+
+    cached_contract = exec_client._instrument_provider.contract_details[instrument.id].contract
+    order = TestExecStubs.limit_order(instrument=instrument)
+
+    # Act
+    ib_order = exec_client._transform_order_to_ib_order(order, {"exchange": "IEX"})
+
+    # Assert
+    assert ib_order.contract.exchange == "IEX"
+    assert ib_order.contract.primaryExchange == "NASDAQ"
+    assert ib_order.contract.conId == cached_contract.conId
+    assert cached_contract.exchange == "SMART"
+    assert ib_order.contract is not cached_contract
+
+
+@pytest.mark.asyncio
+async def test_transform_trailing_stop_market_basis_points_uses_trailing_percent(exec_client):
+    order_factory = OrderFactory(
+        trader_id=TestIdStubs.trader_id(),
+        strategy_id=TestIdStubs.strategy_id(),
+        clock=TestClock(),
+    )
+    order = order_factory.trailing_stop_market(
+        instrument_id=_AAPL.id,
+        order_side=OrderSide.SELL,
+        quantity=Quantity.from_int(100),
+        trailing_offset=Decimal(25),
+        trigger_price=Price.from_str("149.50"),
+        trailing_offset_type=TrailingOffsetType.BASIS_POINTS,
+        trigger_type=TriggerType.LAST_PRICE,
+    )
+    await exec_client._instrument_provider.load_async(order.instrument_id)
+
+    ib_order = exec_client._transform_order_to_ib_order(order)
+
+    assert ib_order.trailingPercent == 0.25
+    assert ib_order.trailStopPrice == 149.5
+    assert ib_order.auxPrice == UNSET_DOUBLE
+
+
+def test_contract_with_routing_exchange_preserves_combo_legs(exec_client):
+    # Arrange
+    combo_legs = [
+        ComboLeg(conId=1001, ratio=1, action="BUY", exchange="SMART"),
+        ComboLeg(conId=1002, ratio=1, action="SELL", exchange="SMART"),
+    ]
+    contract = IBContract(secType="BAG", exchange="SMART", comboLegs=combo_legs)
+
+    # Act
+    updated = exec_client._contract_with_routing_exchange(contract, "CBOE")
+
+    # Assert
+    assert updated.exchange == "CBOE"
+    assert contract.exchange == "SMART"
+    assert updated.comboLegs == combo_legs
+    assert updated.comboLegs is combo_legs
+    assert isinstance(updated.comboLegs[0], ComboLeg)
 
 
 @pytest.mark.asyncio

@@ -33,21 +33,23 @@ use axum::{
     response::{IntoResponse, Json, Response},
     routing::post,
 };
-use nautilus_common::testing::wait_until_async;
+use nautilus_common::{cache::InstrumentLookupError, testing::wait_until_async};
 use nautilus_hyperliquid::{
     HyperliquidHttpClient,
     common::enums::{HyperliquidEnvironment, HyperliquidInfoRequestType},
     http::{
+        error::Error,
         models::{
-            Cloid, HyperliquidFills, HyperliquidL2Book, PerpMeta, PerpMetaAndCtxs, SpotMeta,
-            SpotMetaAndCtxs,
+            Cloid, HyperliquidExchangeResponse, HyperliquidFills, HyperliquidL2Book, OutcomeMeta,
+            PerpMeta, PerpMetaAndCtxs, SpotMeta, SpotMetaAndCtxs,
         },
         query::{InfoRequest, InfoRequestParams},
     },
 };
 use nautilus_model::{
-    enums::{OrderStatus, PositionSideSpecified},
-    identifiers::{AccountId, ClientOrderId},
+    data::BarType,
+    enums::{OrderStatus, OrderType, PositionSideSpecified, TimeInForce},
+    identifiers::{AccountId, ClientOrderId, InstrumentId},
 };
 use nautilus_network::http::{HttpClient, Method};
 use rstest::rstest;
@@ -157,6 +159,20 @@ async fn handle_info(State(state): State<TestServerState>, body: axum::body::Byt
             {"universe": [], "tokens": []},
             []
         ]))
+        .into_response(),
+        "outcomeMeta" => Json(json!({
+            "outcomes": [
+                {
+                    "outcome": 123,
+                    "name": "Recurring",
+                    "description": "class:priceBinary|underlying:HYPE|expiry:20260310-1100|targetPrice:34.5|period:3m",
+                    "sideSpecs": [
+                        {"name": "Yes"},
+                        {"name": "No"}
+                    ]
+                }
+            ]
+        }))
         .into_response(),
         "l2Book" => {
             let book = load_json("http_l2_book_btc.json");
@@ -388,6 +404,23 @@ async fn test_spot_meta_and_ctxs_returns_metadata_with_contexts() {
 
 #[rstest]
 #[tokio::test]
+async fn test_outcome_meta_returns_outcome_metadata() {
+    let state = TestServerState::default();
+    let addr = start_mock_server(state.clone()).await;
+
+    let client = create_test_client(&addr);
+    let meta = client.get_outcome_meta().await.unwrap();
+
+    assert_eq!(meta.outcomes.len(), 1);
+    assert_eq!(meta.outcomes[0].outcome, 123);
+    assert_eq!(meta.outcomes[0].side_specs[0].name, "Yes");
+
+    let request_body = state.last_request_body.lock().await.clone().unwrap();
+    assert_eq!(request_body.get("type").unwrap(), "outcomeMeta");
+}
+
+#[rstest]
+#[tokio::test]
 async fn test_info_user_fills_returns_empty_for_new_user() {
     let state = TestServerState::default();
     let addr = start_mock_server(state.clone()).await;
@@ -447,7 +480,7 @@ async fn test_info_spot_clearinghouse_state_returns_balances() {
         .unwrap();
 
     let balances = result.get("balances").and_then(|v| v.as_array()).unwrap();
-    assert_eq!(balances.len(), 3);
+    assert_eq!(balances.len(), 4);
     assert_eq!(balances[0].get("coin").unwrap().as_str().unwrap(), "USDC");
 
     let last_request = state.last_request_body.lock().await;
@@ -504,7 +537,7 @@ async fn test_request_spot_balances_emits_one_per_non_zero_token() {
         .await
         .unwrap();
 
-    assert_eq!(balances.len(), 3);
+    assert_eq!(balances.len(), 4);
 
     let usdc = balances
         .iter()
@@ -520,6 +553,69 @@ async fn test_request_spot_balances_emits_one_per_non_zero_token() {
     assert_eq!(purr.total.as_f64(), 2000.0);
     assert_eq!(purr.locked.as_f64(), 100.0);
     assert_eq!(purr.free.as_f64(), 1900.0);
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_request_bars_missing_cached_instrument_returns_bad_request_lookup_error() {
+    let client = HyperliquidHttpClient::new(HyperliquidEnvironment::Mainnet, 60, None)
+        .expect("failed to create Hyperliquid HTTP client");
+    let instrument_id = InstrumentId::from("BTC-USD-PERP.HYPERLIQUID");
+    let bar_type = BarType::from("BTC-USD-PERP.HYPERLIQUID-1-MINUTE-LAST-EXTERNAL");
+
+    let err = client
+        .request_bars(bar_type, None, None, None)
+        .await
+        .expect_err("empty instrument cache must error before making a request");
+
+    assert!(matches!(
+        err,
+        Error::BadRequest(ref message)
+            if message == &InstrumentLookupError::not_found(instrument_id).to_string()
+    ));
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_build_submit_order_report_missing_cached_instrument_returns_bad_request_lookup_error()
+{
+    use nautilus_model::{
+        enums::OrderSide,
+        types::{Price, Quantity},
+    };
+
+    let mut client = HyperliquidHttpClient::new(HyperliquidEnvironment::Mainnet, 60, None)
+        .expect("failed to create Hyperliquid HTTP client");
+    client.set_account_id(AccountId::new("HYPERLIQUID-001"));
+
+    let instrument_id = InstrumentId::from("BTC-USD-PERP.HYPERLIQUID");
+    let response = HyperliquidExchangeResponse::Status {
+        status: "ok".to_string(),
+        response: json!({
+            "type": "order",
+            "data": { "statuses": [{ "resting": { "oid": 12345 } }] },
+        }),
+    };
+
+    let err = client
+        .build_submit_order_report(
+            instrument_id,
+            ClientOrderId::new("O-001"),
+            OrderSide::Buy,
+            OrderType::Limit,
+            Quantity::from("1"),
+            TimeInForce::Gtc,
+            Some(Price::from("100.0")),
+            None,
+            response,
+        )
+        .expect_err("empty instrument cache must error before building the report");
+
+    assert!(matches!(
+        err,
+        Error::BadRequest(ref message)
+            if message == &InstrumentLookupError::not_found(instrument_id).to_string()
+    ));
 }
 
 #[rstest]
@@ -608,6 +704,7 @@ async fn test_request_spot_position_status_reports_emits_for_cached_instrument()
         None,
         None,
         None,
+        None,
         ts,
         ts,
     );
@@ -665,6 +762,7 @@ async fn test_request_spot_position_status_reports_skips_usdc() {
         0,
         Price::from("0.00001"),
         Quantity::from("1"),
+        None,
         None,
         None,
         None,
@@ -739,6 +837,7 @@ async fn test_request_spot_position_status_reports_filters_by_instrument_id() {
         None,
         None,
         None,
+        None,
         ts,
         ts,
     );
@@ -755,6 +854,7 @@ async fn test_request_spot_position_status_reports_filters_by_instrument_id() {
         2,
         Price::from("0.00001"),
         Quantity::from("0.01"),
+        None,
         None,
         None,
         None,
@@ -850,6 +950,7 @@ async fn test_request_position_status_reports_skips_perp_fetch_for_spot_filter()
         None,
         None,
         None,
+        None,
         ts,
         ts,
     );
@@ -879,6 +980,287 @@ async fn test_request_position_status_reports_skips_perp_fetch_for_spot_filter()
         "spotClearinghouseState",
         "spot-filtered query must not reach clearinghouseState"
     );
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_request_spot_position_status_reports_resolves_outcome_side_token() {
+    use nautilus_core::UnixNanos;
+    use nautilus_model::{
+        enums::AssetClass,
+        identifiers::{InstrumentId, Symbol},
+        instruments::{BinaryOption, InstrumentAny},
+        types::{Currency, Price, Quantity},
+    };
+
+    let state = TestServerState::default();
+    let addr = start_mock_server(state).await;
+
+    let client = create_domain_client(&addr);
+    let ts = nautilus_core::time::get_atomic_clock_realtime().get_time_ns();
+    let usdc = Currency::from("USDC");
+
+    let outcome = BinaryOption::new(
+        InstrumentId::from("1-YES-OUTCOME.HYPERLIQUID"),
+        Symbol::new("#10"),
+        AssetClass::Alternative,
+        usdc,
+        UnixNanos::default(),
+        UnixNanos::default(),
+        4,
+        2,
+        Price::from("0.0001"),
+        Quantity::from("0.01"),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        ts,
+        ts,
+    );
+    client.cache_instrument(&InstrumentAny::BinaryOption(outcome));
+
+    let reports = client
+        .request_spot_position_status_reports("0x1234567890123456789012345678901234567890", None)
+        .await
+        .unwrap();
+
+    let outcome_report = reports
+        .iter()
+        .find(|r| r.instrument_id == InstrumentId::from("1-YES-OUTCOME.HYPERLIQUID"))
+        .expect("outcome side token must surface as a position report");
+    assert_eq!(outcome_report.position_side, PositionSideSpecified::Long);
+    assert_eq!(outcome_report.quantity.as_f64(), 25.0);
+    // entryNtl=12.5 / total=25 = 0.5
+    assert_eq!(
+        outcome_report.avg_px_open.unwrap(),
+        rust_decimal_macros::dec!(0.5),
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_request_position_status_reports_skips_perp_fetch_for_outcome_filter() {
+    use nautilus_core::UnixNanos;
+    use nautilus_model::{
+        enums::AssetClass,
+        identifiers::{InstrumentId, Symbol},
+        instruments::{BinaryOption, InstrumentAny},
+        types::{Currency, Price, Quantity},
+    };
+
+    let state = TestServerState::default();
+    let addr = start_mock_server(state.clone()).await;
+
+    let client = create_domain_client(&addr);
+    let ts = nautilus_core::time::get_atomic_clock_realtime().get_time_ns();
+    let usdc = Currency::from("USDC");
+
+    let outcome = BinaryOption::new(
+        InstrumentId::from("1-YES-OUTCOME.HYPERLIQUID"),
+        Symbol::new("#10"),
+        AssetClass::Alternative,
+        usdc,
+        UnixNanos::default(),
+        UnixNanos::default(),
+        4,
+        2,
+        Price::from("0.0001"),
+        Quantity::from("0.01"),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        ts,
+        ts,
+    );
+    client.cache_instrument(&InstrumentAny::BinaryOption(outcome));
+
+    let reports = client
+        .request_position_status_reports(
+            "0x1234567890123456789012345678901234567890",
+            Some("1-YES-OUTCOME.HYPERLIQUID".into()),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(reports.len(), 1);
+    assert_eq!(
+        reports[0].instrument_id,
+        InstrumentId::from("1-YES-OUTCOME.HYPERLIQUID")
+    );
+
+    // Request count guards against fetching perp first then spot
+    let last = state.last_request_body.lock().await;
+    let body = last.as_ref().unwrap();
+    assert_eq!(
+        body.get("type").unwrap().as_str().unwrap(),
+        "spotClearinghouseState",
+        "outcome-filtered query must not reach clearinghouseState"
+    );
+    assert_eq!(
+        *state.request_count.lock().await,
+        1,
+        "outcome filter must issue exactly one info request"
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_submit_order_resolves_outcome_response_instrument() {
+    // Regression test: after the venue accepts an outcome order, the
+    // response-report builder must resolve the cached BinaryOption via
+    // `cache_alias_for_symbol` (token form `+<encoding>` for outcomes), not
+    // via the leading symbol segment (which would be the literal outcome
+    // index, e.g. "123", and miss the cache).
+    use nautilus_model::{
+        enums::OrderSide,
+        identifiers::InstrumentId,
+        types::{Price, Quantity},
+    };
+
+    let state = TestServerState::default();
+    let addr = start_mock_server(state).await;
+
+    let mut client = HyperliquidHttpClient::from_credentials(
+        "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+        None,
+        HyperliquidEnvironment::Mainnet,
+        60,
+        None,
+    )
+    .unwrap();
+    client.set_base_info_url(format!("http://{addr}/info"));
+    client.set_base_exchange_url(format!("http://{addr}/exchange"));
+    client.set_account_id(AccountId::new("HYPERLIQUID-001"));
+
+    // Populate asset_indices and the instrument cache from the mocked
+    // `outcomeMeta`, which lists outcome 123 with both sides.
+    let instruments = client.request_instruments().await.unwrap();
+    for inst in &instruments {
+        client.cache_instrument(inst);
+    }
+
+    let outcome_id = InstrumentId::from("123-YES-OUTCOME.HYPERLIQUID");
+    let cloid = ClientOrderId::new("O-OUTCOME-SUBMIT-001");
+
+    let report = client
+        .submit_order(
+            outcome_id,
+            cloid,
+            OrderSide::Buy,
+            OrderType::Limit,
+            Quantity::from("100"),
+            TimeInForce::Gtc,
+            Some(Price::from("0.5000")),
+            None,
+            false,
+            false,
+        )
+        .await
+        .expect("submit_order must succeed and resolve the outcome instrument");
+
+    assert_eq!(report.instrument_id, outcome_id);
+    assert_eq!(report.venue_order_id.as_str(), "12345");
+    assert_eq!(report.order_status, OrderStatus::Accepted);
+    assert_eq!(report.client_order_id, Some(cloid));
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_submit_orders_resolves_outcome_response_instrument() {
+    // Mirror of `test_submit_order_resolves_outcome_response_instrument` for
+    // the batch path. `submit_orders` runs the same alias derivation in a
+    // loop, so a separate regression test guards against the two call sites
+    // drifting apart.
+    use nautilus_model::{
+        enums::{ContingencyType, OrderSide},
+        identifiers::{InstrumentId, StrategyId, TraderId},
+        orders::{LimitOrder, OrderAny},
+        types::{Price, Quantity},
+    };
+
+    let state = TestServerState::default();
+    let addr = start_mock_server(state).await;
+
+    let mut client = HyperliquidHttpClient::from_credentials(
+        "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+        None,
+        HyperliquidEnvironment::Mainnet,
+        60,
+        None,
+    )
+    .unwrap();
+    client.set_base_info_url(format!("http://{addr}/info"));
+    client.set_base_exchange_url(format!("http://{addr}/exchange"));
+    client.set_account_id(AccountId::new("HYPERLIQUID-001"));
+
+    let instruments = client.request_instruments().await.unwrap();
+    for inst in &instruments {
+        client.cache_instrument(inst);
+    }
+
+    let outcome_id = InstrumentId::from("123-YES-OUTCOME.HYPERLIQUID");
+    let cloid = ClientOrderId::new("O-OUTCOME-BATCH-001");
+
+    let order = OrderAny::Limit(LimitOrder::new(
+        TraderId::from("TESTER-001"),
+        StrategyId::from("S-001"),
+        outcome_id,
+        cloid,
+        OrderSide::Buy,
+        Quantity::from("100"),
+        Price::from("0.5000"),
+        TimeInForce::Gtc,
+        None,
+        false,
+        false,
+        false,
+        None,
+        None,
+        None,
+        Some(ContingencyType::NoContingency),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Default::default(),
+        Default::default(),
+    ));
+
+    let reports = client
+        .submit_orders(&[&order])
+        .await
+        .expect("submit_orders must succeed and resolve outcome instruments");
+
+    assert_eq!(reports.len(), 1);
+    let report = &reports[0];
+    assert_eq!(report.instrument_id, outcome_id);
+    assert_eq!(report.venue_order_id.as_str(), "12345");
+    assert_eq!(report.order_status, OrderStatus::Accepted);
 }
 
 #[rstest]
@@ -1071,6 +1453,12 @@ impl TestHttpClient {
         serde_json::from_value(value).map_err(|e| e.to_string())
     }
 
+    async fn get_outcome_meta(&self) -> Result<OutcomeMeta, String> {
+        let request = InfoRequest::outcome_meta();
+        let value = self.send_info_request(&request).await?;
+        serde_json::from_value(value).map_err(|e| e.to_string())
+    }
+
     async fn info_l2_book(&self, coin: &str) -> Result<HyperliquidL2Book, String> {
         let request = InfoRequest::l2_book(coin);
         let value = self.send_info_request(&request).await?;
@@ -1148,6 +1536,7 @@ fn cache_btc_instrument(client: &HyperliquidHttpClient) {
         None,
         None,
         None,
+        None,
         ts,
         ts,
     )
@@ -1168,7 +1557,12 @@ async fn test_request_order_status_report_open_order() {
         "oid": 12345,
         "timestamp": 1700000000000u64,
         "origSz": "0.1",
-        "cloid": "0xaabbccdd00112233aabbccdd00112233"
+        "cloid": "0xaabbccdd00112233aabbccdd00112233",
+        "isTrigger": false,
+        "triggerCondition": "N/A",
+        "triggerPx": "0.0",
+        "tif": "Alo",
+        "reduceOnly": true
     }]));
 
     let addr = start_mock_server(state).await;
@@ -1184,7 +1578,16 @@ async fn test_request_order_status_report_open_order() {
     // Status stays Accepted (matching bulk path) because we lack avg_px
     // for safe PartiallyFilled reconciliation. Real fills arrive via WebSocket.
     assert_eq!(report.order_status, OrderStatus::Accepted);
+    assert_eq!(report.order_type, OrderType::Limit);
+    assert_eq!(report.time_in_force, TimeInForce::Gtc);
+    assert!(report.post_only);
+    assert!(report.reduce_only);
     assert!(report.price.is_some(), "open order retains limit price");
+    assert!(
+        report.trigger_price.is_none(),
+        "non-conditional limit order must not carry Hyperliquid's placeholder trigger price"
+    );
+    assert!(report.trigger_type.is_none());
     assert_eq!(report.filled_qty.as_f64(), 0.05);
     assert_eq!(report.quantity.as_f64(), 0.1);
 }
@@ -1326,7 +1729,8 @@ async fn test_request_order_status_report_not_found() {
 #[tokio::test]
 async fn test_request_order_status_report_by_client_order_id_matches_cloid() {
     let coid = ClientOrderId::new("O-20240101-000001");
-    let cloid_hex = Cloid::from_client_order_id(coid).to_hex();
+    let cloid = Cloid::from_client_order_id(coid);
+    let cloid_hex = cloid.to_hex();
 
     let state = TestServerState::default();
     *state.frontend_open_orders_response.lock().await = Some(json!([{
@@ -1348,12 +1752,12 @@ async fn test_request_order_status_report_by_client_order_id_matches_cloid() {
         .request_order_status_report_by_client_order_id("0xuser", &coid)
         .await
         .unwrap()
-        .expect("should match by cloid hash");
+        .expect("should match by deterministic cloid");
 
     assert_eq!(
         report.client_order_id,
         Some(coid),
-        "should return original client_order_id, not cloid hash"
+        "should return original client_order_id, not venue cloid"
     );
     assert_eq!(report.order_status, OrderStatus::Accepted);
 }
@@ -1379,6 +1783,7 @@ async fn test_request_order_status_report_by_client_order_id_no_match() {
     cache_btc_instrument(&client);
 
     let coid = ClientOrderId::new("O-20240101-999999");
+    client.cache_client_order_id_cloid(coid, Cloid::from_client_order_id(coid));
     let report = client
         .request_order_status_report_by_client_order_id("0xuser", &coid)
         .await

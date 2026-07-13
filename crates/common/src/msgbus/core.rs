@@ -87,21 +87,23 @@ use std::{
     any::{Any, TypeId},
     cell::RefCell,
     collections::HashMap,
+    fmt::Debug,
     hash::{Hash, Hasher},
     rc::Rc,
 };
 
 use ahash::{AHashMap, AHashSet};
 use indexmap::IndexMap;
-use nautilus_core::{UUID4, correctness::FAILED};
+use nautilus_core::UUID4;
 use nautilus_model::{
     data::{
         Bar, Data, FundingRateUpdate, GreeksData, IndexPriceUpdate, MarkPriceUpdate,
         OrderBookDeltas, OrderBookDepth10, QuoteTick, TradeTick,
         option_chain::{OptionChainSlice, OptionGreeks},
     },
-    events::{AccountState, OrderEventAny, PositionEvent},
+    events::{AccountState, OrderEventAny, PortfolioSnapshot, PositionEvent},
     identifiers::TraderId,
+    instruments::InstrumentAny,
     orderbook::OrderBook,
     orders::OrderAny,
     position::Position,
@@ -110,17 +112,23 @@ use smallvec::SmallVec;
 use ustr::Ustr;
 
 use super::{
-    ShareableMessageHandler,
+    HAS_EXTERNAL_EGRESS, ShareableMessageHandler,
+    backing::MessageBusExternalEgress,
+    config::MessageBusConfig,
     matching::is_matching_backtracking,
+    message::{BusPayloadCategory, BusPayloadType},
     mstr::{Endpoint, MStr, Pattern, Topic},
     set_message_bus,
     switchboard::MessagingSwitchboard,
     typed_endpoints::{EndpointMap, IntoEndpointMap},
     typed_router::TopicRouter,
 };
-use crate::messages::{
-    data::{DataCommand, DataResponse},
-    execution::{ExecutionReport, TradingCommand},
+use crate::{
+    enums::SerializationEncoding,
+    messages::{
+        data::{DataCommand, DataResponse},
+        execution::{ExecutionReport, TradingCommand},
+    },
 };
 
 /// Represents a subscription to a particular topic.
@@ -139,7 +147,7 @@ pub struct Subscription {
     /// The priority for the subscription determines the ordering of handlers receiving
     /// messages being processed, higher priority handlers will receive messages before
     /// lower priority handlers.
-    pub priority: u8,
+    pub priority: u32,
 }
 
 impl Subscription {
@@ -148,7 +156,7 @@ impl Subscription {
     pub fn new(
         pattern: MStr<Pattern>,
         handler: ShareableMessageHandler,
-        priority: Option<u8>,
+        priority: Option<u32>,
     ) -> Self {
         Self {
             handler_id: handler.0.id(),
@@ -210,7 +218,6 @@ impl Hash for Subscription {
 /// A question mark matches a single character once. For example, `c?mp` matches
 /// `camp` and `comp`. The question mark can also be used more than once.
 /// For example, `c??p` would match both of the above examples and `coop`.
-#[derive(Debug)]
 pub struct MessageBus {
     /// The trader ID associated with the message bus.
     pub trader_id: TraderId,
@@ -239,9 +246,11 @@ pub struct MessageBus {
     pub(crate) router_account_state: TopicRouter<AccountState>,
     pub(crate) router_orders: TopicRouter<OrderAny>,
     pub(crate) router_positions: TopicRouter<Position>,
+    pub(crate) router_portfolio: TopicRouter<PortfolioSnapshot>,
     pub(crate) router_greeks: TopicRouter<GreeksData>,
     pub(crate) router_option_greeks: TopicRouter<OptionGreeks>,
     pub(crate) router_option_chain: TopicRouter<OptionChainSlice>,
+    pub(crate) router_instruments: TopicRouter<InstrumentAny>,
     #[cfg(feature = "defi")]
     pub(crate) router_defi_blocks: TopicRouter<nautilus_model::defi::Block>, // nautilus-import-ok
     #[cfg(feature = "defi")]
@@ -268,6 +277,28 @@ pub struct MessageBus {
     pub(crate) endpoints_data: IntoEndpointMap<Data>,
     routers_typed: AHashMap<TypeId, Box<dyn Any>>,
     endpoints_typed: AHashMap<TypeId, Box<dyn Any>>,
+    sent_count: u64,
+    req_count: u64,
+    res_count: u64,
+    pub_count: u64,
+    external_egress: Option<Box<dyn MessageBusExternalEgress>>,
+    encoding: SerializationEncoding,
+    encoding_market_data: Option<SerializationEncoding>,
+    encoding_builtin: Option<SerializationEncoding>,
+    types_filter: AHashSet<BusPayloadType>,
+    streaming_types: AHashSet<BusPayloadType>,
+}
+
+impl Debug for MessageBus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct(stringify!(MessageBus))
+            .field("trader_id", &self.trader_id)
+            .field("instance_id", &self.instance_id)
+            .field("name", &self.name)
+            .field("has_backing", &self.has_backing)
+            .field("external_egress", &self.external_egress.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for MessageBus {
@@ -308,11 +339,13 @@ impl MessageBus {
             router_order_events: TopicRouter::new(),
             router_position_events: TopicRouter::new(),
             router_account_state: TopicRouter::new(),
+            router_portfolio: TopicRouter::new(),
             router_orders: TopicRouter::new(),
             router_positions: TopicRouter::new(),
             router_greeks: TopicRouter::new(),
             router_option_greeks: TopicRouter::new(),
             router_option_chain: TopicRouter::new(),
+            router_instruments: TopicRouter::new(),
             #[cfg(feature = "defi")]
             router_defi_blocks: TopicRouter::new(),
             #[cfg(feature = "defi")]
@@ -339,6 +372,16 @@ impl MessageBus {
             endpoints_data: IntoEndpointMap::new(),
             routers_typed: AHashMap::new(),
             endpoints_typed: AHashMap::new(),
+            sent_count: 0,
+            req_count: 0,
+            res_count: 0,
+            pub_count: 0,
+            external_egress: None,
+            encoding: SerializationEncoding::Json,
+            encoding_market_data: None,
+            encoding_builtin: None,
+            types_filter: AHashSet::new(),
+            streaming_types: AHashSet::new(),
         }
     }
 
@@ -375,6 +418,90 @@ impl MessageBus {
             .expect("EndpointMap type mismatch - this is a bug")
     }
 
+    /// Sets external egress for serialized published messages.
+    pub fn set_external_egress(
+        &mut self,
+        external_egress: Box<dyn MessageBusExternalEgress>,
+        encoding: SerializationEncoding,
+    ) {
+        self.external_egress = Some(external_egress);
+        self.encoding = encoding;
+        self.encoding_market_data = None;
+        self.encoding_builtin = None;
+        self.has_backing = true;
+        HAS_EXTERNAL_EGRESS.with(|flag| flag.set(true));
+    }
+
+    /// Sets external egress and category encoding policy from a validated config.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`crate::config::ConfigError`] if the config selects an unsupported encoding.
+    pub fn set_external_egress_config(
+        &mut self,
+        external_egress: Box<dyn MessageBusExternalEgress>,
+        config: &MessageBusConfig,
+    ) -> crate::config::ConfigResult<()> {
+        config.validate()?;
+
+        self.external_egress = Some(external_egress);
+        self.encoding = config.encoding;
+        self.encoding_market_data = config.encoding_market_data;
+        self.encoding_builtin = config.encoding_builtin;
+        self.has_backing = true;
+        HAS_EXTERNAL_EGRESS.with(|flag| flag.set(true));
+
+        Ok(())
+    }
+
+    /// Sets the type names excluded from external publishing.
+    pub fn set_types_filter(&mut self, filter: Vec<String>) {
+        self.types_filter = filter
+            .into_iter()
+            .map(|type_name| BusPayloadType::from_name(&type_name))
+            .filter(|payload_type| !payload_type.as_str().is_empty())
+            .collect();
+    }
+
+    /// Registers a payload type for external-to-internal streaming.
+    pub fn add_streaming_type(&mut self, payload_type: BusPayloadType) {
+        if !payload_type.as_str().is_empty() {
+            self.streaming_types.insert(payload_type);
+        }
+    }
+
+    /// Returns whether the payload type is registered for external-to-internal streaming.
+    #[must_use]
+    pub fn is_streaming_type(&self, payload_type: BusPayloadType) -> bool {
+        !payload_type.as_str().is_empty() && self.streaming_types.contains(&payload_type)
+    }
+
+    /// Clears all payload types registered for external-to-internal streaming.
+    pub fn clear_streaming_types(&mut self) {
+        self.streaming_types.clear();
+    }
+
+    #[must_use]
+    pub(crate) fn has_external_egress(&self) -> bool {
+        self.external_egress.is_some()
+    }
+
+    pub(crate) fn external_egress(&self) -> Option<&dyn MessageBusExternalEgress> {
+        self.external_egress.as_deref()
+    }
+
+    pub(crate) fn encoding_for(&self, payload_type: BusPayloadType) -> SerializationEncoding {
+        match payload_type.category() {
+            BusPayloadCategory::MarketData => self.encoding_market_data.unwrap_or(self.encoding),
+            BusPayloadCategory::BuiltIn => self.encoding_builtin.unwrap_or(self.encoding),
+            BusPayloadCategory::Other => self.encoding,
+        }
+    }
+
+    pub(crate) fn types_filter(&self) -> &AHashSet<BusPayloadType> {
+        &self.types_filter
+    }
+
     /// Disposes of the message bus, clearing all subscriptions, endpoints,
     /// and handler references.
     pub fn dispose(&mut self) {
@@ -395,11 +522,13 @@ impl MessageBus {
         self.router_order_events.clear();
         self.router_position_events.clear();
         self.router_account_state.clear();
+        self.router_portfolio.clear();
         self.router_orders.clear();
         self.router_positions.clear();
         self.router_greeks.clear();
         self.router_option_greeks.clear();
         self.router_option_chain.clear();
+        self.router_instruments.clear();
 
         #[cfg(feature = "defi")]
         {
@@ -425,6 +554,17 @@ impl MessageBus {
 
         self.routers_typed.clear();
         self.endpoints_typed.clear();
+        self.clear_streaming_types();
+        self.sent_count = 0;
+        self.req_count = 0;
+        self.res_count = 0;
+        self.pub_count = 0;
+
+        if let Some(mut external_egress) = self.external_egress.take() {
+            external_egress.close();
+        }
+        self.has_backing = false;
+        HAS_EXTERNAL_EGRESS.with(|flag| flag.set(false));
     }
 
     /// Returns the memory address of this instance as a hexadecimal string.
@@ -437,6 +577,46 @@ impl MessageBus {
     #[must_use]
     pub fn switchboard(&self) -> &MessagingSwitchboard {
         &self.switchboard
+    }
+
+    /// Returns the total count of messages sent to endpoints.
+    #[must_use]
+    pub const fn sent_count(&self) -> u64 {
+        self.sent_count
+    }
+
+    /// Returns the total count of requests sent to endpoints.
+    #[must_use]
+    pub const fn req_count(&self) -> u64 {
+        self.req_count
+    }
+
+    /// Returns the total count of responses sent to registered handlers.
+    #[must_use]
+    pub const fn res_count(&self) -> u64 {
+        self.res_count
+    }
+
+    /// Returns the total count of messages published to topics.
+    #[must_use]
+    pub const fn pub_count(&self) -> u64 {
+        self.pub_count
+    }
+
+    pub(crate) fn increment_sent_count(&mut self) {
+        self.sent_count += 1;
+    }
+
+    pub(crate) fn increment_req_count(&mut self) {
+        self.req_count += 1;
+    }
+
+    pub(crate) fn increment_res_count(&mut self) {
+        self.res_count += 1;
+    }
+
+    pub(crate) fn increment_pub_count(&mut self) {
+        self.pub_count += 1;
     }
 
     /// Returns the registered endpoint addresses.
@@ -455,21 +635,25 @@ impl MessageBus {
     }
 
     /// Returns whether there are subscribers for the `topic`.
-    pub fn has_subscribers<T: AsRef<str>>(&self, topic: T) -> bool {
-        self.subscriptions_count(topic) > 0
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the `topic` is not a valid topic string.
+    pub fn has_subscribers<T: AsRef<str>>(&self, topic: T) -> anyhow::Result<bool> {
+        Ok(self.subscriptions_count(topic)? > 0)
     }
 
     /// Returns the count of subscribers for the `topic`.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the `topic` is not a valid topic string.
-    #[must_use]
-    pub fn subscriptions_count<T: AsRef<str>>(&self, topic: T) -> usize {
-        let topic = MStr::<Topic>::topic(topic).expect(FAILED);
-        self.topics
+    /// Returns an error if the `topic` is not a valid topic string.
+    pub fn subscriptions_count<T: AsRef<str>>(&self, topic: T) -> anyhow::Result<usize> {
+        let topic = MStr::<Topic>::topic(topic)?;
+        Ok(self
+            .topics
             .get(&topic)
-            .map_or_else(|| self.find_topic_matches(topic).len(), |subs| subs.len())
+            .map_or_else(|| self.find_topic_matches(topic).len(), Vec::len))
     }
 
     /// Returns active subscriptions.
@@ -515,8 +699,12 @@ impl MessageBus {
     /// # Errors
     ///
     /// This function never returns an error (TBD once backing database added).
-    pub const fn close(&self) -> anyhow::Result<()> {
-        // TODO: Integrate the backing database
+    pub fn close(&mut self) -> anyhow::Result<()> {
+        if let Some(mut external_egress) = self.external_egress.take() {
+            external_egress.close();
+        }
+        self.has_backing = false;
+        HAS_EXTERNAL_EGRESS.with(|flag| flag.set(false));
         Ok(())
     }
 
@@ -614,7 +802,7 @@ mod tests {
     use crate::msgbus::{
         self, ShareableMessageHandler, get_message_bus,
         matching::is_matching_backtracking,
-        stubs::{get_call_check_handler, get_stub_shareable_handler},
+        stubs::{get_any_saving_handler, get_call_check_handler, get_stub_shareable_handler},
         subscriptions_count_any,
     };
 
@@ -628,6 +816,144 @@ mod tests {
     }
 
     #[rstest]
+    fn encoding_for_uses_market_data_override() {
+        let msgbus = MessageBus {
+            encoding: SerializationEncoding::Json,
+            encoding_market_data: Some(SerializationEncoding::MsgPack),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            msgbus.encoding_for(BusPayloadType::QuoteTick),
+            SerializationEncoding::MsgPack
+        );
+        assert_eq!(
+            msgbus.encoding_for(BusPayloadType::Custom(Ustr::from("CustomPayload"))),
+            SerializationEncoding::Json
+        );
+    }
+
+    #[rstest]
+    fn encoding_for_uses_builtin_override() {
+        let msgbus = MessageBus {
+            encoding: SerializationEncoding::Json,
+            encoding_builtin: Some(SerializationEncoding::MsgPack),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            msgbus.encoding_for(BusPayloadType::OrderEvent),
+            SerializationEncoding::MsgPack
+        );
+        assert_eq!(
+            msgbus.encoding_for(BusPayloadType::Instrument),
+            SerializationEncoding::Json
+        );
+    }
+
+    #[rstest]
+    fn encoding_for_uses_default_without_category_override() {
+        let msgbus = MessageBus {
+            encoding: SerializationEncoding::MsgPack,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            msgbus.encoding_for(BusPayloadType::QuoteTick),
+            SerializationEncoding::MsgPack
+        );
+        assert_eq!(
+            msgbus.encoding_for(BusPayloadType::OrderEvent),
+            SerializationEncoding::MsgPack
+        );
+        assert_eq!(
+            msgbus.encoding_for(BusPayloadType::Custom(Ustr::from("CustomPayload"))),
+            SerializationEncoding::MsgPack
+        );
+    }
+
+    #[rstest]
+    fn set_types_filter_resolves_canonical_and_custom_names() {
+        let mut msgbus = MessageBus::default();
+
+        msgbus.set_types_filter(vec![
+            "QuoteTick".to_string(),
+            "ExternalCustomPayload".to_string(),
+            String::new(),
+        ]);
+
+        let filter = msgbus.types_filter();
+        assert_eq!(filter.len(), 2);
+        assert!(filter.contains(&BusPayloadType::QuoteTick));
+        assert!(filter.contains(&BusPayloadType::Custom(Ustr::from("ExternalCustomPayload"))));
+        assert!(!filter.contains(&BusPayloadType::Custom(Ustr::default())));
+    }
+
+    #[rstest]
+    fn streaming_type_registration_uses_canonical_payload_names() {
+        let mut msgbus = MessageBus::default();
+
+        msgbus.add_streaming_type(BusPayloadType::QuoteTick);
+        msgbus.add_streaming_type(BusPayloadType::Custom(Ustr::from("CustomPayload")));
+
+        assert!(msgbus.is_streaming_type(BusPayloadType::QuoteTick));
+        assert!(msgbus.is_streaming_type(BusPayloadType::Custom(Ustr::from("CustomPayload"))));
+        assert!(msgbus.streaming_types.contains(&BusPayloadType::QuoteTick));
+        assert!(
+            msgbus
+                .streaming_types
+                .contains(&BusPayloadType::Custom(Ustr::from("CustomPayload")))
+        );
+        assert!(!msgbus.is_streaming_type(BusPayloadType::TradeTick));
+    }
+
+    #[rstest]
+    fn streaming_type_registration_ignores_empty_custom_payload_type() {
+        let mut msgbus = MessageBus::default();
+
+        msgbus.add_streaming_type(BusPayloadType::Custom(Ustr::default()));
+
+        assert!(!msgbus.is_streaming_type(BusPayloadType::Custom(Ustr::default())));
+        assert!(msgbus.streaming_types.is_empty());
+    }
+
+    #[rstest]
+    fn clear_streaming_types_removes_registered_types() {
+        let mut msgbus = MessageBus::default();
+        msgbus.add_streaming_type(BusPayloadType::QuoteTick);
+
+        msgbus.clear_streaming_types();
+
+        assert!(!msgbus.is_streaming_type(BusPayloadType::QuoteTick));
+    }
+
+    #[rstest]
+    fn dispose_clears_streaming_types() {
+        let mut msgbus = MessageBus::default();
+        msgbus.add_streaming_type(BusPayloadType::QuoteTick);
+
+        msgbus.dispose();
+
+        assert!(!msgbus.is_streaming_type(BusPayloadType::QuoteTick));
+    }
+
+    #[rstest]
+    fn test_dispose_resets_counters() {
+        let mut msgbus = MessageBus::default();
+
+        msgbus.increment_sent_count();
+        msgbus.increment_req_count();
+        msgbus.increment_res_count();
+        msgbus.increment_pub_count();
+        msgbus.dispose();
+
+        assert_eq!(msgbus.sent_count(), 0);
+        assert_eq!(msgbus.req_count(), 0);
+        assert_eq!(msgbus.res_count(), 0);
+        assert_eq!(msgbus.pub_count(), 0);
+    }
+
+    #[rstest]
     fn test_endpoints_when_no_endpoints() {
         let msgbus = get_message_bus();
         assert!(msgbus.borrow().endpoints().is_empty());
@@ -637,7 +963,7 @@ mod tests {
     fn test_topics_when_no_subscriptions() {
         let msgbus = get_message_bus();
         assert!(msgbus.borrow().patterns().is_empty());
-        assert!(!msgbus.borrow().has_subscribers("my-topic"));
+        assert!(!msgbus.borrow().has_subscribers("my-topic").unwrap());
     }
 
     #[rstest]
@@ -709,14 +1035,44 @@ mod tests {
         let msgbus = get_message_bus();
         let endpoint = "MyEndpoint".into();
         let (handler, checker) = get_call_check_handler(None);
+        let sent_count = msgbus.borrow().sent_count();
 
         msgbus::register_any(endpoint, handler);
         assert!(msgbus.borrow().get_endpoint(endpoint).is_some());
         assert!(!checker.was_called());
 
-        // Send a message to the endpoint
         msgbus::send_any(endpoint, &"Test Message");
+
         assert!(checker.was_called());
+        assert_eq!(msgbus.borrow().sent_count(), sent_count + 1);
+    }
+
+    #[rstest]
+    fn test_endpoint_send_value_increments_sent_count() {
+        let msgbus = get_message_bus();
+        let endpoint = "MyValueEndpoint".into();
+        let (handler, checker) = get_call_check_handler(None);
+        let sent_count = msgbus.borrow().sent_count();
+
+        msgbus::register_any(endpoint, handler);
+        msgbus::send_any_value(endpoint, &"Test Message");
+
+        assert!(checker.was_called());
+        assert_eq!(msgbus.borrow().sent_count(), sent_count + 1);
+    }
+
+    #[rstest]
+    fn test_publish_any_increments_publish_count() {
+        let msgbus = get_message_bus();
+        let topic = "my-published-topic";
+        let (handler, checker) = get_call_check_handler(None);
+        let pub_count = msgbus.borrow().pub_count();
+
+        msgbus::subscribe_any(topic.into(), handler, None);
+        msgbus::publish_any(topic.into(), &"Test Message");
+
+        assert!(checker.was_called());
+        assert_eq!(msgbus.borrow().pub_count(), pub_count + 1);
     }
 
     #[rstest]
@@ -739,7 +1095,7 @@ mod tests {
 
         msgbus::subscribe_any(topic.into(), handler, Some(1));
 
-        assert!(msgbus.borrow().has_subscribers(topic));
+        assert!(msgbus.borrow().has_subscribers(topic).unwrap());
         assert_eq!(msgbus.borrow().patterns(), vec![topic]);
     }
 
@@ -752,8 +1108,48 @@ mod tests {
         msgbus::subscribe_any(topic.into(), handler.clone(), None);
         msgbus::unsubscribe_any(topic.into(), &handler);
 
-        assert!(!msgbus.borrow().has_subscribers(topic));
+        assert!(!msgbus.borrow().has_subscribers(topic).unwrap());
         assert!(msgbus.borrow().patterns().is_empty());
+    }
+
+    #[rstest]
+    fn test_subscriptions_count_rejects_invalid_topic() {
+        let msgbus = get_message_bus();
+
+        let err = msgbus
+            .borrow()
+            .subscriptions_count("data.*")
+            .expect_err("wildcards are invalid in topics");
+
+        assert_eq!(
+            err.to_string(),
+            "Topic `value` contained invalid characters, was data.*"
+        );
+    }
+
+    #[rstest]
+    fn test_has_subscribers_rejects_invalid_topic() {
+        let msgbus = get_message_bus();
+
+        let err = msgbus
+            .borrow()
+            .has_subscribers("data.*")
+            .expect_err("wildcards are invalid in topics");
+
+        assert_eq!(
+            err.to_string(),
+            "Topic `value` contained invalid characters, was data.*"
+        );
+    }
+
+    #[rstest]
+    fn test_subscriptions_count_any_rejects_invalid_topic() {
+        let err = subscriptions_count_any("data.*").expect_err("wildcards are invalid in topics");
+
+        assert_eq!(
+            err.to_string(),
+            "Topic `value` contained invalid characters, was data.*"
+        );
     }
 
     #[rstest]
@@ -782,7 +1178,7 @@ mod tests {
             msgbus.borrow().patterns(),
             vec![pattern, pattern, pattern, pattern]
         );
-        assert_eq!(subscriptions_count_any(pattern), 4);
+        assert_eq!(subscriptions_count_any(pattern).unwrap(), 4);
 
         let topic = pattern;
         let subs = msgbus.borrow_mut().matching_subscriptions(topic);
@@ -814,9 +1210,74 @@ mod tests {
         assert_eq!(matches[1].handler_id, Ustr::from("1"));
     }
 
+    #[rstest]
+    fn test_late_wildcard_subscription_receives_cached_topic() {
+        let msgbus = get_message_bus();
+        let topic = "data.instrument.POLYMARKET.TEST-SYMBOL";
+
+        let (early_handler, early_saver) =
+            get_any_saving_handler::<String>(Some(Ustr::from("early")));
+        msgbus::subscribe_any("data.*.POLYMARKET.*".into(), early_handler, None);
+
+        msgbus::publish_any(topic.into(), &"ONE".to_string());
+
+        let (late_handler, late_saver) = get_any_saving_handler::<String>(Some(Ustr::from("late")));
+        msgbus::subscribe_any("data.instrument.POLYMARKET.*".into(), late_handler, None);
+
+        msgbus::publish_any(topic.into(), &"TWO".to_string());
+
+        assert_eq!(early_saver.get_messages(), vec!["ONE", "TWO"]);
+        assert_eq!(late_saver.get_messages(), vec!["TWO"]);
+
+        let topic_mstr: MStr<Topic> = topic.into();
+        let cached = msgbus.borrow_mut().matching_subscriptions(topic_mstr);
+        assert_eq!(cached.len(), 2);
+    }
+
+    #[rstest]
+    fn test_late_wildcard_backfills_into_multiple_cached_topics() {
+        let msgbus = get_message_bus();
+        let topics = ["data.A", "data.B", "data.C"];
+
+        let (early_handler, early_saver) =
+            get_any_saving_handler::<String>(Some(Ustr::from("early")));
+        msgbus::subscribe_any("data.*".into(), early_handler, None);
+
+        for topic in &topics {
+            msgbus::publish_any((*topic).into(), &(*topic).to_string());
+        }
+
+        let (late_handler, late_saver) = get_any_saving_handler::<String>(Some(Ustr::from("late")));
+        msgbus::subscribe_any("data.*".into(), late_handler, None);
+
+        for topic in &topics {
+            msgbus::publish_any((*topic).into(), &format!("{topic}-2"));
+        }
+
+        assert_eq!(
+            early_saver.get_messages(),
+            vec![
+                "data.A", "data.B", "data.C", "data.A-2", "data.B-2", "data.C-2"
+            ],
+        );
+        assert_eq!(
+            late_saver.get_messages(),
+            vec!["data.A-2", "data.B-2", "data.C-2"]
+        );
+
+        for topic in &topics {
+            let topic_mstr: MStr<Topic> = (*topic).into();
+            assert_eq!(
+                msgbus.borrow_mut().matching_subscriptions(topic_mstr).len(),
+                2,
+                "topic {topic} should have both subscribers cached",
+            );
+        }
+    }
+
     /// A simple reference model for subscription behavior.
     struct SimpleSubscriptionModel {
-        /// Stores (pattern, handler_id) tuples for active subscriptions.
+        /// Stores (pattern, `handler_id`) tuples for active subscriptions.
         subscriptions: Vec<(String, String)>,
     }
 

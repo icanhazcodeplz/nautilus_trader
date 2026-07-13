@@ -101,24 +101,25 @@ These limits provide a good balance between memory usage and data availability. 
 
 ### Configuration options
 
-The `CacheConfig` class supports these parameters:
+The `CacheConfig` type supports these parameters:
 
-```python
-from nautilus_trader.config import CacheConfig
+```rust
+use nautilus_common::{cache::CacheConfig, enums::SerializationEncoding};
 
-cache_config = CacheConfig(
-    database: DatabaseConfig | None = None,  # Database configuration for persistence
-    encoding: str = "msgpack",               # Data encoding format ('msgpack' or 'json')
-    timestamps_as_iso8601: bool = False,     # Store timestamps as ISO8601 strings
-    buffer_interval_ms: int | None = None,   # Buffer interval for batch operations
-    bulk_read_batch_size: int | None = None, # Batch size for bulk reads (e.g., MGET)
-    use_trader_prefix: bool = True,          # Use trader prefix in keys
-    use_instance_id: bool = False,           # Include instance ID in keys
-    flush_on_start: bool = False,            # Clear database on startup
-    drop_instruments_on_reset: bool = True,  # Clear instruments on reset
-    tick_capacity: int = 10_000,             # Maximum ticks stored per instrument
-    bar_capacity: int = 10_000,              # Maximum bars stored per each bar-type
-)
+let config = CacheConfig {
+    encoding: SerializationEncoding::MsgPack,
+    timestamps_as_iso8601: false,
+    buffer_interval_ms: None,
+    bulk_read_batch_size: None,
+    use_trader_prefix: true,
+    use_instance_id: false,
+    flush_on_start: false,
+    drop_instruments_on_reset: true,
+    tick_capacity: 10_000,
+    bar_capacity: 10_000,
+    persist_account_events: true,
+    save_market_data: false,
+};
 ```
 
 :::note
@@ -129,25 +130,44 @@ When `bar_capacity` is reached, the `Cache` automatically removes the oldest dat
 ### Database configuration
 
 For persistence between system restarts, you can configure a database backend.
+`CacheConfig` controls cache behavior only. Connection settings belong to the concrete cache
+database technology config, such as `RedisCacheConfig` or `PostgresCacheConfig`.
 
 When is it useful to use persistence?
 
 - **Long-running systems**: If you want your data to survive system restarts, upgrading, or unexpected failures, having a database configuration helps to pick up exactly where you left off.
 - **Historical insights**: When you need to preserve past trading data for detailed post-analysis or audits.
-- **Multi-node or distributed setups**: If multiple services or nodes need to access the same state, a persistent store helps ensure shared and consistent data.
+- **Multi-node or distributed setups**: If multiple services or nodes need to access the same
+  state, a persistent store helps ensure shared and consistent data.
 
-```python
-from nautilus_trader.config import DatabaseConfig
+Rust-native callers build a concrete database config and use the `CacheDatabaseFactory` trait to
+construct the adapter passed into the system builder:
 
-config = CacheConfig(
-    database=DatabaseConfig(
-        type="redis",            # Database type
-        host="localhost",        # Database host
-        port=6379,               # Database port
-        connection_timeout=2,    # Connection timeout (seconds)
-        response_timeout=2,      # Response timeout (seconds)
-    ),
-)
+```rust
+use nautilus_common::{
+    cache::{CacheConfig, database::CacheDatabaseFactory},
+    enums::SerializationEncoding,
+};
+use nautilus_infrastructure::redis::cache::RedisCacheConfig;
+
+let config = CacheConfig {
+    encoding: SerializationEncoding::MsgPack,
+    timestamps_as_iso8601: true,
+    buffer_interval_ms: Some(100),
+    ..Default::default()
+};
+
+let database = RedisCacheConfig {
+    host: Some("localhost".to_string()),
+    port: Some(6379),
+    connection_timeout: 2,
+    response_timeout: 2,
+    ..Default::default()
+};
+
+let cache_database = database
+    .create(trader_id, instance_id, config.clone())
+    .await?;
 ```
 
 ## Using the cache
@@ -403,6 +423,87 @@ instruments_by_underlying = self.cache.instruments(underlying="ES")  # Instrumen
 instrument_ids = self.cache.instrument_ids()                   # Get all instrument IDs
 venue_instrument_ids = self.cache.instrument_ids(venue=venue)  # Get instrument IDs for a specific venue
 ```
+
+### Purging cached data
+
+Long-running sessions accumulate closed orders, closed positions, account events, and
+unused instruments. The cache exposes targeted and bulk purge methods so strategies and
+the live trading engine can keep memory bounded without restarting the system.
+
+#### Targeted purges
+
+Use these to drop a single entity. Each refuses to purge while the entity is still active.
+
+- `cache.purge_order(client_order_id)`: removes the order and every order-keyed index entry.
+  Skips open orders.
+- `cache.purge_position(position_id)`: removes the position, its snapshots, and position-keyed
+  index entries. Skips open positions.
+- `cache.purge_instrument(instrument_id)`: removes the instrument and every per-instrument
+  map (order book, quotes, trades, mark/index/funding prices, instrument status, greeks,
+  and bars referencing the instrument). Skips while any associated order is non-terminal
+  (anything that has not reached a closed state, including initialized, submitted,
+  accepted, emulated, released, and inflight orders) or any associated position is
+  non-closed.
+
+```python
+class HousekeepingStrategy(Strategy):
+    def on_start(self) -> None:
+        # Drop instruments that are no longer in the watchlist.
+        for instrument_id in self.cache.instrument_ids(venue=self.venue):
+            if instrument_id not in self.watchlist:
+                self.cache.purge_instrument(instrument_id)
+```
+
+:::warning
+`purge_instrument` is intended for actors and strategies with their own lifecycle logic
+for deciding when an instrument is no longer needed. Purging an instrument that another
+component still relies on causes missing instrument lookups and loses market-data
+history. Active subscriptions belong to the data engine, so unsubscribe before purging
+if you no longer want updates.
+:::
+
+#### Bulk purges
+
+Use these to sweep older entries by age. They take the current timestamp and a buffer or
+lookback window in seconds.
+
+- `cache.purge_closed_orders(ts_now, buffer_secs)`: closed orders whose close timestamp is
+  older than `buffer_secs`.
+- `cache.purge_closed_positions(ts_now, buffer_secs)`: closed positions whose close timestamp
+  is older than `buffer_secs`.
+- `cache.purge_account_events(ts_now, lookback_secs)`: account state events older than
+  `lookback_secs`. A value of `0` purges all events.
+
+#### Automatic purging in live trading
+
+`LiveExecEngineConfig` schedules the bulk purges on a timer. Set the interval to enable
+the loop and the buffer or lookback to control how recent entries are protected. The
+following defaults work well for most live sessions:
+
+```python
+from nautilus_trader.config import LiveExecEngineConfig
+
+exec_engine = LiveExecEngineConfig(
+    purge_closed_orders_interval_mins=15,
+    purge_closed_orders_buffer_mins=60,
+    purge_closed_positions_interval_mins=15,
+    purge_closed_positions_buffer_mins=60,
+    purge_account_events_interval_mins=15,
+    purge_account_events_lookback_mins=60,
+)
+```
+
+A 60-minute buffer keeps recent activity available for reconciliation while still
+trimming long-tail growth. Tune these down for HFT sessions and up if you need longer
+historical lookbacks for analytics. See
+[Configure live trading: memory management](../how_to/configure_live_trading.md) for the
+full parameter reference.
+
+:::note
+The instrument purge has no automatic loop because the right time to drop an instrument
+depends on strategy state, not age. Call `cache.purge_instrument` from the actor or
+strategy that owns the instrument's lifecycle.
+:::
 
 ---
 

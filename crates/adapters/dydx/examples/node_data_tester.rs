@@ -15,43 +15,42 @@
 
 //! Example demonstrating live data testing with the dYdX adapter.
 //!
+//! Edit the constants below to change the network, target instrument, and subscriptions.
+//!
 //! Run with: `cargo run --example dydx-data-tester --package nautilus-dydx --features examples`
-
-use std::num::NonZeroUsize;
 
 use log::LevelFilter;
 use nautilus_common::{enums::Environment, logging::logger::LoggerConfig};
 use nautilus_dydx::{
-    common::enums::DydxNetwork, config::DydxDataClientConfig, factories::DydxDataClientFactory,
+    common::{consts::DYDX_CLIENT_ID, enums::DydxNetwork},
+    config::DydxDataClientConfig,
+    factories::DydxDataClientFactory,
 };
 use nautilus_live::node::LiveNode;
-use nautilus_model::{
-    identifiers::{ClientId, InstrumentId, TraderId},
-    stubs::TestDefault,
-};
-use nautilus_network::websocket::TransportBackend;
+use nautilus_model::identifiers::{InstrumentId, TraderId};
 use nautilus_testkit::testers::{DataTester, DataTesterConfig};
+
+const DYDX_NETWORK: DydxNetwork = DydxNetwork::Mainnet;
+const TRADER_ID: &str = "TESTER-001";
+const NODE_NAME: &str = "DYDX-DATA-TESTER-001";
+const INSTRUMENT_ID: &str = "BTC-USD-PERP.DYDX";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
 
     let environment = Environment::Live;
-    let trader_id = TraderId::test_default();
-    let node_name = "DYDX-DATA-TESTER-001".to_string();
-    let instrument_ids = vec![
-        InstrumentId::from("BTC-USD-PERP.DYDX"),
-        // InstrumentId::from("ETH-USD-PERP.DYDX"),
-    ];
+    let trader_id = TraderId::from(TRADER_ID);
+    let node_name = NODE_NAME.to_string();
+    let instrument_ids = vec![InstrumentId::from(INSTRUMENT_ID)];
 
     let dydx_config = DydxDataClientConfig {
-        network: DydxNetwork::Mainnet,
-        transport_backend: TransportBackend::Sockudo,
+        network: DYDX_NETWORK,
         ..Default::default()
     };
 
     let client_factory = DydxDataClientFactory::new();
-    let client_id = ClientId::new("DYDX");
+    let client_id = *DYDX_CLIENT_ID;
 
     let log_config = LoggerConfig {
         stdout_level: LevelFilter::Info,
@@ -71,9 +70,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // .subscribe_quotes(true)
         // .subscribe_trades(true)
         .subscribe_book_at_interval(true)
-        .book_interval_ms(NonZeroUsize::new(10).unwrap())
+        .book_interval_ms(10)
         .manage_book(true)
-        .build();
+        .build()?;
     let tester = DataTester::new(tester_config);
 
     node.add_actor(tester)?;

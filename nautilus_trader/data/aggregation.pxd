@@ -60,11 +60,22 @@ cdef class BarBuilder:
     cdef Price _close
     cdef Quantity volume
 
+    # Adjustment state pre-computed at `set_adjustment` time so the hot update path
+    # performs only raw C math (no Decimal allocation per tick).
+    cdef readonly object _adjustment_mode
+    cdef PriceRaw _adjustment_raw
+    cdef double _adjustment_ratio
+    cdef bint _adjustment_active
+    cdef bint _adjustment_is_ratio
+
     cpdef void update(self, Price price, Quantity size, uint64_t ts_init)
     cpdef void update_bar(self, Bar bar, Quantity volume, uint64_t ts_init)
-    cpdef void reset(self)
+    cpdef void set_adjustment(self, object adjustment, object mode = *)
     cpdef Bar build_now(self)
     cpdef Bar build(self, uint64_t ts_event, uint64_t ts_init)
+    cpdef void reset(self)
+
+    cdef Price _apply_adjustment_to_price(self, Price price)
 
 
 cdef class BarAggregator:
@@ -195,6 +206,10 @@ cdef class SpreadQuoteAggregator:
     cdef readonly object _ask_sizes
     cdef readonly Instrument _spread_instrument
     cdef readonly bint _is_futures_spread
+    cdef readonly bint _disable_vega_pricing
+    cdef readonly bint _vega_pricing_temporarily_disabled
+    cdef readonly int _vega_pricing_timeout_seconds
+    cdef readonly str _vega_pricing_timeout_timer_name
     cdef readonly bint _has_update
 
     # Component tracking
@@ -206,6 +221,9 @@ cdef class SpreadQuoteAggregator:
 
     # Historical mode support (similar to TimeBarAggregator)
     cdef list _historical_events
+
+    cdef void _clear_vega_pricing_timeout(self, TimeEvent event)
+    cdef void _start_vega_pricing_timeout(self)
 
     cpdef void start_timer(self)
     cpdef void stop_timer(self)

@@ -16,8 +16,8 @@
 //! Custom data: registration and dynamic decoding.
 //!
 //! - **Registration:** Call [`ensure_custom_data_registered::<T>()`] once (e.g. before using the
-//!   catalog) for each custom data type `T` produced by the `#[custom_data]` macro. For Python
-//!   bindings, also call [`nautilus_model::data::register_rust_extractor::<T>()`].
+//!   catalog) for each custom data type `T` produced by the `#[custom_data]` macro. When Python
+//!   support is enabled, also call `nautilus_model::data::register_rust_extractor::<T>()`.
 //! - **Decoder:** [`CustomDataDecoder`] provides [`ArrowSchemaProvider`] and
 //!   [`DecodeDataFromRecordBatch`] for Parquet-backed custom data decoded at runtime by type name.
 //!   Types must be registered via [`ensure_custom_data_registered::<T>()`] before use.
@@ -62,7 +62,8 @@ pub trait CustomDataSerialize: CustomDataTrait {
 /// Each distinct type `T` is registered at most once (per process). Safe to call
 /// multiple times for the same `T`.
 ///
-/// For types exposed to Python, also call [`nautilus_model::data::register_rust_extractor::<T>()`].
+/// When Python support is enabled, also call
+/// `nautilus_model::data::register_rust_extractor::<T>()` for types exposed to Python.
 pub fn ensure_custom_data_registered<T>()
 where
     T: CustomDataTrait
@@ -161,12 +162,19 @@ fn strip_data_type_column(
     }
 
     let cols = batch.columns();
-    let string_col = extract_column_string(cols, "data_type", data_type_col_idx).map_err(|e| {
-        super::EncodingError::ParseError("custom_data", format!("data_type column: {e}"))
-    })?;
-    let first_value = string_col.value(0);
-    let data_type = DataType::from_persistence_json(first_value)
-        .map_err(|e| super::EncodingError::ParseError("custom_data", e.to_string()))?;
+    let data_type = if cols[data_type_col_idx].is_null(0) {
+        None
+    } else {
+        let string_col =
+            extract_column_string(cols, "data_type", data_type_col_idx).map_err(|e| {
+                super::EncodingError::ParseError("custom_data", format!("data_type column: {e}"))
+            })?;
+        let first_value = string_col.value(0);
+        Some(
+            DataType::from_persistence_json(first_value)
+                .map_err(|e| super::EncodingError::ParseError("custom_data", e.to_string()))?,
+        )
+    };
 
     let new_fields: Vec<_> = batch
         .schema()
@@ -188,7 +196,7 @@ fn strip_data_type_column(
     let stripped_batch = RecordBatch::try_new(Arc::new(new_schema), new_columns)
         .map_err(|e| super::EncodingError::ParseError("custom_data", e.to_string()))?;
 
-    Ok((stripped_batch, Some(data_type)))
+    Ok((stripped_batch, data_type))
 }
 
 impl DecodeDataFromRecordBatch for CustomDataDecoder {

@@ -42,13 +42,15 @@ use crate::{
             BybitMarginMode, BybitOpenOnly, BybitOrderFilter, BybitPositionIdx, BybitPositionMode,
             BybitProductType,
         },
-        parse::extract_raw_symbol,
+        parse::{extract_raw_symbol, parse_bbo_level, parse_bbo_side_type},
     },
     http::{
         client::{BybitHttpClient, BybitRawHttpClient},
         error::BybitHttpError,
         models::BybitOrderCursorList,
+        query::BybitNativeTpSlParams as RustNativeTpSlParams,
     },
+    python::params::BybitNativeTpSlParams,
 };
 
 #[pymethods]
@@ -574,6 +576,9 @@ impl BybitHttpClient {
         is_quote_quantity = false,
         is_leverage = false,
         position_idx = None,
+        bbo_side_type = None,
+        bbo_level = None,
+        native_tp_sl = None,
     ))]
     #[expect(clippy::too_many_arguments)]
     fn py_submit_order<'py>(
@@ -594,8 +599,29 @@ impl BybitHttpClient {
         is_quote_quantity: bool,
         is_leverage: bool,
         position_idx: Option<BybitPositionIdx>,
+        bbo_side_type: Option<String>,
+        bbo_level: Option<String>,
+        native_tp_sl: Option<BybitNativeTpSlParams>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
+        let bbo_side_type = bbo_side_type
+            .map(|value| parse_bbo_side_type(&value))
+            .transpose()
+            .map_err(to_pyvalue_err)?;
+        let bbo_level = bbo_level
+            .map(parse_bbo_level)
+            .transpose()
+            .map_err(to_pyvalue_err)?;
+        if bbo_side_type.is_some() != bbo_level.is_some() {
+            return Err(to_pyvalue_err(anyhow::anyhow!(
+                "'bbo_side_type' and 'bbo_level' must be provided together"
+            )));
+        }
+
+        let native_tp_sl: Option<RustNativeTpSlParams> = native_tp_sl
+            .map(RustNativeTpSlParams::try_from)
+            .transpose()
+            .map_err(to_pyvalue_err)?;
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let report = client
@@ -615,6 +641,9 @@ impl BybitHttpClient {
                     is_quote_quantity,
                     is_leverage,
                     position_idx,
+                    bbo_side_type,
+                    bbo_level,
+                    native_tp_sl.as_ref(),
                 )
                 .await
                 .map_err(to_pyvalue_err)?;

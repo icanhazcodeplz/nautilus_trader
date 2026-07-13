@@ -32,6 +32,14 @@ use ustr::Ustr;
 ///
 /// The type implements case-insensitive equality and hashing for address comparison,
 /// while preserving the original case for display purposes.
+///
+/// DeFi pool data carries both this `PoolIdentifier` and an `InstrumentId`, which key different
+/// layers. The chain and database layers key on the `PoolIdentifier`: the raw on-chain identity
+/// used for log filters and table lookups. The engine, message bus, and cache key on the
+/// `InstrumentId` (`Symbol(pool_identifier)` at `Venue(chain:dex)`), so pool events flow through
+/// the same instrument-keyed infrastructure as any other data. The `InstrumentId` flattens the
+/// identifier to a string and loses the `Address` versus `PoolId` variant, so it cannot
+/// reconstruct this type: both are stored rather than derived.
 #[derive(Clone, Copy, PartialOrd, Ord)]
 pub enum PoolIdentifier {
     /// V2/V3 pool identifier (checksummed Ethereum address)
@@ -280,8 +288,8 @@ impl<'de> Deserialize<'de> for PoolIdentifier {
     where
         D: Deserializer<'de>,
     {
-        let value_str: &str = Deserialize::deserialize(deserializer)?;
-        Self::new_checked(value_str).map_err(serde::de::Error::custom)
+        let value_str: std::borrow::Cow<'de, str> = Deserialize::deserialize(deserializer)?;
+        Self::new_checked(value_str.as_ref()).map_err(serde::de::Error::custom)
     }
 }
 
@@ -405,6 +413,18 @@ mod tests {
         let deserialized: PoolIdentifier = serde_json::from_str(&json).unwrap();
 
         assert_eq!(original, deserialized);
+    }
+
+    #[rstest]
+    fn test_deserialize_from_owned_value() {
+        let value =
+            serde_json::Value::String("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2".to_string());
+
+        let deserialized: PoolIdentifier = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            deserialized,
+            PoolIdentifier::new("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")
+        );
     }
 
     #[rstest]

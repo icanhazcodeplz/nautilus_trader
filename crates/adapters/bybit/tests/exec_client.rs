@@ -42,7 +42,10 @@ use axum::{
     routing::{get, post},
 };
 use nautilus_bybit::{
-    common::enums::{BybitEnvironment, BybitMarginMode, BybitPositionMode, BybitProductType},
+    common::{
+        consts::{BYBIT_CLIENT_ID, BYBIT_VENUE},
+        enums::{BybitEnvironment, BybitMarginMode, BybitPositionMode, BybitProductType},
+    },
     config::BybitExecClientConfig,
     execution::BybitExecutionClient,
 };
@@ -50,25 +53,29 @@ use nautilus_common::{
     cache::Cache,
     clients::ExecutionClient,
     live::runner::set_exec_event_sender,
-    messages::{ExecutionEvent, execution::ExecutionReport},
+    messages::{
+        ExecutionEvent,
+        execution::{CancelOrder, ExecutionReport, ModifyOrder, SubmitOrder},
+    },
     testing::wait_until_async,
 };
-use nautilus_core::{UUID4, UnixNanos};
+use nautilus_core::{UUID4, UnixNanos, params::Params};
 use nautilus_live::ExecutionClientCore;
 use nautilus_model::{
     accounts::{AccountAny, MarginAccount},
     enums::{AccountType, OmsType, OrderSide, TimeInForce, TrailingOffsetType, TriggerType},
-    events::AccountState,
+    events::{AccountState, OrderDenied, OrderEventAny},
     identifiers::{
-        AccountId, ClientId, ClientOrderId, InstrumentId, OrderListId, StrategyId, Symbol,
-        TraderId, Venue,
+        AccountId, ClientOrderId, InstrumentId, OrderListId, StrategyId, Symbol, TraderId,
+        VenueOrderId,
     },
-    orders::{MarketOrder, OrderAny, TrailingStopMarketOrder},
+    orders::{MarketOrder, Order, OrderAny, TrailingStopMarketOrder},
     types::{AccountBalance, Money, Price, Quantity},
 };
 use nautilus_network::http::HttpClient;
 use rstest::rstest;
 use serde_json::{Value, json};
+use ustr::Ustr;
 
 #[derive(Clone)]
 struct TestServerState {
@@ -78,6 +85,9 @@ struct TestServerState {
     authenticated: Arc<AtomicBool>,
     subscriptions: Arc<tokio::sync::Mutex<Vec<String>>>,
     disconnect_trigger: Arc<AtomicBool>,
+    empty_orders_realtime: Arc<AtomicBool>,
+    rejected_orders_realtime: Arc<AtomicBool>,
+    orders_realtime_requests: Arc<AtomicUsize>,
     ping_count: Arc<AtomicUsize>,
     switch_mode_requests: Arc<tokio::sync::Mutex<Vec<Value>>>,
     set_leverage_requests: Arc<tokio::sync::Mutex<Vec<Value>>>,
@@ -93,6 +103,9 @@ impl Default for TestServerState {
             authenticated: Arc::new(AtomicBool::new(false)),
             subscriptions: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             disconnect_trigger: Arc::new(AtomicBool::new(false)),
+            empty_orders_realtime: Arc::new(AtomicBool::new(false)),
+            rejected_orders_realtime: Arc::new(AtomicBool::new(false)),
+            orders_realtime_requests: Arc::new(AtomicUsize::new(0)),
             ping_count: Arc::new(AtomicUsize::new(0)),
             switch_mode_requests: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             set_leverage_requests: Arc::new(tokio::sync::Mutex::new(Vec::new())),
@@ -189,7 +202,10 @@ async fn handle_get_positions(headers: HeaderMap) -> impl IntoResponse {
     Json(positions).into_response()
 }
 
-async fn handle_get_orders_realtime(headers: HeaderMap) -> impl IntoResponse {
+async fn handle_get_orders_realtime(
+    State(state): State<TestServerState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
     if !has_auth_headers(&headers) {
         return (
             StatusCode::UNAUTHORIZED,
@@ -202,7 +218,48 @@ async fn handle_get_orders_realtime(headers: HeaderMap) -> impl IntoResponse {
         )
             .into_response();
     }
+
+    if state.empty_orders_realtime.load(Ordering::Relaxed) {
+        state
+            .orders_realtime_requests
+            .fetch_add(1, Ordering::Relaxed);
+        return Json(json!({
+            "retCode": 0,
+            "retMsg": "OK",
+            "result": {
+                "category": "linear",
+                "list": [],
+                "nextPageCursor": ""
+            },
+            "retExtInfo": {},
+            "time": 1704470400123i64
+        }))
+        .into_response();
+    }
+
+    if state.rejected_orders_realtime.load(Ordering::Relaxed) {
+        let mut orders = load_test_data("http_get_orders_realtime.json");
+        let order = orders
+            .get_mut("result")
+            .and_then(|result| result.get_mut("list"))
+            .and_then(Value::as_array_mut)
+            .and_then(|list| list.first_mut())
+            .expect("orders realtime fixture has first order");
+        order["orderId"] = json!("test-order-id-12345");
+        order["orderStatus"] = json!("Rejected");
+        order["cumExecQty"] = json!("0");
+        order["rejectReason"] = json!("EC_PostOnlyWillTakeLiquidity");
+
+        state
+            .orders_realtime_requests
+            .fetch_add(1, Ordering::Relaxed);
+        return Json(orders).into_response();
+    }
+
     let orders = load_test_data("http_get_orders_realtime.json");
+    state
+        .orders_realtime_requests
+        .fetch_add(1, Ordering::Relaxed);
     Json(orders).into_response()
 }
 
@@ -613,6 +670,13 @@ fn create_test_exec_config(addr: SocketAddr) -> BybitExecClientConfig {
     }
 }
 
+fn create_test_demo_exec_config(addr: SocketAddr) -> BybitExecClientConfig {
+    let mut config = create_test_exec_config(addr);
+    config.environment = BybitEnvironment::Demo;
+    config.max_retries = 0;
+    config
+}
+
 fn create_test_execution_client(
     addr: SocketAddr,
 ) -> (
@@ -622,14 +686,14 @@ fn create_test_execution_client(
 ) {
     let trader_id = TraderId::from("TESTER-001");
     let account_id = AccountId::from("BYBIT-001");
-    let client_id = ClientId::from("BYBIT");
+    let client_id = *BYBIT_CLIENT_ID;
 
     let cache = Rc::new(RefCell::new(Cache::default()));
 
     let core = ExecutionClientCore::new(
         trader_id,
         client_id,
-        Venue::from("BYBIT"),
+        *BYBIT_VENUE,
         OmsType::Netting,
         account_id,
         AccountType::Margin,
@@ -640,6 +704,40 @@ fn create_test_execution_client(
     let config = create_test_exec_config(addr);
 
     // Event channel must be set before creating client due to thread-local storage
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    set_exec_event_sender(tx);
+
+    let client = BybitExecutionClient::new(core, config).unwrap();
+
+    (client, rx, cache)
+}
+
+fn create_test_demo_execution_client(
+    addr: SocketAddr,
+) -> (
+    BybitExecutionClient,
+    tokio::sync::mpsc::UnboundedReceiver<ExecutionEvent>,
+    Rc<RefCell<Cache>>,
+) {
+    let trader_id = TraderId::from("TESTER-001");
+    let account_id = AccountId::from("BYBIT-001");
+    let client_id = *BYBIT_CLIENT_ID;
+
+    let cache = Rc::new(RefCell::new(Cache::default()));
+
+    let core = ExecutionClientCore::new(
+        trader_id,
+        client_id,
+        *BYBIT_VENUE,
+        OmsType::Netting,
+        account_id,
+        AccountType::Margin,
+        None,
+        cache.clone(),
+    );
+
+    let config = create_test_demo_exec_config(addr);
+
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     set_exec_event_sender(tx);
 
@@ -669,14 +767,63 @@ fn add_test_account_to_cache(cache: &Rc<RefCell<Cache>>, account_id: AccountId) 
     cache.borrow_mut().add_account(account).unwrap();
 }
 
+async fn drain_execution_events(rx: &mut tokio::sync::mpsc::UnboundedReceiver<ExecutionEvent>) {
+    while tokio::time::timeout(Duration::from_millis(200), rx.recv())
+        .await
+        .is_ok()
+    {}
+}
+
+async fn assert_no_cancel_rejected(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<ExecutionEvent>,
+    duration: Duration,
+) {
+    let reject_window = tokio::time::sleep(duration);
+    tokio::pin!(reject_window);
+
+    loop {
+        tokio::select! {
+            () = &mut reject_window => break,
+            event = rx.recv() => {
+                let event = event.expect("channel closed");
+                assert!(
+                    !matches!(event, ExecutionEvent::Order(OrderEventAny::CancelRejected(_))),
+                    "Ambiguous cancel outcome must not emit OrderCancelRejected: {event:?}",
+                );
+            }
+        }
+    }
+}
+
+async fn assert_no_modify_rejected(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<ExecutionEvent>,
+    duration: Duration,
+) {
+    let reject_window = tokio::time::sleep(duration);
+    tokio::pin!(reject_window);
+
+    loop {
+        tokio::select! {
+            () = &mut reject_window => break,
+            event = rx.recv() => {
+                let event = event.expect("channel closed");
+                assert!(
+                    !matches!(event, ExecutionEvent::Order(OrderEventAny::ModifyRejected(_))),
+                    "Ambiguous modify outcome must not emit OrderModifyRejected: {event:?}",
+                );
+            }
+        }
+    }
+}
+
 #[rstest]
 #[tokio::test]
 async fn test_exec_client_creation() {
     let (addr, _state) = start_test_server().await.unwrap();
     let (client, _rx, _cache) = create_test_execution_client(addr);
 
-    assert_eq!(client.client_id(), ClientId::from("BYBIT"));
-    assert_eq!(client.venue(), Venue::from("BYBIT"));
+    assert_eq!(client.client_id(), *BYBIT_CLIENT_ID);
+    assert_eq!(client.venue(), *BYBIT_VENUE);
     assert_eq!(client.oms_type(), OmsType::Netting);
     assert!(!client.is_connected());
 }
@@ -721,7 +868,7 @@ async fn test_exec_client_connect_applies_position_mode_for_derivative_symbols()
     let (addr, state) = start_test_server().await.unwrap();
     let trader_id = TraderId::from("TESTER-001");
     let account_id = AccountId::from("BYBIT-001");
-    let client_id = ClientId::from("BYBIT");
+    let client_id = *BYBIT_CLIENT_ID;
 
     let cache = Rc::new(RefCell::new(Cache::default()));
     add_test_account_to_cache(&cache, account_id);
@@ -729,7 +876,7 @@ async fn test_exec_client_connect_applies_position_mode_for_derivative_symbols()
     let core = ExecutionClientCore::new(
         trader_id,
         client_id,
-        Venue::from("BYBIT"),
+        *BYBIT_VENUE,
         OmsType::Netting,
         account_id,
         AccountType::Margin,
@@ -793,7 +940,7 @@ async fn test_exec_client_connect_applies_leverage_and_margin_mode() {
     let (addr, state) = start_test_server().await.unwrap();
     let trader_id = TraderId::from("TESTER-001");
     let account_id = AccountId::from("BYBIT-001");
-    let client_id = ClientId::from("BYBIT");
+    let client_id = *BYBIT_CLIENT_ID;
 
     let cache = Rc::new(RefCell::new(Cache::default()));
     add_test_account_to_cache(&cache, account_id);
@@ -801,7 +948,7 @@ async fn test_exec_client_connect_applies_leverage_and_margin_mode() {
     let core = ExecutionClientCore::new(
         trader_id,
         client_id,
-        Venue::from("BYBIT"),
+        *BYBIT_VENUE,
         OmsType::Netting,
         account_id,
         AccountType::Margin,
@@ -861,7 +1008,7 @@ async fn test_exec_client_demo_mode_skips_trade_ws() {
     let (addr, state) = start_test_server().await.unwrap();
     let trader_id = TraderId::from("TESTER-001");
     let account_id = AccountId::from("BYBIT-001");
-    let client_id = ClientId::from("BYBIT");
+    let client_id = *BYBIT_CLIENT_ID;
 
     let cache = Rc::new(RefCell::new(Cache::default()));
     add_test_account_to_cache(&cache, account_id);
@@ -869,7 +1016,7 @@ async fn test_exec_client_demo_mode_skips_trade_ws() {
     let core = ExecutionClientCore::new(
         trader_id,
         client_id,
-        Venue::from("BYBIT"),
+        *BYBIT_VENUE,
         OmsType::Netting,
         account_id,
         AccountType::Margin,
@@ -949,14 +1096,15 @@ async fn test_exec_client_query_order() {
 
     let cmd = QueryOrder::new(
         TraderId::from("TESTER-001"),
-        Some(ClientId::from("BYBIT")),
+        Some(*BYBIT_CLIENT_ID),
         StrategyId::from("S-001"),
-        InstrumentId::new(Symbol::from("ETHUSDT-LINEAR"), Venue::from("BYBIT")),
+        InstrumentId::new(Symbol::from("ETHUSDT-LINEAR"), *BYBIT_VENUE),
         ClientOrderId::from("client-open-1"),
         None,
         UUID4::new(),
         UnixNanos::default(),
         None,
+        None, // correlation_id
     );
 
     client.query_order(cmd).unwrap();
@@ -1001,11 +1149,12 @@ async fn test_query_account_does_not_block_within_runtime() {
 
     let cmd = QueryAccount::new(
         TraderId::from("TESTER-001"),
-        Some(ClientId::from("BYBIT")),
+        Some(*BYBIT_CLIENT_ID),
         AccountId::from("BYBIT-001"),
         UUID4::new(),
         UnixNanos::default(),
         None,
+        None, // correlation_id
     );
 
     client.query_account(cmd).unwrap();
@@ -1032,9 +1181,9 @@ async fn test_exec_client_submit_order_list_demo() {
     let (addr, state) = start_test_server().await.unwrap();
     let trader_id = TraderId::from("TESTER-001");
     let account_id = AccountId::from("BYBIT-001");
-    let client_id = ClientId::from("BYBIT");
+    let client_id = *BYBIT_CLIENT_ID;
     let strategy_id = StrategyId::from("S-001");
-    let instrument_id = InstrumentId::new(Symbol::from("ETHUSDT-LINEAR"), Venue::from("BYBIT"));
+    let instrument_id = InstrumentId::new(Symbol::from("ETHUSDT-LINEAR"), *BYBIT_VENUE);
 
     let cache = Rc::new(RefCell::new(Cache::default()));
     add_test_account_to_cache(&cache, account_id);
@@ -1042,7 +1191,7 @@ async fn test_exec_client_submit_order_list_demo() {
     let core = ExecutionClientCore::new(
         trader_id,
         client_id,
-        Venue::from("BYBIT"),
+        *BYBIT_VENUE,
         OmsType::Netting,
         account_id,
         AccountType::Margin,
@@ -1169,6 +1318,7 @@ async fn test_exec_client_submit_order_list_demo() {
         None,
         UUID4::new(),
         UnixNanos::default(),
+        None, // correlation_id
     );
 
     client.submit_order_list(cmd).unwrap();
@@ -1195,16 +1345,91 @@ async fn test_exec_client_submit_order_list_demo() {
 
 #[rstest]
 #[tokio::test]
-async fn test_exec_client_submit_order_list_denies_all_on_invalid_leg() {
-    use nautilus_common::messages::execution::SubmitOrderList;
-    use nautilus_model::orders::OrderList;
-
+async fn test_exec_client_demo_cancel_post_lookup_failure_does_not_reject() {
     let (addr, state) = start_test_server().await.unwrap();
+    let (mut client, mut rx, cache) = create_test_demo_execution_client(addr);
+    add_test_account_to_cache(&cache, AccountId::from("BYBIT-001"));
+
+    client.connect().await.unwrap();
+    client.start().unwrap();
+
+    wait_until_async(
+        || async { state.subscriptions.lock().await.len() >= 4 },
+        Duration::from_secs(10),
+    )
+    .await;
+    drain_execution_events(&mut rx).await;
+
+    let cmd = CancelOrder::new(
+        TraderId::from("TESTER-001"),
+        Some(*BYBIT_CLIENT_ID),
+        StrategyId::from("S-001"),
+        InstrumentId::new(Symbol::from("ETHUSDT-LINEAR"), *BYBIT_VENUE),
+        ClientOrderId::from("test-cancel-post-lookup-ambiguous"),
+        Some(VenueOrderId::from("test-order-id-12345")),
+        UUID4::new(),
+        UnixNanos::default(),
+        None,
+        None,
+    );
+
+    client.cancel_order(cmd).unwrap();
+
+    assert_no_cancel_rejected(&mut rx, Duration::from_millis(300)).await;
+
+    client.disconnect().await.unwrap();
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_exec_client_demo_modify_whole_http_failure_does_not_reject() {
+    let (addr, state) = start_test_server().await.unwrap();
+    let (mut client, mut rx, cache) = create_test_demo_execution_client(addr);
+    add_test_account_to_cache(&cache, AccountId::from("BYBIT-001"));
+
+    client.connect().await.unwrap();
+    client.start().unwrap();
+
+    wait_until_async(
+        || async { state.subscriptions.lock().await.len() >= 4 },
+        Duration::from_secs(10),
+    )
+    .await;
+    drain_execution_events(&mut rx).await;
+
+    let cmd = ModifyOrder::new(
+        TraderId::from("TESTER-001"),
+        Some(*BYBIT_CLIENT_ID),
+        StrategyId::from("S-001"),
+        InstrumentId::new(Symbol::from("ETHUSDT-LINEAR"), *BYBIT_VENUE),
+        ClientOrderId::from("test-modify-http-ambiguous"),
+        Some(VenueOrderId::from("test-order-id-12345")),
+        Some(Quantity::from("0.02")),
+        Some(Price::from("1600.00")),
+        None,
+        UUID4::new(),
+        UnixNanos::default(),
+        None,
+        None,
+    );
+
+    client.modify_order(cmd).unwrap();
+
+    assert_no_modify_rejected(&mut rx, Duration::from_millis(300)).await;
+
+    client.disconnect().await.unwrap();
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_exec_client_demo_submit_post_lookup_failure_does_not_reject() {
+    let (addr, state) = start_test_server().await.unwrap();
+
     let trader_id = TraderId::from("TESTER-001");
     let account_id = AccountId::from("BYBIT-001");
-    let client_id = ClientId::from("BYBIT");
+    let client_id = *BYBIT_CLIENT_ID;
     let strategy_id = StrategyId::from("S-001");
-    let instrument_id = InstrumentId::new(Symbol::from("ETHUSDT-LINEAR"), Venue::from("BYBIT"));
+    let instrument_id = InstrumentId::new(Symbol::from("ETHUSDT-LINEAR"), *BYBIT_VENUE);
 
     let cache = Rc::new(RefCell::new(Cache::default()));
     add_test_account_to_cache(&cache, account_id);
@@ -1212,7 +1437,376 @@ async fn test_exec_client_submit_order_list_denies_all_on_invalid_leg() {
     let core = ExecutionClientCore::new(
         trader_id,
         client_id,
-        Venue::from("BYBIT"),
+        *BYBIT_VENUE,
+        OmsType::Netting,
+        account_id,
+        AccountType::Margin,
+        None,
+        cache.clone(),
+    );
+
+    let config = create_test_demo_exec_config(addr);
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    set_exec_event_sender(tx);
+
+    let mut client = BybitExecutionClient::new(core, config).unwrap();
+    client.connect().await.unwrap();
+    client.start().unwrap();
+
+    wait_until_async(
+        || async { state.subscriptions.lock().await.len() >= 4 },
+        Duration::from_secs(10),
+    )
+    .await;
+
+    while tokio::time::timeout(Duration::from_millis(200), rx.recv())
+        .await
+        .is_ok()
+    {}
+
+    state.empty_orders_realtime.store(true, Ordering::Relaxed);
+    let order_lookup_requests = state.orders_realtime_requests.load(Ordering::Relaxed);
+
+    let cid = ClientOrderId::from("test-unknown-submit-outcome");
+    let order = OrderAny::Market(MarketOrder::new(
+        trader_id,
+        strategy_id,
+        instrument_id,
+        cid,
+        OrderSide::Buy,
+        Quantity::from("0.01"),
+        TimeInForce::Gtc,
+        UUID4::new(),
+        UnixNanos::default(),
+        false,
+        false,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    ));
+    let init = order.init_event().clone();
+
+    cache
+        .borrow_mut()
+        .add_order(order, None, Some(client_id), false)
+        .unwrap();
+
+    let cmd = SubmitOrder::new(
+        trader_id,
+        Some(client_id),
+        strategy_id,
+        instrument_id,
+        cid,
+        init,
+        None,
+        None,
+        None,
+        UUID4::new(),
+        UnixNanos::default(),
+        None, // correlation_id
+    );
+
+    client.submit_order(cmd).unwrap();
+
+    let submitted = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("timed out waiting for OrderSubmitted")
+        .expect("channel closed");
+    assert!(
+        matches!(submitted, ExecutionEvent::Order(ref event) if event.to_string().contains("OrderSubmitted")),
+        "Expected OrderSubmitted, was {submitted:?}",
+    );
+
+    wait_until_async(
+        || async { state.orders_realtime_requests.load(Ordering::Relaxed) > order_lookup_requests },
+        Duration::from_secs(5),
+    )
+    .await;
+
+    let reject_window = tokio::time::sleep(Duration::from_millis(300));
+    tokio::pin!(reject_window);
+
+    loop {
+        tokio::select! {
+            () = &mut reject_window => break,
+            event = rx.recv() => {
+                let event = event.expect("channel closed");
+                assert!(
+                    !matches!(event, ExecutionEvent::Order(ref order_event) if order_event.to_string().contains("OrderRejected")),
+                    "Unknown submit outcome must not emit OrderRejected: {event:?}",
+                );
+            }
+        }
+    }
+
+    client.disconnect().await.unwrap();
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_exec_client_demo_submit_tp_trigger_price_emits_order_denied() {
+    let (addr, state) = start_test_server().await.unwrap();
+
+    let trader_id = TraderId::from("TESTER-001");
+    let account_id = AccountId::from("BYBIT-001");
+    let client_id = *BYBIT_CLIENT_ID;
+    let strategy_id = StrategyId::from("S-001");
+    let instrument_id = InstrumentId::new(Symbol::from("ETHUSDT-LINEAR"), *BYBIT_VENUE);
+
+    let cache = Rc::new(RefCell::new(Cache::default()));
+    add_test_account_to_cache(&cache, account_id);
+
+    let core = ExecutionClientCore::new(
+        trader_id,
+        client_id,
+        *BYBIT_VENUE,
+        OmsType::Netting,
+        account_id,
+        AccountType::Margin,
+        None,
+        cache.clone(),
+    );
+
+    let config = create_test_demo_exec_config(addr);
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    set_exec_event_sender(tx);
+
+    let mut client = BybitExecutionClient::new(core, config).unwrap();
+    client.connect().await.unwrap();
+    client.start().unwrap();
+
+    wait_until_async(
+        || async { state.subscriptions.lock().await.len() >= 4 },
+        Duration::from_secs(10),
+    )
+    .await;
+
+    while tokio::time::timeout(Duration::from_millis(200), rx.recv())
+        .await
+        .is_ok()
+    {}
+
+    let cid = ClientOrderId::from("test-tp-trigger-denied");
+    let order = OrderAny::Market(MarketOrder::new(
+        trader_id,
+        strategy_id,
+        instrument_id,
+        cid,
+        OrderSide::Buy,
+        Quantity::from("0.01"),
+        TimeInForce::Gtc,
+        UUID4::new(),
+        UnixNanos::default(),
+        false,
+        false,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    ));
+    let init = order.init_event().clone();
+
+    cache
+        .borrow_mut()
+        .add_order(order, None, Some(client_id), false)
+        .unwrap();
+
+    let mut params = Params::new();
+    params.insert("take_profit".to_string(), json!("3000"));
+    params.insert("tp_trigger_price".to_string(), json!("2950"));
+
+    let cmd = SubmitOrder::new(
+        trader_id,
+        Some(client_id),
+        strategy_id,
+        instrument_id,
+        cid,
+        init,
+        None,
+        None,
+        Some(params),
+        UUID4::new(),
+        UnixNanos::default(),
+        None, // correlation_id
+    );
+
+    client.submit_order(cmd).unwrap();
+
+    // The demo path cannot carry TP/SL trigger prices, so the first event must be OrderDenied
+    // (no OrderSubmitted, no HTTP submission).
+    let event = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("timed out waiting for OrderDenied")
+        .expect("channel closed");
+    let text = match event {
+        ExecutionEvent::Order(ref order_event) => order_event.to_string(),
+        other => panic!("Expected OrderDenied, was {other:?}"),
+    };
+    assert!(
+        text.contains("OrderDenied")
+            && text.contains("UNSUPPORTED_TP_SL")
+            && text.contains("TP/SL trigger prices are not supported in demo mode"),
+        "Expected OrderDenied with trigger-price reason, was {text}",
+    );
+
+    client.disconnect().await.unwrap();
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_exec_client_demo_submit_confirmed_rejection_emits_order_rejected() {
+    let (addr, state) = start_test_server().await.unwrap();
+
+    let trader_id = TraderId::from("TESTER-001");
+    let account_id = AccountId::from("BYBIT-001");
+    let client_id = *BYBIT_CLIENT_ID;
+    let strategy_id = StrategyId::from("S-001");
+    let instrument_id = InstrumentId::new(Symbol::from("ETHUSDT-LINEAR"), *BYBIT_VENUE);
+
+    let cache = Rc::new(RefCell::new(Cache::default()));
+    add_test_account_to_cache(&cache, account_id);
+
+    let core = ExecutionClientCore::new(
+        trader_id,
+        client_id,
+        *BYBIT_VENUE,
+        OmsType::Netting,
+        account_id,
+        AccountType::Margin,
+        None,
+        cache.clone(),
+    );
+
+    let config = create_test_demo_exec_config(addr);
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    set_exec_event_sender(tx);
+
+    let mut client = BybitExecutionClient::new(core, config).unwrap();
+    client.connect().await.unwrap();
+    client.start().unwrap();
+
+    wait_until_async(
+        || async { state.subscriptions.lock().await.len() >= 4 },
+        Duration::from_secs(10),
+    )
+    .await;
+
+    while tokio::time::timeout(Duration::from_millis(200), rx.recv())
+        .await
+        .is_ok()
+    {}
+
+    state
+        .rejected_orders_realtime
+        .store(true, Ordering::Relaxed);
+    let order_lookup_requests = state.orders_realtime_requests.load(Ordering::Relaxed);
+
+    let cid = ClientOrderId::from("test-confirmed-submit-reject");
+    let order = OrderAny::Market(MarketOrder::new(
+        trader_id,
+        strategy_id,
+        instrument_id,
+        cid,
+        OrderSide::Buy,
+        Quantity::from("0.01"),
+        TimeInForce::Gtc,
+        UUID4::new(),
+        UnixNanos::default(),
+        false,
+        false,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    ));
+    let init = order.init_event().clone();
+
+    cache
+        .borrow_mut()
+        .add_order(order, None, Some(client_id), false)
+        .unwrap();
+
+    let cmd = SubmitOrder::new(
+        trader_id,
+        Some(client_id),
+        strategy_id,
+        instrument_id,
+        cid,
+        init,
+        None,
+        None,
+        None,
+        UUID4::new(),
+        UnixNanos::default(),
+        None, // correlation_id
+    );
+
+    client.submit_order(cmd).unwrap();
+
+    let submitted = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("timed out waiting for OrderSubmitted")
+        .expect("channel closed");
+    assert!(
+        matches!(submitted, ExecutionEvent::Order(OrderEventAny::Submitted(ref event)) if event.client_order_id == cid),
+        "Expected OrderSubmitted for {cid}, was {submitted:?}",
+    );
+
+    wait_until_async(
+        || async { state.orders_realtime_requests.load(Ordering::Relaxed) > order_lookup_requests },
+        Duration::from_secs(5),
+    )
+    .await;
+
+    let rejected = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("timed out waiting for OrderRejected")
+        .expect("channel closed");
+    let ExecutionEvent::Order(OrderEventAny::Rejected(event)) = rejected else {
+        panic!("Expected OrderRejected, was {rejected:?}");
+    };
+
+    assert_eq!(event.client_order_id, cid);
+    assert_eq!(event.reason.to_string(), "EC_PostOnlyWillTakeLiquidity");
+    assert!(!event.reconciliation);
+    assert!(!event.due_post_only);
+
+    client.disconnect().await.unwrap();
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_exec_client_submit_order_list_denies_all_on_invalid_leg() {
+    use nautilus_common::messages::execution::SubmitOrderList;
+    use nautilus_model::orders::OrderList;
+
+    let (addr, state) = start_test_server().await.unwrap();
+    let trader_id = TraderId::from("TESTER-001");
+    let account_id = AccountId::from("BYBIT-001");
+    let client_id = *BYBIT_CLIENT_ID;
+    let strategy_id = StrategyId::from("S-001");
+    let instrument_id = InstrumentId::new(Symbol::from("ETHUSDT-LINEAR"), *BYBIT_VENUE);
+
+    let cache = Rc::new(RefCell::new(Cache::default()));
+    add_test_account_to_cache(&cache, account_id);
+
+    let core = ExecutionClientCore::new(
+        trader_id,
+        client_id,
+        *BYBIT_VENUE,
         OmsType::Netting,
         account_id,
         AccountType::Margin,
@@ -1349,27 +1943,484 @@ async fn test_exec_client_submit_order_list_denies_all_on_invalid_leg() {
         None,
         UUID4::new(),
         UnixNanos::default(),
+        None, // correlation_id
     );
 
     client.submit_order_list(cmd).unwrap();
 
-    // Both orders should be denied (not just the invalid one)
-    let mut denied_count = 0;
+    // The whole list is denied: the offending TrailingStopMarket leg carries the specific
+    // UNSUPPORTED_ORDER_TYPE reason while the valid leg renders ORDER_LIST_DENIED.
+    let mut denied = Vec::new();
 
     for _ in 0..2 {
         match tokio::time::timeout(Duration::from_secs(2), rx.recv()).await {
             Ok(Some(ExecutionEvent::Order(ref event)))
                 if event.to_string().contains("OrderDenied") =>
             {
-                denied_count += 1;
+                denied.push(event.to_string());
             }
             _ => break,
         }
     }
 
     assert_eq!(
-        denied_count, 2,
+        denied.len(),
+        2,
         "Both orders should be denied when one leg is invalid"
+    );
+
+    let offender = denied
+        .iter()
+        .find(|text| text.contains("client_order_id=test-deny-order-2"))
+        .expect("missing denied event for invalid leg");
+    assert!(
+        offender.contains("UNSUPPORTED_ORDER_TYPE"),
+        "offender reason was: {offender}"
+    );
+
+    let sibling = denied
+        .iter()
+        .find(|text| text.contains("client_order_id=test-deny-order-1"))
+        .expect("missing denied event for valid leg");
+    assert!(
+        sibling.contains("ORDER_LIST_DENIED"),
+        "sibling reason was: {sibling}"
+    );
+
+    client.disconnect().await.unwrap();
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_exec_client_submit_order_unsupported_order_type_emits_order_denied() {
+    let (addr, state) = start_test_server().await.unwrap();
+
+    let trader_id = TraderId::from("TESTER-001");
+    let account_id = AccountId::from("BYBIT-001");
+    let client_id = *BYBIT_CLIENT_ID;
+    let strategy_id = StrategyId::from("S-001");
+    let instrument_id = InstrumentId::new(Symbol::from("ETHUSDT-LINEAR"), *BYBIT_VENUE);
+
+    let cache = Rc::new(RefCell::new(Cache::default()));
+    add_test_account_to_cache(&cache, account_id);
+
+    let core = ExecutionClientCore::new(
+        trader_id,
+        client_id,
+        *BYBIT_VENUE,
+        OmsType::Netting,
+        account_id,
+        AccountType::Margin,
+        None,
+        cache.clone(),
+    );
+
+    let config = create_test_demo_exec_config(addr);
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    set_exec_event_sender(tx);
+
+    let mut client = BybitExecutionClient::new(core, config).unwrap();
+    client.connect().await.unwrap();
+    client.start().unwrap();
+
+    wait_until_async(
+        || async { state.subscriptions.lock().await.len() >= 4 },
+        Duration::from_secs(10),
+    )
+    .await;
+
+    while tokio::time::timeout(Duration::from_millis(200), rx.recv())
+        .await
+        .is_ok()
+    {}
+
+    // Bybit does not support TrailingStopMarket, so the single-order path denies before submit
+    let cid = ClientOrderId::from("test-unsupported-order-type");
+    let order = OrderAny::TrailingStopMarket(TrailingStopMarketOrder::new(
+        trader_id,
+        strategy_id,
+        instrument_id,
+        cid,
+        OrderSide::Buy,
+        Quantity::from("0.01"),
+        Price::from("1500.00"),
+        TriggerType::LastPrice,
+        rust_decimal::Decimal::new(100, 0),
+        TrailingOffsetType::BasisPoints,
+        TimeInForce::Gtc,
+        None,
+        false,
+        false,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        UUID4::new(),
+        UnixNanos::default(),
+    ));
+    let init = order.init_event().clone();
+
+    cache
+        .borrow_mut()
+        .add_order(order, None, Some(client_id), false)
+        .unwrap();
+
+    let cmd = SubmitOrder::new(
+        trader_id,
+        Some(client_id),
+        strategy_id,
+        instrument_id,
+        cid,
+        init,
+        None,
+        None,
+        None,
+        UUID4::new(),
+        UnixNanos::default(),
+        None, // correlation_id
+    );
+
+    client.submit_order(cmd).unwrap();
+
+    let event = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("timed out waiting for OrderDenied")
+        .expect("channel closed");
+    let text = match event {
+        ExecutionEvent::Order(ref order_event) => order_event.to_string(),
+        other => panic!("Expected OrderDenied, was {other:?}"),
+    };
+    assert!(
+        text.contains("OrderDenied") && text.contains("UNSUPPORTED_ORDER_TYPE"),
+        "Expected OrderDenied with unsupported-order-type reason, was {text}",
+    );
+
+    client.disconnect().await.unwrap();
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_exec_client_submit_order_list_denies_incomplete_when_leg_missing() {
+    use nautilus_common::messages::execution::SubmitOrderList;
+    use nautilus_model::orders::OrderList;
+
+    let (addr, state) = start_test_server().await.unwrap();
+    let trader_id = TraderId::from("TESTER-001");
+    let account_id = AccountId::from("BYBIT-001");
+    let client_id = *BYBIT_CLIENT_ID;
+    let strategy_id = StrategyId::from("S-001");
+    let instrument_id = InstrumentId::new(Symbol::from("ETHUSDT-LINEAR"), *BYBIT_VENUE);
+
+    let cache = Rc::new(RefCell::new(Cache::default()));
+    add_test_account_to_cache(&cache, account_id);
+
+    let core = ExecutionClientCore::new(
+        trader_id,
+        client_id,
+        *BYBIT_VENUE,
+        OmsType::Netting,
+        account_id,
+        AccountType::Margin,
+        None,
+        cache.clone(),
+    );
+
+    let config = create_test_demo_exec_config(addr);
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    set_exec_event_sender(tx);
+
+    let mut client = BybitExecutionClient::new(core, config).unwrap();
+    client.connect().await.unwrap();
+    client.start().unwrap();
+
+    wait_until_async(
+        || async { state.subscriptions.lock().await.len() >= 4 },
+        Duration::from_secs(10),
+    )
+    .await;
+
+    while tokio::time::timeout(Duration::from_millis(200), rx.recv())
+        .await
+        .is_ok()
+    {}
+
+    // Only the first leg is cached; the second is absent, so the whole list is incomplete
+    let cid_present = ClientOrderId::from("test-incomplete-present");
+    let cid_missing = ClientOrderId::from("test-incomplete-missing");
+
+    let order_present = OrderAny::Market(MarketOrder::new(
+        trader_id,
+        strategy_id,
+        instrument_id,
+        cid_present,
+        OrderSide::Buy,
+        Quantity::from("0.01"),
+        TimeInForce::Gtc,
+        UUID4::new(),
+        UnixNanos::default(),
+        false,
+        false,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    ));
+    let order_missing = OrderAny::Market(MarketOrder::new(
+        trader_id,
+        strategy_id,
+        instrument_id,
+        cid_missing,
+        OrderSide::Sell,
+        Quantity::from("0.01"),
+        TimeInForce::Gtc,
+        UUID4::new(),
+        UnixNanos::default(),
+        false,
+        false,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    ));
+
+    let init_present = order_present.init_event().clone();
+    let init_missing = order_missing.init_event().clone();
+
+    cache
+        .borrow_mut()
+        .add_order(order_present, None, Some(client_id), false)
+        .unwrap();
+
+    let order_list = OrderList::new(
+        OrderListId::from("test-incomplete-list"),
+        instrument_id,
+        strategy_id,
+        vec![cid_present, cid_missing],
+        UnixNanos::default(),
+    );
+
+    let cmd = SubmitOrderList::new(
+        trader_id,
+        Some(client_id),
+        strategy_id,
+        order_list,
+        vec![init_present, init_missing],
+        None,
+        None,
+        None,
+        UUID4::new(),
+        UnixNanos::default(),
+        None, // correlation_id
+    );
+
+    client.submit_order_list(cmd).unwrap();
+
+    // The missing leg cannot emit (absent from the cache); the cached leg reports the list cause
+    let event = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .expect("timed out waiting for OrderDenied")
+        .expect("channel closed");
+    let text = match event {
+        ExecutionEvent::Order(ref order_event) => order_event.to_string(),
+        other => panic!("Expected OrderDenied, was {other:?}"),
+    };
+    assert!(
+        text.contains("client_order_id=test-incomplete-present")
+            && text.contains("ORDER_LIST_INCOMPLETE"),
+        "Expected ORDER_LIST_INCOMPLETE for the cached leg, was {text}",
+    );
+
+    client.disconnect().await.unwrap();
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_exec_client_submit_order_list_denies_closed_leg() {
+    use nautilus_common::messages::execution::SubmitOrderList;
+    use nautilus_model::orders::OrderList;
+
+    let (addr, state) = start_test_server().await.unwrap();
+    let trader_id = TraderId::from("TESTER-001");
+    let account_id = AccountId::from("BYBIT-001");
+    let client_id = *BYBIT_CLIENT_ID;
+    let strategy_id = StrategyId::from("S-001");
+    let instrument_id = InstrumentId::new(Symbol::from("ETHUSDT-LINEAR"), *BYBIT_VENUE);
+
+    let cache = Rc::new(RefCell::new(Cache::default()));
+    add_test_account_to_cache(&cache, account_id);
+
+    let core = ExecutionClientCore::new(
+        trader_id,
+        client_id,
+        *BYBIT_VENUE,
+        OmsType::Netting,
+        account_id,
+        AccountType::Margin,
+        None,
+        cache.clone(),
+    );
+
+    let config = create_test_demo_exec_config(addr);
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    set_exec_event_sender(tx);
+
+    let mut client = BybitExecutionClient::new(core, config).unwrap();
+    client.connect().await.unwrap();
+    client.start().unwrap();
+
+    wait_until_async(
+        || async { state.subscriptions.lock().await.len() >= 4 },
+        Duration::from_secs(10),
+    )
+    .await;
+
+    while tokio::time::timeout(Duration::from_millis(200), rx.recv())
+        .await
+        .is_ok()
+    {}
+
+    let cid_open = ClientOrderId::from("test-closed-leg-open");
+    let cid_closed = ClientOrderId::from("test-closed-leg-closed");
+
+    let order_open = OrderAny::Market(MarketOrder::new(
+        trader_id,
+        strategy_id,
+        instrument_id,
+        cid_open,
+        OrderSide::Buy,
+        Quantity::from("0.01"),
+        TimeInForce::Gtc,
+        UUID4::new(),
+        UnixNanos::default(),
+        false,
+        false,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    ));
+    let mut order_closed = OrderAny::Market(MarketOrder::new(
+        trader_id,
+        strategy_id,
+        instrument_id,
+        cid_closed,
+        OrderSide::Sell,
+        Quantity::from("0.01"),
+        TimeInForce::Gtc,
+        UUID4::new(),
+        UnixNanos::default(),
+        false,
+        false,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    ));
+
+    let init_open = order_open.init_event().clone();
+    let init_closed = order_closed.init_event().clone();
+
+    // Deny the second leg before submission so it is closed when the list is processed
+    order_closed
+        .apply(OrderEventAny::Denied(OrderDenied::new(
+            trader_id,
+            strategy_id,
+            instrument_id,
+            cid_closed,
+            Ustr::from("closed before submission"),
+            UUID4::new(),
+            UnixNanos::default(),
+            UnixNanos::default(),
+        )))
+        .unwrap();
+
+    cache
+        .borrow_mut()
+        .add_order(order_open, None, Some(client_id), false)
+        .unwrap();
+    cache
+        .borrow_mut()
+        .add_order(order_closed, None, Some(client_id), false)
+        .unwrap();
+
+    let order_list = OrderList::new(
+        OrderListId::from("test-closed-leg-list"),
+        instrument_id,
+        strategy_id,
+        vec![cid_open, cid_closed],
+        UnixNanos::default(),
+    );
+
+    let cmd = SubmitOrderList::new(
+        trader_id,
+        Some(client_id),
+        strategy_id,
+        order_list,
+        vec![init_open, init_closed],
+        None,
+        None,
+        None,
+        UUID4::new(),
+        UnixNanos::default(),
+        None, // correlation_id
+    );
+
+    client.submit_order_list(cmd).unwrap();
+
+    let mut denied = Vec::new();
+
+    for _ in 0..2 {
+        match tokio::time::timeout(Duration::from_secs(2), rx.recv()).await {
+            Ok(Some(ExecutionEvent::Order(ref event)))
+                if event.to_string().contains("OrderDenied") =>
+            {
+                denied.push(event.to_string());
+            }
+            _ => break,
+        }
+    }
+
+    assert_eq!(denied.len(), 2, "Both legs should be denied: {denied:?}");
+
+    let offender = denied
+        .iter()
+        .find(|text| text.contains("client_order_id=test-closed-leg-closed"))
+        .expect("missing denied event for closed leg");
+    assert!(
+        offender.contains("VALIDATION_FAILED") && offender.contains("cannot submit closed order"),
+        "closed-leg reason was: {offender}"
+    );
+
+    let sibling = denied
+        .iter()
+        .find(|text| text.contains("client_order_id=test-closed-leg-open"))
+        .expect("missing denied event for open leg");
+    assert!(
+        sibling.contains("ORDER_LIST_DENIED"),
+        "sibling reason was: {sibling}"
     );
 
     client.disconnect().await.unwrap();
