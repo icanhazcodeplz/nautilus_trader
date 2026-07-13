@@ -5,7 +5,7 @@ uv sync
 uv run python build.py
 cp -rf /Users/brent/code/nautilus_trader/catalog /Users/brent/code/nautilus_trader_merge/
 
-uv run python custom/backtest_runner.py 
+uv run python custom/backtest_scripts/strategy_backtest_runner.py
 
 git checkout master
 git pull
