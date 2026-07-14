@@ -20,12 +20,14 @@ uv sync
 uv run python build.py
 
 # Test that code still works
-uv run python custom/backtest_runner.py 
+uv run python custom/backtest_scripts/strategy_backtest_runner.py
 
 # Remove the following folders:
 catalog
 build
 .venv
 target
+
+rm -rf catalog build .venv target                                                                                                                  
 
 
