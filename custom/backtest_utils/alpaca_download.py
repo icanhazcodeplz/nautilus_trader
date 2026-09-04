@@ -236,7 +236,11 @@ if __name__ == "__main__":
     # artifacts_dir = data_subdir("paper_runs", "20260311_104208")
     # download_matching_data_from_live_run(artifacts_dir)
 
-    symbol = "AAPL"
+    # EVTV 5/13 07:00. Received at 07:00:03
+    # CANF 2026-05-13 07:00. Received 07:00:00.07 - positive phase 2a pancreatic cancer data
+    # TSEM 2026-05-13 07:00. Received 07:00:01.2 - earnings
+    # EOSE 2026-05-13 06:30. Received 06:30:03 - deploy american-made long duration energy storage at scale
+
     nasdaq_holidays_2026 = [
         pd.Timestamp("2026-01-01"),  # New Year's Day
         pd.Timestamp("2026-01-19"),  # MLK Day
@@ -249,6 +253,9 @@ if __name__ == "__main__":
         pd.Timestamp("2026-12-25"),  # Christmas
     ]
     trading_days = pd.bdate_range("2026-01-02", "2026-04-15", freq="C", holidays=nasdaq_holidays_2026)
+
+    symbol = "MOBX"
+    trading_days = [pd.Timestamp("2026-05-14")]
     for day in trading_days:
         prepare_alpaca_data(symbol, day)
 

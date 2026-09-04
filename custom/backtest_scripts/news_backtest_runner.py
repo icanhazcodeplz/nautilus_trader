@@ -83,9 +83,9 @@ if __name__ == "__main__":
 
     strategy_overrides = dict(random_seed=1)
 
-    symbol = "RXT"
-    start_str = "2026-05-07 04:00-04:00"
-    end_str = "2026-05-07 8:30-04:00"
+    symbol = "MOBX"
+    start_str = "2026-05-14 04:00-04:00"
+    end_str = "2026-05-14 8:06-04:00"
     news_file = str(Path(__file__).parent / "fake_news_events.jsonl")
 
     run_single_news_backtest(

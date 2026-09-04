@@ -132,7 +132,7 @@ if __name__ == "__main__":
     log_level = "INFO"
     # log_level = "DEBUG"
     # log_level = "ERROR"
-    # log_level = "WARNING"
+    log_level = "WARNING"
 
     strategy_name = "momo"
     lstm_buy = False
@@ -148,9 +148,9 @@ if __name__ == "__main__":
         variance_window=300,
         outer_band_multiplier=2.5,
         pressure_window=25,
-        simple_take=True,
+        simple_take=False,
         only_buy_if_macd_positive=False,
-        trailing_take=False,
+        trailing_take=True,
         num_sell_tiers=3,
         trailing_buy_order=False,
         random_buy=not lstm_buy,
@@ -171,9 +171,9 @@ if __name__ == "__main__":
     # )
 
     symbol = "AAPL"
-    start_str = "2026-02-03 08:30-04:00"
+    start_str = "2026-02-03 08:25-04:00"
     # end_str = "2026-04-13 10:30-04:00"
-    end_str = "2026-02-03 16:00-04:00"
+    end_str = "2026-02-03 08:38-04:00"
     run_single_backtest(
         symbol,
         start_str,
