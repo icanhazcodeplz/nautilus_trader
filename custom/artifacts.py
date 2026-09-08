@@ -98,6 +98,8 @@ class ArtifactsIO:
         return database.load_orders()
 
     def _order_events_to_order_durations(self, order_events):
+        if len(order_events) == 0:
+            return []
         def parse_order_event_dict(o_dict):
             options = o_dict.get("options")
             if options is not None:
