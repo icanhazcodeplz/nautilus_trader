@@ -35,6 +35,57 @@ def convert_bar_to_json(bar):
     }
 
 
+def create_vert_lines_items(day):
+    day_start = pd.Timestamp(int(day), unit="ns", tz="UTC")
+    return [
+        {
+            "time": str((day_start + pd.Timedelta(hours=9, minutes=30)).value),
+            "annotation": "Open",
+            "color": "blue",
+            "thickness": 1,
+        },
+        {
+            "time": str((day_start + pd.Timedelta(hours=9, minutes=35)).value),
+            "annotation": "9:35",
+            "color": "blue",
+            "thickness": 1,
+        },
+    ]
+
+def create_horiz_lines_items(ticks):
+    if not ticks:
+        return []
+
+    day_start = pd.Timestamp(int(ticks[0]["time"]), unit="ns", tz="UTC").tz_convert("US/Eastern").normalize()
+    start_ns = (day_start + pd.Timedelta(hours=9, minutes=30)).value
+    end_ns = (day_start + pd.Timedelta(hours=9, minutes=35)).value
+
+    window_prices = [t["price"] for t in ticks if start_ns <= int(t["time"]) <= end_ns and "price" in t]
+    if not window_prices:
+        return []
+
+    return [
+        {
+            "start_time": str(start_ns),
+            "end_time": str(end_ns),
+            "price": window_prices[0],
+            "color": "green",
+        },
+        {
+            "start_time": str(start_ns),
+            "end_time": str(end_ns),
+            "price": max(window_prices),
+            "color": "blue",
+        },
+        {
+            "start_time": str(start_ns),
+            "end_time": str(end_ns),
+            "price": min(window_prices),
+            "color": "blue",
+        },
+    ]
+
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -80,6 +131,15 @@ def get_data():
                     ticks_dict[time_] = {}
             od["start_time"] = str(od["start_time"])
             od["end_time"] = str(od["end_time"])
+
+    first_tick_ns = int(next(iter(ticks_dict)))
+    day = pd.Timestamp(first_tick_ns, unit="ns", tz="UTC").tz_convert("US/Eastern").normalize().value
+    vert_lines = create_vert_lines_items(day)
+
+    # Vertical lines may not have same time as a tick
+    for vl in vert_lines:
+        if vl["time"] not in ticks_dict:
+            ticks_dict[vl["time"]] = {}
 
     # For each item in positions, if the time exists as a key in ticks_dict, add the `position` field to that entry in the ticks_dict
     for p in positions:
@@ -133,6 +193,8 @@ def get_data():
         TickChart3Lines=[
             dict(key="position", color="#e70f0f", color_negative=baby_blue, width=1, type=1),
         ],
+        VertLines=vert_lines,
+        HorizLines=create_horiz_lines_items(ticks),
     )
     return jsonify(records)
 
