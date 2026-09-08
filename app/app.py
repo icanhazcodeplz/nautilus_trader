@@ -23,6 +23,12 @@ artifacts_dir = BACKTEST_RUNS_PATH
 
 artifacts_io = ArtifactsIO(artifacts_dir)
 
+baby_blue = "#59e5ea"
+light_green = "#45d14c"
+highlight_green = "#39ff5e"
+light_purple = "#b98ae8"
+light_orange = "#f0a860"
+
 
 def convert_bar_to_json(bar):
     return {
@@ -40,15 +46,33 @@ def create_vert_lines_items(day):
     return [
         {
             "time": str((day_start + pd.Timedelta(hours=9, minutes=30)).value),
-            "annotation": "Open",
+            "annotation": "9:30",
             "color": "blue",
-            "thickness": 1,
+            "thickness": 2,
+        },
+        {
+            "time": str((day_start + pd.Timedelta(hours=9, minutes=30, seconds=1)).value),
+            "annotation": "9:30:01",
+            "color": "blue",
+            "thickness": 2,
+        },
+        {
+            "time": str((day_start + pd.Timedelta(hours=9, minutes=30, seconds=10)).value),
+            "annotation": "9:30:10",
+            "color": "blue",
+            "thickness": 2,
+        },
+        {
+            "time": str((day_start + pd.Timedelta(hours=9, minutes=31)).value),
+            "annotation": "9:31",
+            "color": "blue",
+            "thickness": 2,
         },
         {
             "time": str((day_start + pd.Timedelta(hours=9, minutes=35)).value),
             "annotation": "9:35",
             "color": "blue",
-            "thickness": 1,
+            "thickness": 2,
         },
     ]
 
@@ -60,29 +84,105 @@ def create_horiz_lines_items(ticks):
     start_ns = (day_start + pd.Timedelta(hours=9, minutes=30)).value
     end_ns = (day_start + pd.Timedelta(hours=9, minutes=35)).value
 
+    first_min_end_ns = (day_start + pd.Timedelta(hours=9, minutes=31)).value
+    first_10s_end_ns = (day_start + pd.Timedelta(hours=9, minutes=30, seconds=10)).value
+
     window_prices = [t["price"] for t in ticks if start_ns <= int(t["time"]) <= end_ns and "price" in t]
     if not window_prices:
         return []
+
+    first_min_prices = [
+        t["price"] for t in ticks if start_ns <= int(t["time"]) <= first_min_end_ns and "price" in t
+    ]
+
+    first_10s_prices = [
+        t["price"] for t in ticks if start_ns <= int(t["time"]) <= first_10s_end_ns and "price" in t
+    ]
+
+    # Last price before the open, falling back to the first price of the session
+    pre_open_price = next(
+        (t["price"] for t in reversed(ticks) if int(t["time"]) < start_ns and "price" in t),
+        window_prices[0],
+    )
 
     return [
         {
             "start_time": str(start_ns),
             "end_time": str(end_ns),
-            "price": window_prices[0],
-            "color": "green",
+            "price": pre_open_price,
+            "color": "white",
+            "annotation": f"{pre_open_price:.2f}",
         },
         {
             "start_time": str(start_ns),
             "end_time": str(end_ns),
-            "price": max(window_prices),
-            "color": "blue",
+            "price": pre_open_price+0.50,
+            "color": highlight_green,
+            "annotation": f"+.50",
         },
         {
             "start_time": str(start_ns),
             "end_time": str(end_ns),
-            "price": min(window_prices),
-            "color": "blue",
+            "price": pre_open_price+1.00,
+            "color": highlight_green,
+            "annotation": f"+1",
         },
+        {
+            "start_time": str(start_ns),
+            "end_time": str(end_ns),
+            "price": pre_open_price-0.50,
+            "color": highlight_green,
+            "annotation": f"-.50",
+        },
+        {
+            "start_time": str(start_ns),
+            "end_time": str(end_ns),
+            "price": pre_open_price-1.00,
+            "color": highlight_green,
+            "annotation": f"-1",
+        },
+        # {
+        #     "start_time": str(start_ns),
+        #     "end_time": str(end_ns),
+        #     "price": (high_price := max(window_prices)),
+        #     "color": baby_blue,
+        #     "annotation": f"{high_price:.2f}",
+        # },
+        # {
+        #     "start_time": str(start_ns),
+        #     "end_time": str(end_ns),
+        #     "price": (low_price := min(window_prices)),
+        #     "color": baby_blue,
+        #     "annotation": f"{low_price:.2f}",
+        # },
+        # {
+        #     "start_time": str(start_ns),
+        #     "end_time": str(first_min_end_ns),
+        #     "price": (first_min_high := max(first_min_prices)),
+        #     "color": light_purple,
+        #     "annotation": f"{first_min_high:.2f}",
+        # },
+        # {
+        #     "start_time": str(start_ns),
+        #     "end_time": str(first_min_end_ns),
+        #     "price": (first_min_low := min(first_min_prices)),
+        #     "color": light_purple,
+        #     "annotation": f"{first_min_low:.2f}",
+        # },
+        # {
+        #     "start_time": str(start_ns),
+        #     "end_time": str(first_10s_end_ns),
+        #     "price": (first_10s_high := max(first_10s_prices)),
+        #     "color": light_orange,
+        #     "annotation": f"{first_10s_high:.2f}",
+        # },
+        # {
+        #     "start_time": str(start_ns),
+        #     "end_time": str(first_10s_end_ns),
+        #     "price": (first_10s_low := min(first_10s_prices)),
+        #     "color": light_orange,
+        #     "annotation": f"{first_10s_low:.2f}",
+        # },
     ]
 
 
@@ -158,7 +258,6 @@ def get_data():
     for s in signals:
         s["time"] = str(s["time"])
 
-    baby_blue = "#59e5ea"
     title_start_str = (
         pd.Timestamp(int(ticks[0]["time"]), unit="ns", tz="UTC").tz_convert("US/Eastern").strftime("%m/%d %H:%M")
     )
@@ -176,11 +275,11 @@ def get_data():
         signals=signals,
         orderDurations=order_durations_list,
         TickChartLines=[
-            dict(key="vwap_value", color="#45d14c", width=2, type=0),
-            dict(key="vwap_low", color="red", width=1.5, type=0),
+            # dict(key="vwap_value", color=light_green, width=2, type=0),
+            # dict(key="vwap_low", color="red", width=1.5, type=0),
             # dict(key="vwap_low_inner", color=baby_blue, width=1, type=0),
             # dict(key="vwap_low_outer", color=baby_blue, width=1, type=0),
-            dict(key="vwap_high", color=baby_blue, width=1.5, type=0),
+            # dict(key="vwap_high", color=baby_blue, width=1.5, type=0),
             # dict(key="vwap_high_inner", color="red", width=1, type=0),
             # dict(key="vwap_high_outer", color="red", width=1, type=0),
         ],
