@@ -1,17 +1,22 @@
 import os
 import sys
 
+
 sys.path.append(os.getcwd())
 import pandas as pd
-from flask import Flask, render_template, jsonify
-
-from flask_restful import Api
+from flask import Flask
+from flask import jsonify
+from flask import render_template
 from flask_cors import CORS
+from flask_restful import Api
 
+from custom.artifacts import BACKTEST_RUNS_PATH
+from custom.artifacts import ArtifactsIO
+from custom.artifacts import CreateMarkers
 from custom.backtest_utils.backtest_run_utils import analyze_trades
-from custom.utils.paths import data_subdir
 from custom.utils.orders_to_trades import orders_to_trades
-from custom.artifacts import CreateMarkers, ArtifactsIO, BACKTEST_RUNS_PATH
+from custom.utils.paths import data_subdir
+
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, expose_headers=["Content-Range"])
@@ -28,6 +33,7 @@ light_green = "#45d14c"
 highlight_green = "#39ff5e"
 light_purple = "#b98ae8"
 light_orange = "#f0a860"
+white = "#ffffff"
 
 
 def convert_bar_to_json(bar):
@@ -110,36 +116,46 @@ def create_horiz_lines_items(ticks):
             "start_time": str(start_ns),
             "end_time": str(end_ns),
             "price": pre_open_price,
-            "color": "white",
+            "color": white,
             "annotation": f"{pre_open_price:.2f}",
+            "line_style": "dotted",
+            "opacity": 0.8,
         },
         {
             "start_time": str(start_ns),
             "end_time": str(end_ns),
             "price": pre_open_price+0.50,
             "color": highlight_green,
-            "annotation": f"+.50",
+            "annotation": "+.50",
+            "line_style": "dotted",
+            "opacity": 0.8,
         },
         {
             "start_time": str(start_ns),
             "end_time": str(end_ns),
             "price": pre_open_price+1.00,
             "color": highlight_green,
-            "annotation": f"+1",
+            "annotation": "+1",
+            "line_style": "dotted",
+            "opacity": 0.8,
         },
         {
             "start_time": str(start_ns),
             "end_time": str(end_ns),
             "price": pre_open_price-0.50,
             "color": highlight_green,
-            "annotation": f"-.50",
+            "annotation": "-.50",
+            "line_style": "dotted",
+            "opacity": 0.8,
         },
         {
             "start_time": str(start_ns),
             "end_time": str(end_ns),
             "price": pre_open_price-1.00,
             "color": highlight_green,
-            "annotation": f"-1",
+            "annotation": "-1",
+            "line_style": "dotted",
+            "opacity": 0.8,
         },
         # {
         #     "start_time": str(start_ns),
@@ -147,6 +163,8 @@ def create_horiz_lines_items(ticks):
         #     "price": (high_price := max(window_prices)),
         #     "color": baby_blue,
         #     "annotation": f"{high_price:.2f}",
+        #     "line_style": "dotted",
+        #     "opacity": 0.8,
         # },
         # {
         #     "start_time": str(start_ns),
@@ -154,6 +172,8 @@ def create_horiz_lines_items(ticks):
         #     "price": (low_price := min(window_prices)),
         #     "color": baby_blue,
         #     "annotation": f"{low_price:.2f}",
+        #     "line_style": "dotted",
+        #     "opacity": 0.8,
         # },
         # {
         #     "start_time": str(start_ns),
@@ -161,6 +181,8 @@ def create_horiz_lines_items(ticks):
         #     "price": (first_min_high := max(first_min_prices)),
         #     "color": light_purple,
         #     "annotation": f"{first_min_high:.2f}",
+        #     "line_style": "dotted",
+        #     "opacity": 0.8,
         # },
         # {
         #     "start_time": str(start_ns),
@@ -168,6 +190,8 @@ def create_horiz_lines_items(ticks):
         #     "price": (first_min_low := min(first_min_prices)),
         #     "color": light_purple,
         #     "annotation": f"{first_min_low:.2f}",
+        #     "line_style": "dotted",
+        #     "opacity": 0.8,
         # },
         # {
         #     "start_time": str(start_ns),
@@ -175,6 +199,8 @@ def create_horiz_lines_items(ticks):
         #     "price": (first_10s_high := max(first_10s_prices)),
         #     "color": light_orange,
         #     "annotation": f"{first_10s_high:.2f}",
+        #     "line_style": "dotted",
+        #     "opacity": 0.8,
         # },
         # {
         #     "start_time": str(start_ns),
@@ -182,6 +208,8 @@ def create_horiz_lines_items(ticks):
         #     "price": (first_10s_low := min(first_10s_prices)),
         #     "color": light_orange,
         #     "annotation": f"{first_10s_low:.2f}",
+        #     "line_style": "dotted",
+        #     "opacity": 0.8,
         # },
     ]
 
@@ -287,10 +315,10 @@ def get_data():
             # dict(key="vwap_pressure", color="#e70f0f", color_negative=baby_blue, width=1, type=0),
             # dict(key="allow_buy", color="#e70f0f", color_negative=baby_blue, width=1, type=1),
             # dict(key="macd_value", color="#e70f0f", color_negative=baby_blue, width=1, type=1),
-            dict(key="pnl", color="green", color_negative="red", width=1, type=1),
+            # dict(key="pnl", color="green", color_negative="red", width=1, type=1),
         ],
         TickChart3Lines=[
-            dict(key="position", color="#e70f0f", color_negative=baby_blue, width=1, type=1),
+            # dict(key="position", color="#e70f0f", color_negative=baby_blue, width=1, type=1),
         ],
         VertLines=vert_lines,
         HorizLines=create_horiz_lines_items(ticks),
