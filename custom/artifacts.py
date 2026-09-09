@@ -3,6 +3,7 @@ import pickle
 from enum import StrEnum
 from typing import Any
 import msgspec
+import numpy as np
 
 import pandas as pd
 
@@ -103,7 +104,9 @@ class ArtifactsIO:
         def parse_order_event_dict(o_dict):
             options = o_dict.get("options")
             if options is not None:
-                price = options["price"]
+                price = options.get("price")
+                if price is None:
+                    price = options.get("trigger_price")
                 o_dict["price"] = price
             return o_dict
 
@@ -124,21 +127,36 @@ class ArtifactsIO:
                 if dupes_types == {"OrderFilled"}:
                     # Do nothing, all the same type
                     pass
+                elif dupes_types == {"OrderUpdated"}:
+                    # Several resizes of one order inside a single nanosecond: entry partials that
+                    # land on the same tick each trigger a resize, so a leg goes 12 -> 20 without
+                    # ever resting at 12. Only the final size was ever live, so keep it.
+                    orders = orders.drop(index=dupes.index[:-1])
                 elif dupes_types == {"OrderAccepted", "OrderFilled"} or dupes_types == {"OrderUpdated", "OrderFilled"}:
                     filled_idx = dupes[dupes["type"] == "OrderFilled"].index
                     orders.loc[filled_idx, "ts_event"] += 1
                 elif dupes_types == {"OrderFilled", "OrderCanceled"}:
                     canceled_idx = dupes[dupes["type"] == "OrderCanceled"].index
                     orders.loc[canceled_idx, "ts_event"] += 1
+                elif dupes_types == {"OrderUpdated", "OrderCanceled"}:
+                    # An OUO leg whose sibling filled in two partials on the one tick: the first
+                    # partial shrinks this leg (OrderUpdated), the second closes the sibling and
+                    # so cancels it. Drop the update rather than ordering it before the cancel:
+                    # the resized leg never rested at that size, and keeping it would emit a
+                    # zero-length duration at a quantity the market never saw. The cancel then
+                    # closes the duration the leg actually had.
+                    updated_idx = dupes[dupes["type"] == "OrderUpdated"].index
+                    orders = orders.drop(index=updated_idx)
                 elif dupes_types == {"OrderUpdated", "OrderFilled", "OrderCanceled"}:
                     filled_idx = dupes[dupes["type"] == "OrderFilled"].index
                     canceled_idx = dupes[dupes["type"] == "OrderCanceled"].index
                     orders.loc[filled_idx, "ts_event"] += 1
                     orders.loc[canceled_idx, "ts_event"] += 2
-                elif len(dupes) != 2:
-                    raise
                 else:
-                    raise
+                    raise RuntimeError(
+                        f"Unhandled same-ts_event event combination {sorted(dupes_types)} "
+                        f"({len(dupes)} events) for {dupes.index.tolist()}"
+                    )
                 orders = orders.sort_values("ts_event")
 
             durations = []
@@ -149,7 +167,7 @@ class ArtifactsIO:
                     leaves_qty_at_start = qty
                     filled_qty = 0
                     price = float(order["price"])
-                    side = "buy" if order["order_side"] == OrderSide.BUY else "sell"
+                    side = "buy" if str(order["order_side"]) == "BUY" else "sell"
                 elif order["type"] == "OrderAccepted":
                     start = order["ts_event"]
                 elif order["type"] == "OrderFilled":
@@ -170,6 +188,8 @@ class ArtifactsIO:
                     qty = int(order["quantity"])
                     leaves_qty_at_start = qty - filled_qty
                     price = float(order["price"])
+                    if price is np.nan:
+                        price = float(order["trigger_price"])
                 elif order["type"] == "OrderCanceled":
                     cancel_time = order["ts_event"]
                     durations = _append_to_durations(durations, side, price, leaves_qty_at_start, start, cancel_time)
@@ -179,7 +199,7 @@ class ArtifactsIO:
             return pd.DataFrame(durations)
 
         durations_df = df.groupby("client_order_id")[
-            ["order_side", "type", "ts_event", "quantity", "price", "last_px", "last_qty"]
+            ["order_side", "type", "ts_event", "quantity", "price", "trigger_price", "last_px", "last_qty"]
         ].apply(client_id_to_durations)
         durations_df["start_time"] = durations_df["start_time"].astype("int64")
         durations_df["end_time"] = durations_df["end_time"].astype("int64")
