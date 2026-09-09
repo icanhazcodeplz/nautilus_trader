@@ -3,18 +3,24 @@ import random
 
 import pandas as pd
 
-from custom.artifacts import ArtifactsIO, BACKTEST_RUNS_PATH
-from custom.backtest_utils.backtest_run_utils import (
-    add_default_venue,
-    analyze_backtest,
-    build_backtest_engine,
-    register_custom_statistics,
-    save_backtest_order_updates,
-)
-from custom.backtest_utils.load_catalog_data import load_catalog_data_to_engine, CATALOG_TIME_STR_FMT
-from custom.backtest_utils.prepare_top_gainers import parse_candidate_str, get_allow_buy_times_for_candidate
-from custom.strategies.momo import MomoStrategyConfig, MomoStrategy
-from custom.strategies.random import RandomConfig, Random
+from custom.artifacts import BACKTEST_RUNS_PATH
+from custom.artifacts import ArtifactsIO
+from custom.backtest_utils.backtest_run_utils import add_default_venue
+from custom.backtest_utils.backtest_run_utils import analyze_backtest
+from custom.backtest_utils.backtest_run_utils import build_backtest_engine
+from custom.backtest_utils.backtest_run_utils import register_custom_statistics
+from custom.backtest_utils.backtest_run_utils import save_backtest_order_updates
+from custom.backtest_utils.load_catalog_data import CATALOG_TIME_STR_FMT
+from custom.backtest_utils.load_catalog_data import load_catalog_data_to_engine
+from custom.backtest_utils.prepare_top_gainers import get_allow_buy_times_for_candidate
+from custom.backtest_utils.prepare_top_gainers import parse_candidate_str
+from custom.strategies.base import BaseStrategy
+from custom.strategies.momo import MomoStrategy
+from custom.strategies.momo import MomoStrategyConfig
+from custom.strategies.open_fade import OpenFade
+from custom.strategies.open_fade import OpenFadeConfig
+from custom.strategies.random import Random
+from custom.strategies.random import RandomConfig
 from custom.utils.run_utils import run_strategy
 from nautilus_trader.adapters.alpaca.utils import ns_to_iso_8601
 
@@ -46,11 +52,18 @@ def run_single_backtest(
     elif strategy_name == "momo":
         config = MomoStrategyConfig(instrument_id=test_instrument.id, **params_copy)
         strategy = MomoStrategy(config=config)
+    elif strategy_name == "open_fade":
+        config = OpenFadeConfig(instrument_id=test_instrument.id, **params_copy)
+        strategy = OpenFade(config=config)
+    else:
+        raise ValueError(f"Unknown strategy_name {strategy_name!r}")
 
-    if allow_buy_times is not None:
-        strategy.allow_buy_times = allow_buy_times
-        strategy.set_allow_buys(False)
-    strategy.internal_bars = True
+    # `allow_buy_times` / `internal_bars` are BaseStrategy-only concepts.
+    if isinstance(strategy, BaseStrategy):
+        if allow_buy_times is not None:
+            strategy.allow_buy_times = allow_buy_times
+            strategy.set_allow_buys(False)
+        strategy.internal_bars = True
 
     performance_stats = run_strategy(strategy, engine, artifacts_location, run_config=config.dict())
 
@@ -132,37 +145,48 @@ if __name__ == "__main__":
     log_level = "INFO"
     # log_level = "DEBUG"
     # log_level = "ERROR"
-    log_level = "WARNING"
+    # log_level = "WARNING"
 
-    strategy_name = "momo"
-    lstm_buy = False
-    params = dict(
-        allow_trades=True,
-        max_position_multiplier=1,
-        trade_size=10,
-        stop_loss=0.2,
-        take_profit=None,
-        upper_scalar_multiplier=0.5,
-        lower_scalar_multiplier=1.5,
-        vwap_window=150,
-        variance_window=300,
-        outer_band_multiplier=2.5,
-        pressure_window=25,
-        simple_take=False,
-        only_buy_if_macd_positive=False,
-        trailing_take=True,
-        num_sell_tiers=3,
-        trailing_buy_order=False,
-        random_buy=not lstm_buy,
-        lstm_buy=lstm_buy,
-        random_seed=1,
-        # --- TOP GAINERS PARAMS ----------------
-        # price_min=0.8,
-        # price_max=20.0,
-        # vol_30min_min=100_000,
-        # perc_gain_min=30,
-        # rank_max=5,
-    )
+    strategy_name = "open_fade"
+
+    if strategy_name == "momo":
+        lstm_buy = False
+        params = dict(
+            allow_trades=True,
+            max_position_multiplier=1,
+            trade_size=10,
+            stop_loss=0.2,
+            take_profit=None,
+            upper_scalar_multiplier=0.5,
+            lower_scalar_multiplier=1.5,
+            vwap_window=150,
+            variance_window=300,
+            outer_band_multiplier=2.5,
+            pressure_window=25,
+            simple_take=False,
+            only_buy_if_macd_positive=False,
+            trailing_take=True,
+            num_sell_tiers=3,
+            trailing_buy_order=False,
+            random_buy=not lstm_buy,
+            lstm_buy=lstm_buy,
+            random_seed=1,
+            # --- TOP GAINERS PARAMS ----------------
+            # price_min=0.8,
+            # price_max=20.0,
+            # vol_30min_min=100_000,
+            # perc_gain_min=30,
+            # rank_max=5,
+        )
+
+    elif strategy_name == "open_fade":
+        params = dict(
+            trade_size=10,
+            entry_offsets=(0.50,),
+            stop_offset=0.5,
+            flip_threshold=0.30,
+            random_seed=1,
+        )
 
     # candidate_str = "2026-03-19_LNKS"
     #
@@ -170,14 +194,14 @@ if __name__ == "__main__":
     #     candidate_str, strategy_name, params, artifacts_location=BACKTEST_RUNS_PATH, log_level="ERROR", analyze=True
     # )
 
-    symbol = "AAPL"
-    start_str = "2026-02-03 08:25-04:00"
-    # end_str = "2026-04-13 10:30-04:00"
-    end_str = "2026-02-03 08:38-04:00"
+    symbol = "AMZN"
+    day_str = "2026-08-11"
+    start_str = day_str + " " + "09:20-04:00"
+    end_str__ = day_str + " " + "09:38-04:00"
     run_single_backtest(
         symbol,
         start_str,
-        end_str,
+        end_str__,
         strategy_name,
         params,
         allow_buy_times=None,

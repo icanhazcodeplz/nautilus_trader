@@ -2,7 +2,8 @@ import json
 
 import pandas as pd
 from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.requests import StockTradesRequest, StockQuotesRequest
+from alpaca.data.requests import StockQuotesRequest
+from alpaca.data.requests import StockTradesRequest
 
 from custom.artifacts import ArtifactsIO
 from custom.backtest_utils.load_catalog_data import BACKTESTING_CATALOG
@@ -15,7 +16,8 @@ from nautilus_trader.model import TradeTick
 from nautilus_trader.model.data import QuoteTick
 from nautilus_trader.model.enums import AggressorSide
 from nautilus_trader.model.identifiers import TradeId
-from nautilus_trader.model.objects import Price, Quantity
+from nautilus_trader.model.objects import Price
+from nautilus_trader.model.objects import Quantity
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
 
 
@@ -87,7 +89,7 @@ def get_trades_and_save_to_catalog_if_needed(symbol, day_in_question: pd.Timesta
         if force:
             _delete_range(instrument_id, start_dt_str, end_dt_str, data_type)
         else:
-            print(f"\tForce is off, skipping")
+            print("\tForce is off, skipping")
             return
 
     request = StockTradesRequest(feed="sip", symbol_or_symbols=symbol, start=start_dt_str, end=end_dt_str)
@@ -126,7 +128,7 @@ def get_quotes_and_save_to_catalog_if_needed(symbol, day_in_question: pd.Timesta
         if force:
             _delete_range(instrument_id, start_dt_str, end_dt_str, data_type)
         else:
-            print(f"\tForce is off, skipping")
+            print("\tForce is off, skipping")
             return
 
     request = StockQuotesRequest(feed="sip", symbol_or_symbols=symbol, start=start_dt_str, end=end_dt_str)
@@ -252,10 +254,9 @@ if __name__ == "__main__":
         pd.Timestamp("2026-11-26"),  # Thanksgiving
         pd.Timestamp("2026-12-25"),  # Christmas
     ]
-    trading_days = pd.bdate_range("2026-01-02", "2026-04-15", freq="C", holidays=nasdaq_holidays_2026)
+    trading_days = pd.bdate_range("2026-07-01", "2026-09-08", freq="C", holidays=nasdaq_holidays_2026)
 
-    symbol = "MOBX"
-    trading_days = [pd.Timestamp("2026-05-14")]
+    symbol = "AMZN"
     for day in trading_days:
         prepare_alpaca_data(symbol, day)
 
