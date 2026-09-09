@@ -131,9 +131,37 @@ def save_backtest_order_updates(engine, artifacts_location):
 
     catalog = ParquetDataCatalog(str(artifacts_location))
     relevant_order_updates = catalog.read_backtest(instance_id=str(engine.kernel.instance_id))
-    # Deduplicate: OrderFilled events are published twice in engine.pyx
-    # (once from _handle_order_fill, once from _handle_event)
-    relevant_order_updates = list(set(f for f in relevant_order_updates))
+
+    # Drop the same event object seen twice: OrderFilled is published once from
+    # _handle_order_fill and once from _handle_event in engine.pyx, and the writer subscribes to
+    # every topic. Keyed on `event_id` (which is what order events hash on) via a dict rather than
+    # a set, so the surviving order is the streamed one rather than an arbitrary hash order.
+    by_id = {}
+    for event in relevant_order_updates:
+        by_id.setdefault(event.id, event)
+    relevant_order_updates = list(by_id.values())
+
+    # Collapse repeated OrderUpdated events for one order down to the last one. A modify re-sent
+    # while the first is still in flight is applied twice by the venue, so the same resize shows up
+    # as two events. Grouped on (client_order_id, quantity, price, trigger_price), so a genuine
+    # reprice at an unchanged quantity is kept.
+    latest_update = {}
+    for event in relevant_order_updates:
+        if not isinstance(event, OrderUpdated):
+            continue
+        key = (event.client_order_id, event.quantity, event.price, event.trigger_price)
+        incumbent = latest_update.get(key)
+        if incumbent is None or event.ts_init >= incumbent.ts_init:
+            latest_update[key] = event
+
+    kept_updates = set(latest_update.values())
+    relevant_order_updates = [
+        event
+        for event in relevant_order_updates
+        if not isinstance(event, OrderUpdated) or event in kept_updates
+    ]
+
+    # `sort` is stable, so events sharing a ts_event keep the order they were streamed in.
     relevant_order_updates.sort(key=lambda e: e.ts_event)
     artifacts_io = ArtifactsIO(BACKTEST_RUNS_PATH)
     artifacts_io.save_backtest_order_updates_to_pkl(relevant_order_updates)
