@@ -224,8 +224,6 @@ def get_data():
     ticks_dict = artifacts_io.load_ticks_and_metrics_file()
     symbol = artifacts_io.symbol
 
-    signals = artifacts_io.load_signals()
-
     orders_report, fills, positions, order_durations_list = artifacts_io.get_run_data()
 
     trades, sell_legs = orders_to_trades(orders_report)
@@ -283,9 +281,6 @@ def get_data():
     for t in ticks:
         t["time"] = str(t["time"])
 
-    for s in signals:
-        s["time"] = str(s["time"])
-
     title_start_str = (
         pd.Timestamp(int(ticks[0]["time"]), unit="ns", tz="UTC").tz_convert("US/Eastern").strftime("%m/%d %H:%M")
     )
@@ -300,7 +295,6 @@ def get_data():
         one_min=[],
         macd=[],
         fill_markers=markers,
-        signals=signals,
         orderDurations=order_durations_list,
         TickChartLines=[
             # dict(key="vwap_value", color=light_green, width=2, type=0),

@@ -367,13 +367,6 @@ class ArtifactsIO:
 
         return df
 
-    def save_signals(self, signals):
-        # FIXME: Delete signals?
-        dict_to_file(signals, self.directory / "signals.txt")
-
-    def load_signals(self):
-        return load_txt_file_to_dict(self.directory / "signals.txt")
-
     def save_ticks_and_metrics(self, metrics):
         self._save_pickle(metrics, "ticks_and_metrics.pkl")
 

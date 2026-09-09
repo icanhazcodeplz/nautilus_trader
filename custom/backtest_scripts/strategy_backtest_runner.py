@@ -147,7 +147,7 @@ if __name__ == "__main__":
     # log_level = "ERROR"
     # log_level = "WARNING"
 
-    strategy_name = "open_fade"
+    strategy_name = "momo"
 
     if strategy_name == "momo":
         lstm_buy = False

@@ -44,7 +44,6 @@ class BaseStrategyConfig(StrategyConfig, frozen=True):
 
 class BaseStrategy(Strategy):
     MIN_TICK_LOOKBACK: int = 0
-    buy_signal_delay_secs: int = 1
     _POSITION_DISCREPANCY_ALLOW_SECS = 10  # Raise if alpaca vs nt discrepancy lasts for longer than this
     _MODIFY_REJECT_COOLDOWN_SECS = 1  # Seconds to block retries after a ModifyRejected
     _RECONCILE_COOLDOWN_SECS = 3  # Minimum seconds between reconciliation attempts
@@ -66,10 +65,7 @@ class BaseStrategy(Strategy):
         self._tick_data_dicts = {}
         self._tick_event_dt_adjusted = 0
 
-        self._buy_signals_count = 0
         self.buy_orders_count = 0
-        self.buy_sell_signals = []
-        self.last_buy_signal_dt = 0
 
         # Used to track order modifications to avoid sending duplicate modify orders when the cache is slow
         self._already_cancelled_orders = set()
@@ -251,38 +247,6 @@ class BaseStrategy(Strategy):
     def _max_sell_qty_allowed(self):
         return self.position_qty - self.open_sell_qty
 
-    def log_buy_signal(self, tick, tag=None):
-        return  # TODO: Rethink buy signals?
-        if (self._tick_event_dt_adjusted - self.last_buy_signal_dt) / 1e9 < self.buy_signal_delay_secs:
-            return
-        self._buy_signals_count += 1
-        if tag is None:
-            tag = f"{self._buy_signals_count}"
-        buy_signal_dict = dict(
-            side="buy", time=self._tick_event_dt_adjusted, price=float(tick.price), tag=tag, win=None, win_delay=None
-        )
-        self.buy_sell_signals.append(buy_signal_dict)
-        self.log.info(f"Buy signal {self._buy_signals_count}: {buy_signal_dict}")
-        self.last_buy_signal_dt = self._tick_event_dt_adjusted
-
-    def _update_buy_signals(self, tick):
-        # Track buy-sell signals
-        for signal in self.buy_sell_signals:
-            if signal["win"] is None or signal["win_delay"] is None:
-                if signal["side"] == "buy":
-                    win = tick.price >= (signal["price"] + self.stop_loss)
-                    loss = tick.price <= (signal["price"] - self.stop_loss)
-                    if signal["win"] is None and (win or loss):
-                        signal["win"] = win
-                        signal["win_time"] = self._tick_event_dt_adjusted
-                    if (
-                        signal["win_delay"] is None
-                        and (win or loss)
-                        and ((self._tick_event_dt_adjusted - signal["time"]) > 80 * 1e6)
-                    ):
-                        signal["win_delay"] = win
-                        signal["win_delay_time"] = self._tick_event_dt_adjusted
-
     def _raise_if_needed(self):
         """
         Need separate method because _reconcile raises were not causing system to raise
@@ -324,8 +288,6 @@ class BaseStrategy(Strategy):
         if self._historical_loaded and self.indicators_initialized():
             self._on_trade_tick(tick)
 
-        # TODO: Rethink buy signals?
-        # self._update_buy_signals(tick)
         self._save_tick_data(tick)
 
     def _on_bar(self, bar: Bar) -> None:
@@ -767,7 +729,6 @@ class BaseStrategy(Strategy):
     def on_dispose(self) -> None:
         if self.save_artifacts:
             self._artifacts_io.save_ticks_and_metrics(self._tick_data_dicts)
-            self._artifacts_io.save_signals(self.buy_sell_signals)
 
     def on_instrument(self, instrument: Instrument) -> None:
         pass

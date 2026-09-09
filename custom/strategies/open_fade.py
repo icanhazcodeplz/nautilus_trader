@@ -268,7 +268,6 @@ class OpenFade(Strategy):
         # left behind, and plots this run's orders over a stale price series.
         if self.save_artifacts:
             self._artifacts_io.save_ticks_and_metrics(self._tick_data_dicts)
-            self._artifacts_io.save_signals([])  # No buy/sell signals in this strategy
 
     # ------------------------------------------------------------------
     # Entries and flipping

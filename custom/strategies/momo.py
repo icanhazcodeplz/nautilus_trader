@@ -233,14 +233,13 @@ class MomoStrategy(BaseStrategy):
                 # and (price > price_1ago)
                 # and (price > self.vwap_day.value)
             ):
-                self.log_buy_signal(tick)
                 if (
                     position_qty < self.max_position_allowed
                     # and tick.size > 1
                     # and (self.clock.utc_now() - self.last_buy_ts).total_seconds() > random.randint(1, 20)
                     and (self.clock.utc_now() - self.last_buy_dt).total_seconds() > 1
                 ):
-                    self.buy(self.config.trade_size, price, cancel_after_secs=1, tag=f"{self._buy_signals_count}")
+                    self.buy(self.config.trade_size, price, cancel_after_secs=1, tag=f"{self.buy_orders_count}")
 
         # TAKE LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         allow_take = True
