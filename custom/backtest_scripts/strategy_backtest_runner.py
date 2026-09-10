@@ -19,8 +19,6 @@ from custom.strategies.momo import MomoStrategy
 from custom.strategies.momo import MomoStrategyConfig
 from custom.strategies.open_fade import OpenFade
 from custom.strategies.open_fade import OpenFadeConfig
-from custom.strategies.random import Random
-from custom.strategies.random import RandomConfig
 from custom.utils.run_utils import run_strategy
 from nautilus_trader.adapters.alpaca.utils import ns_to_iso_8601
 
@@ -46,10 +44,7 @@ def run_single_backtest(
     test_instrument, engine = load_catalog_data_to_engine(engine, symbol, start_str, end_str, data_venue="ALPACA")
     register_custom_statistics(engine)
 
-    if strategy_name == "random":
-        config = RandomConfig(instrument_id=test_instrument.id, **params_copy)
-        strategy = Random(config=config)
-    elif strategy_name == "momo":
+    if strategy_name == "momo":
         config = MomoStrategyConfig(instrument_id=test_instrument.id, **params_copy)
         strategy = MomoStrategy(config=config)
     elif strategy_name == "open_fade":

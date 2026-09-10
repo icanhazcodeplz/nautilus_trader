@@ -54,6 +54,7 @@ ET = "US/Eastern"
 ENTRY_TAG = "ENTRY"
 TAKE_PROFIT_TAG = "TAKE_PROFIT"
 STOP_LOSS_TAG = "STOP_LOSS"
+FLATTEN_TAG = "FLATTEN"
 
 # Clock alert names
 _ALERT_COLLECT = "OF-COLLECT"
@@ -78,6 +79,9 @@ class OpenFadeConfig(StrategyConfig, frozen=True, kw_only=True):
     open_at_et: str = "09:30:00"
     entry_window_secs: int = 60
     flatten_at_et: str = "09:36:00"
+    # How far through the last trade to price the flattening limit order. Priced against the
+    # position (below the last trade when selling, above it when buying) so it is marketable.
+    flatten_offset: float = 0.20
     max_flips: int = 10
     # Leave OUO handling to the venue alone. With the strategy-side OrderManager also active, a
     # partial fill on one leg makes it resize the sibling, and the venue then propagates that back
@@ -131,6 +135,7 @@ class OpenFade(Strategy):
         self._tp_order: LimitOrder | None = None
         self._sl_order: StopMarketOrder | None = None
         self._pending_oco = False  # An entry filled before open_price was known
+        self._flatten_order: LimitOrder | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -229,7 +234,39 @@ class OpenFade(Strategy):
     def _on_flatten(self, event: TimeEvent) -> None:
         self.log.info("Force-flattening", color=LogColor.YELLOW)
         self.cancel_all_orders(self.config.instrument_id)
-        self.close_all_positions(self.config.instrument_id)
+
+        net = self._net_position()
+        if net == 0:
+            return
+
+        if self._last_price is None:
+            self.log.warning("No trade tick seen, flattening at market")
+            self.close_all_positions(self.config.instrument_id)
+            return
+
+        # Cross the last trade by `flatten_offset` so the limit is marketable, rather than resting
+        # at a price the market has to come back to.
+        exit_side = OrderSide.BUY if net < 0 else OrderSide.SELL
+        signed = self.config.flatten_offset if exit_side == OrderSide.BUY else -self.config.flatten_offset
+        price = self.instrument.make_price(self._last_price + signed)
+
+        order = self.order_factory.limit(
+            instrument_id=self.config.instrument_id,
+            order_side=exit_side,
+            quantity=self.instrument.make_qty(abs(net)),
+            price=price,
+            time_in_force=TimeInForce.DAY,
+            post_only=False,
+            reduce_only=True,
+            tags=[FLATTEN_TAG],
+        )
+        self._flatten_order = order
+        self.log.info(
+            f"Flatten {'BUY' if exit_side == OrderSide.BUY else 'SELL'} {abs(net)} "
+            f"limit={price} (last={self._last_price:.4f})",
+            color=LogColor.YELLOW,
+        )
+        self.submit_order(order)
 
     # ------------------------------------------------------------------
     # Data

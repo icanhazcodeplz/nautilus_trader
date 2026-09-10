@@ -13,6 +13,7 @@ import pandas as pd
 import pytest
 
 from custom.strategies.open_fade import ENTRY_TAG
+from custom.strategies.open_fade import FLATTEN_TAG
 from custom.strategies.open_fade import STOP_LOSS_TAG
 from custom.strategies.open_fade import TAKE_PROFIT_TAG
 from custom.strategies.open_fade import OpenFade
@@ -398,6 +399,59 @@ class TestPreOpenFill:
         modified_ids = [o.client_order_id for o, _ in strategy._recorder.modified]
         assert entries[0].client_order_id not in modified_ids  # closed order not repriced
         assert strategy._pending_oco is False
+
+
+class TestFlatten:
+    """The 15:55 flatten crosses the last trade rather than closing at market."""
+
+    def _flatten_order(self, strategy):
+        orders = [o for o in strategy._recorder.submitted if FLATTEN_TAG in (o.tags or [])]
+        assert len(orders) == 1
+        return orders[0]
+
+    def test_short_is_covered_with_a_limit_above_the_last_price(self, strategy, instrument):
+        _arm_and_open(strategy, instrument, [100.0] * 10, 100.0)
+        _feed(strategy, instrument, [101.50], start=OPEN_ET + pd.Timedelta(minutes=5))
+        strategy._net_position = lambda: -10
+
+        strategy._on_flatten(None)
+
+        order = self._flatten_order(strategy)
+        assert order.side == OrderSide.BUY
+        assert float(order.price) == 101.70  # last + 0.20
+        assert int(order.quantity) == 10
+        assert order.is_reduce_only
+
+    def test_long_is_sold_with_a_limit_below_the_last_price(self, strategy, instrument):
+        _arm_and_open(strategy, instrument, [100.0] * 10, 100.0)
+        _feed(strategy, instrument, [101.50], start=OPEN_ET + pd.Timedelta(minutes=5))
+        strategy._net_position = lambda: 10
+
+        strategy._on_flatten(None)
+
+        order = self._flatten_order(strategy)
+        assert order.side == OrderSide.SELL
+        assert float(order.price) == 101.30  # last - 0.20
+        assert int(order.quantity) == 10
+
+    def test_flat_position_submits_nothing(self, strategy, instrument):
+        _arm_and_open(strategy, instrument, [100.0] * 10, 100.0)
+        strategy._net_position = lambda: 0
+
+        strategy._on_flatten(None)
+
+        assert [o for o in strategy._recorder.submitted if FLATTEN_TAG in (o.tags or [])] == []
+
+    def test_falls_back_to_market_close_with_no_last_price(self, strategy, instrument):
+        closed = []
+        strategy.close_all_positions = lambda *a, **kw: closed.append(True)
+        strategy._net_position = lambda: -10
+        assert strategy._last_price is None
+
+        strategy._on_flatten(None)
+
+        assert closed == [True]
+        assert [o for o in strategy._recorder.submitted if FLATTEN_TAG in (o.tags or [])] == []
 
 
 # ----------------------------------------------------------------------
