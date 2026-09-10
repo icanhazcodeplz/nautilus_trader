@@ -145,7 +145,6 @@ if __name__ == "__main__":
     strategy_name = "momo"
 
     if strategy_name == "momo":
-        lstm_buy = False
         params = dict(
             allow_trades=True,
             max_position_multiplier=1,
@@ -153,7 +152,7 @@ if __name__ == "__main__":
             stop_loss=0.2,
             take_profit=None,
             upper_scalar_multiplier=0.5,
-            lower_scalar_multiplier=1.5,
+            lower_scalar_multiplier=0.5,
             vwap_window=150,
             variance_window=300,
             outer_band_multiplier=2.5,
@@ -163,8 +162,8 @@ if __name__ == "__main__":
             trailing_take=True,
             num_sell_tiers=3,
             trailing_buy_order=False,
-            random_buy=not lstm_buy,
-            lstm_buy=lstm_buy,
+            random_buy=False,
+            lstm_buy=False,
             random_seed=1,
             # --- TOP GAINERS PARAMS ----------------
             # price_min=0.8,

@@ -56,7 +56,7 @@ class BaseStrategy(Strategy):
         self.metrics_to_save_on_1min = []
 
         self.stop_price = None
-        self.stop_loss: float = None
+        self.stop_loss: float | None = None
         self.last_buy_dt: Timestamp = pd.Timestamp("1990", tz="UTC")
         self._allow_buys: bool = True
         self.allow_buy_times: Optional[set[pd.Timestamp]] = None
@@ -305,7 +305,6 @@ class BaseStrategy(Strategy):
         if isinstance(data, TradeTick):
             self._historical_ticks.append(data)
             self._save_tick_data(data)
-
 
     def _on_historical_ticks_loaded(self, request_id) -> None:
         self._historical_loaded = True

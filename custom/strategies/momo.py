@@ -4,7 +4,7 @@ import random
 import pandas as pd
 import torch
 
-from custom.nt_extensions.indicators import VWAPBandsNew
+from custom.nt_extensions.indicators import PressureVWAPBands
 from custom.strategies.base import BaseStrategy, BaseStrategyConfig
 from custom.strategies._tiers import Tiers
 from custom.strategies.metric import Metric
@@ -71,7 +71,7 @@ class MomoStrategy(BaseStrategy):
         self.take_profit = self.config.take_profit if self.config.take_profit is not None else self.config.stop_loss
         self.market_open_only = False  # TODO: remove this?
         # self.vwap = VWAPBands(
-        self.vwap = VWAPBandsNew(
+        self.vwap = PressureVWAPBands(
             lower_scalar_multiplier=self.config.lower_scalar_multiplier,
             upper_scalar_multiplier=self.config.upper_scalar_multiplier,
             rolling_window=self.config.vwap_window,
@@ -96,7 +96,6 @@ class MomoStrategy(BaseStrategy):
                     "pressure",
                 ],
             ),
-            # Metric(obj=self.vwap_day, name="day_vwap", attrs=["value"]),
         ]
         if self.config.only_buy_if_macd_positive:
             self.metrics_to_save_on_1min.append(Metric(obj=self.macd, name="macd", attrs=["value"]))
@@ -231,7 +230,6 @@ class MomoStrategy(BaseStrategy):
                 price < self.vwap.low
                 # and price_1ago > self.vwap.low
                 # and (price > price_1ago)
-                # and (price > self.vwap_day.value)
             ):
                 if (
                     position_qty < self.max_position_allowed

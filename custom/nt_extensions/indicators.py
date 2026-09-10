@@ -160,7 +160,7 @@ class VWAPBands(Indicator):
         self.vwap = 0
 
 
-class VWAPBandsNew(Indicator):
+class PressureVWAPBands(Indicator):
     INITIAL_UPPER_LOWER_SCALAR = 0.50
     ADJUST_EVERY = 100  # FIXME: Increase this?
     MINIMUM_BAND = 0.01

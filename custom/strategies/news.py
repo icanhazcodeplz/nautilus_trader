@@ -3,7 +3,7 @@ import random
 from pathlib import Path
 from typing import Optional
 
-from custom.nt_extensions.indicators import VWAPBandsNew
+from custom.nt_extensions.indicators import PressureVWAPBands
 from custom.strategies.base import BaseStrategy, BaseStrategyConfig
 from custom.strategies.momo import backfill_deque_with_value_if_empty
 from custom.utils.alpaca_trader_http_client import AlpacaTraderHelper
@@ -35,7 +35,7 @@ class NewsStrategy(BaseStrategy):
         self.article_published_ns: int = 0  # Initialized in self.initialization
         # FIXME: This is temporary
         self.take_profit = self.config.take_profit if self.config.take_profit is not None else self.config.stop_loss
-        # self.vwap = VWAPBandsNew(
+        # self.vwap = PressureVWAPBands(
         #     lower_scalar_multiplier=self.config.lower_scalar_multiplier,
         #     upper_scalar_multiplier=self.config.upper_scalar_multiplier,
         #     rolling_window=self.config.vwap_window,
