@@ -18,9 +18,10 @@ Timeline (all times US/Eastern):
 
 Notes
 -----
-This subclasses ``Strategy`` directly rather than ``BaseStrategy`` because ``BaseStrategy.sell()``
-clamps quantity to ``position_qty - open_sell_qty`` (it can never open a short) and
-``_submit_orders_if_allowed`` raises on an ``OrderList``.
+This subclasses ``Strategy`` directly rather than ``BaseStrategy``. The long-only half of that
+reason is gone: ``BaseStrategy`` now has a ``side`` flag with ``enter()``/``exit()``, so it can
+open a short. What still blocks a migration is ``_submit_orders_if_allowed`` raising on an
+``OrderList``, which this strategy needs for its OCO exit.
 
 """
 

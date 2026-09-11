@@ -37,9 +37,9 @@ class LatencyTestStrategy(BaseStrategy):
         if self.config.buy_on_tick:
             if (
                 len(self.open_orders) == 0
-                and (self.clock.utc_now() - self.last_buy_dt).total_seconds() > self.min_secs_between_buys
+                and (self.clock.utc_now() - self.last_entry_dt).total_seconds() > self.min_secs_between_buys
             ):
-                self.buy(quantity=1, limit_price=tick.price * 0.85, tag="b")
+                self.enter(quantity=1, limit_price=tick.price * 0.85, tag="b")
 
     def _modify_or_cancel(self, _: TimeEvent):
         open_orders = self.open_orders
@@ -50,9 +50,9 @@ class LatencyTestStrategy(BaseStrategy):
         if not self.config.buy_on_tick:
             if (
                 len(open_orders) == 0
-                and (self.clock.utc_now() - self.last_buy_dt).total_seconds() > self.min_secs_between_buys
+                and (self.clock.utc_now() - self.last_entry_dt).total_seconds() > self.min_secs_between_buys
             ):
-                self.buy(quantity=1, limit_price=0.5, tag="b")
+                self.enter(quantity=1, limit_price=0.5, tag="b")
 
         for order in open_orders:
             event_names = [str(event.__class__.__name__) for event in order.events]

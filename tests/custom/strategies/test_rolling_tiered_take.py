@@ -1,5 +1,7 @@
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from nautilus_trader.model.enums import OrderStatus
 from nautilus_trader.model.objects import Price
 
 from custom.strategies.momo import MomoStrategy
@@ -8,12 +10,15 @@ from custom.strategies.momo import MomoStrategy
 class MockOpenOrder:
     """Lightweight stand-in for OpenOrder with the properties _rolling_tiered_take reads."""
 
-    def __init__(self, price_str, leaves_qty, quantity=None, filled_qty=0):
+    def __init__(self, price_str, leaves_qty, quantity=None, filled_qty=0,
+                 status=OrderStatus.ACCEPTED):
         self.price = Price.from_str(price_str)
         self.leaves_qty = leaves_qty
         self.quantity = quantity if quantity is not None else leaves_qty
         self.filled_qty = filled_qty
         self.is_open = True
+        # _rolling_tiered_take reads open_order.order.status for its PENDING_UPDATE check
+        self.order = SimpleNamespace(status=status)
 
     def __repr__(self):
         return f"MockOpenOrder(price={self.price}, leaves={self.leaves_qty})"
@@ -23,13 +28,20 @@ def _make_strategy(position_qty, open_sells, num_sell_tiers, vwap_high=10.00, me
     """Build a MagicMock that quacks like MomoStrategy for _rolling_tiered_take."""
     s = MagicMock()
     s.position_qty = position_qty
+    # _rolling_tiered_take sizes off `exposure` (position in the direction of `side`) rather than
+    # the raw signed position. These tests are all long, so the two are the same.
+    s.is_short = False
+    s.exposure = position_qty
     s.open_sells = set(open_sells)
+    s.open_sells_qty = sum(o.leaves_qty for o in open_sells)
     s.config.num_sell_tiers = num_sell_tiers
     s.vwap.high = vwap_high
     s.vwap.mean_variance = mean_variance
     s.instrument.make_price = lambda p: Price.from_str(f"{p:.2f}")
     s.clock.timestamp_ns.return_value = 0
-    s.buy_orders_count = 0
+    s.entry_orders_count = 0
+    # Start the sell-diff timer unarmed so the fallback order is not placed on the first pass
+    s._sell_diff_start_ns = None
     return s
 
 
@@ -58,7 +70,7 @@ class TestRollingTieredTake:
         # Order should be modified to the lowest tier price
         s.modify_open_order.assert_called_once_with(order, quantity=5, price=Price.from_str("10.00"))
         # Remaining qty placed at the higher tier via a new sell
-        s.sell.assert_called_once_with(5, Price.from_str("10.01"), cancel_after_secs=None, tag="0")
+        s.exit.assert_called_once_with(5, Price.from_str("10.01"), cancel_after_secs=None, tag="0")
 
     # ------------------------------------------------------------------ #
     # 2. Single order at lowest tier → unchanged
@@ -69,7 +81,7 @@ class TestRollingTieredTake:
         _run(s)
 
         s.modify_open_order.assert_not_called()
-        s.sell.assert_not_called()
+        s.exit.assert_not_called()
 
     # ------------------------------------------------------------------ #
     # 3. Two orders, lowest tier covered → both unchanged
@@ -81,7 +93,7 @@ class TestRollingTieredTake:
         _run(s)
 
         s.modify_open_order.assert_not_called()
-        s.sell.assert_not_called()
+        s.exit.assert_not_called()
 
     # ------------------------------------------------------------------ #
     # 4. Two orders, lowest NOT covered → highest moved down
@@ -100,7 +112,7 @@ class TestRollingTieredTake:
             price=Price.from_str("10.00"),
         )
         # Leftover 1 share placed at 10.02
-        s.sell.assert_called_once_with(
+        s.exit.assert_called_once_with(
             1,
             Price.from_str("10.02"),
             cancel_after_secs=None,
@@ -116,7 +128,7 @@ class TestRollingTieredTake:
         _run(s)
 
         s.modify_open_order.assert_not_called()
-        s.sell.assert_not_called()
+        s.exit.assert_not_called()
 
     # ------------------------------------------------------------------ #
     # 6. Single order at price outside all tiers → modified to lowest
@@ -131,7 +143,7 @@ class TestRollingTieredTake:
             quantity=5,
             price=Price.from_str("10.00"),
         )
-        s.sell.assert_called_once_with(
+        s.exit.assert_called_once_with(
             5,
             Price.from_str("10.01"),
             cancel_after_secs=None,
@@ -146,15 +158,15 @@ class TestRollingTieredTake:
         _run(s)
 
         s.modify_open_order.assert_not_called()
-        assert s.sell.call_count == 2
+        assert s.exit.call_count == 2
         # Lowest tier first, then highest
-        s.sell.assert_any_call(
+        s.exit.assert_any_call(
             5,
             Price.from_str("10.00"),
             cancel_after_secs=None,
             tag="0",
         )
-        s.sell.assert_any_call(
+        s.exit.assert_any_call(
             5,
             Price.from_str("10.01"),
             cancel_after_secs=None,
@@ -180,7 +192,7 @@ class TestRollingTieredTake:
             price=Price.from_str("10.00"),
         )
         # Leftover 1 share placed at 10.03
-        s.sell.assert_called_once_with(
+        s.exit.assert_called_once_with(
             1,
             Price.from_str("10.03"),
             cancel_after_secs=None,

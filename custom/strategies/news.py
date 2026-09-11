@@ -40,4 +40,4 @@ class NewsStrategy(MomoStrategy):
         last_tick = self.cache.trade_tick(self.config.instrument_id)
         if last_tick is None:
             return
-        self.buy(self.config.trade_size, last_tick.price, tag="initial", cancel_after_secs=10)
+        self.enter(self.config.trade_size, last_tick.price, tag="initial", cancel_after_secs=10)

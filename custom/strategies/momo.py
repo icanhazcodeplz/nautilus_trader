@@ -147,8 +147,8 @@ class MomoStrategy(BaseStrategy):
 
         price = tick.price
 
-        buy_orders = self.open_buys
-        position_qty = self.position_qty
+        entry_orders = self.open_entries
+        exposure = self.exposure
 
         allow_trading = True
         if self._stopping_out:
@@ -161,9 +161,9 @@ class MomoStrategy(BaseStrategy):
         if allow_trading:
             if self.config.random_buy:
                 if (
-                    len(buy_orders) == 0
-                    and (self.clock.utc_now() - self.last_buy_dt).total_seconds() > 20
-                    and position_qty < self.max_position_allowed
+                    len(entry_orders) == 0
+                    and (self.clock.utc_now() - self.last_entry_dt).total_seconds() > 20
+                    and exposure < self.max_position_allowed
                     and random.random() < 0.3
                 ):
                     # Only send buy command if it has been at least 10 seconds of flat
@@ -175,8 +175,8 @@ class MomoStrategy(BaseStrategy):
 
                     if (self.clock.timestamp_ns() - most_recent_close) / 1e9 > 10:
                         buy_limit = tick.price + 0.00
-                        self.buy(
-                            self.config.trade_size, buy_limit, cancel_after_secs=10, tag=f"{self.buy_orders_count}"
+                        self.enter(
+                            self.config.trade_size, buy_limit, cancel_after_secs=10, tag=f"{self.entry_orders_count}"
                         )
             elif self.config.lstm_buy:
                 trade_ticks = self.cache.trade_ticks(self.config.instrument_id)
@@ -186,9 +186,9 @@ class MomoStrategy(BaseStrategy):
                     and quote_tick is not None
                     and len(self._candle_10s_mids) >= 30
                     and len(self._candle_1m_mids) >= 60
-                    and len(buy_orders) == 0
-                    and position_qty < self.max_position_allowed
-                    and (self.clock.utc_now() - self.last_buy_dt).total_seconds() > 1
+                    and len(entry_orders) == 0
+                    and exposure < self.max_position_allowed
+                    and (self.clock.utc_now() - self.last_entry_dt).total_seconds() > 1
                     and tick.price < self.vwap.low
                 ):
                     tick_feat, ctx_feat = build_live_features(
@@ -203,7 +203,7 @@ class MomoStrategy(BaseStrategy):
                         logit = self.lstm_model(tick_feat, ctx_feat).item()
                     prob_up = torch.sigmoid(torch.tensor(logit)).item()
                     if prob_up > 0.85:
-                        self.buy(
+                        self.enter(
                             self.config.trade_size,
                             tick.price,
                             cancel_after_secs=10,
@@ -212,25 +212,25 @@ class MomoStrategy(BaseStrategy):
 
             elif self.config.trailing_buy_order:
                 vwap_lower = self.instrument.make_price(self.vwap.low)
-                for order in self.open_buys:
+                for order in self.open_entries:
                     if order.price != vwap_lower:
                         self.modify_open_order(order, quantity=order.quantity, price=vwap_lower)
 
-                if len(buy_orders) == 0 and (self.clock.utc_now() - self.last_buy_dt).total_seconds() > 1:
+                if len(entry_orders) == 0 and (self.clock.utc_now() - self.last_entry_dt).total_seconds() > 1:
                     # FIXME: Clunky to add buy orders count tag here. Should be handled in buy()
-                    self.buy(self.config.trade_size, vwap_lower, cancel_after_secs=None, tag=f"{self.buy_orders_count}")
+                    self.enter(self.config.trade_size, vwap_lower, cancel_after_secs=None, tag=f"{self.entry_orders_count}")
             elif (
                 price < self.vwap.low
                 # and price_1ago > self.vwap.low
                 # and (price > price_1ago)
             ):
                 if (
-                    position_qty < self.max_position_allowed
+                    exposure < self.max_position_allowed
                     # and tick.size > 1
                     # and (self.clock.utc_now() - self.last_buy_ts).total_seconds() > random.randint(1, 20)
-                    and (self.clock.utc_now() - self.last_buy_dt).total_seconds() > 1
+                    and (self.clock.utc_now() - self.last_entry_dt).total_seconds() > 1
                 ):
-                    self.buy(self.config.trade_size, price, cancel_after_secs=1, tag=f"{self.buy_orders_count}")
+                    self.enter(self.config.trade_size, price, cancel_after_secs=1, tag=f"{self.entry_orders_count}")
 
         # TAKE LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         allow_take = True
@@ -246,29 +246,36 @@ class MomoStrategy(BaseStrategy):
                     self._rolling_tiered_take()
             else:
                 if (
-                    self.open_sell_qty < position_qty
+                    self.open_exit_qty < exposure
                     # and price >= self.take_price
                     and (self.clock.utc_now() - self.last_take_ts).total_seconds() > 1
                 ):
                     if self.config.simple_take:
-                        self.sell(position_qty, limit_price=self.take_price, cancel_after_secs=None, tag="simple")
+                        self.exit(exposure, limit_price=self.take_price, cancel_after_secs=None, tag="simple")
                     elif (
                         # price > self.vwap.upper
                         # and price <= price_1ago
                         tick.size > 1
                     ):
                         # and price > self.vwap.upper
-                        sell_qty = max(int(position_qty), int(self.config.trade_size / 10), 1)
-                        self.sell(sell_qty, limit_price=price, cancel_after_secs=10, tag="t")
+                        sell_qty = max(int(exposure), int(self.config.trade_size / 10), 1)
+                        self.exit(sell_qty, limit_price=price, cancel_after_secs=10, tag="t")
                         self.last_take_ts = self.clock.utc_now()
 
     def _rolling_tiered_take(self):
+        # FIXME: This ladder is still long-only. Tiers ascends from starting_price (_tiers.py:56)
+        #  and the tier selection below picks with min(), so a short position would ladder the
+        #  wrong way. Threading direction through Tiers is a separate refactor; until then, fail
+        #  loudly rather than placing exits above a short.
+        if self.is_short:
+            self.log.error("_rolling_tiered_take does not support side='short' yet. Skipping.")
+            return
         self._last_tier_adjustment_ns = self.clock.timestamp_ns()
-        position_qty = self.position_qty
+        position_qty = self.exposure
         if position_qty == 0:
             return
         elif position_qty < 0:
-            self.log.info(f"Position qty {position_qty} is negative. Running reconciliation.")
+            self.log.info(f"Exposure {position_qty} is negative (wrong-way). Running reconciliation.")
             self._reconcile()
             return
         tiers = Tiers(
@@ -348,7 +355,7 @@ class MomoStrategy(BaseStrategy):
                     self.log.debug("Skipping new sell: existing sell order is PENDING_UPDATE")
                     break
                 else:
-                    self.sell(qty_to_sell, price, cancel_after_secs=None, tag=f"{self.buy_orders_count}")
+                    self.exit(qty_to_sell, price, cancel_after_secs=None, tag=f"{self.entry_orders_count}")
                     qty_change = qty_to_sell
                     qty_taken_in_tiers += qty_to_sell
                 if qty_change > 0:
@@ -361,7 +368,7 @@ class MomoStrategy(BaseStrategy):
 
         # If (position - sells) is non_zero for more than _MAX_ALLOWED_SELL_DIFF_SECS, sell diff at lowest tier
         # in a new order.
-        sell_diff = self.position_qty - self.open_sells_qty
+        sell_diff = self.exposure - self.open_sells_qty
         if sell_diff == 0:
             self._sell_diff_start_ns = None
         elif self._sell_diff_start_ns is None:
@@ -370,7 +377,7 @@ class MomoStrategy(BaseStrategy):
             self.log.info(
                 f"Adding sell order for {sell_diff} at lowest tier because sell_diff existed for more than {self._MAX_ALLOWED_SELL_DIFF_SECS} secs."
             )
-            self.sell(sell_diff, min(tiers.prices), cancel_after_secs=None, tag=f"{self.buy_orders_count}")
+            self.exit(sell_diff, min(tiers.prices), cancel_after_secs=None, tag=f"{self.entry_orders_count}")
 
     def _print_update(self):
         def open_for_secs(open_order):

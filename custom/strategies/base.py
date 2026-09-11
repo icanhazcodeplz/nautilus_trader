@@ -1,6 +1,7 @@
 import asyncio
 from abc import abstractmethod
 from datetime import timedelta
+from enum import StrEnum
 from pathlib import Path
 from typing import Optional
 
@@ -33,6 +34,18 @@ from nautilus_trader.model.orders.list import OrderList
 from nautilus_trader.trading.strategy import Strategy
 
 
+class Side(StrEnum):
+    """
+    The direction a strategy trades in.
+
+    A StrEnum so that `Side.LONG == "long"` and f-strings render the bare value, which keeps
+    config files, logs and saved artifacts readable.
+    """
+
+    LONG = "long"
+    SHORT = "short"
+
+
 class BaseStrategyConfig(StrategyConfig, frozen=True):
     instrument_id: InstrumentId
     trade_size: int
@@ -57,7 +70,8 @@ class BaseStrategy(Strategy):
 
         self.stop_price = None
         self.stop_loss: float | None = None
-        self.last_buy_dt: Timestamp = pd.Timestamp("1990", tz="UTC")
+        self.last_entry_dt: Timestamp = pd.Timestamp("1990", tz="UTC")
+        self._side: Side = Side.LONG  # Switch with self.set_side()
         self._trading_enabled: bool = True
         self.allow_trading_times: Optional[set[pd.Timestamp]] = None
         self.internal_bars = False
@@ -65,7 +79,7 @@ class BaseStrategy(Strategy):
         self._tick_data_dicts = {}
         self._tick_event_dt_adjusted = 0
 
-        self.buy_orders_count = 0
+        self.entry_orders_count = 0
 
         # Used to track order modifications to avoid sending duplicate modify orders when the cache is slow
         self._already_cancelled_orders = set()
@@ -81,14 +95,14 @@ class BaseStrategy(Strategy):
         self._position_discrepancy_start_ns = None
         self._raise_msg = None
         self._last_tick = None
-        self._total_buy_qty = 0
+        self._total_entry_qty = 0
 
         self._stopping_out = False
         self._last_stop_out_attempt = 0
         self._exec_engine = None  # Set by run_utils after node.build()
         self._force_reconcile_count = 0
         self._last_force_reconcile_ns = 0
-        self._last_negative_flatten_ns = 0
+        self._last_wrong_way_flatten_ns = 0
         self._reconciliation_task: asyncio.Task | None = None
         self._historical_loaded = False
         self._historical_ticks: list[TradeTick] = []
@@ -117,9 +131,78 @@ class BaseStrategy(Strategy):
     def trading_enabled(self):
         return self._trading_enabled
 
+    # SIDE ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+    @property
+    def side(self) -> Side:
+        return self._side
+
+    @property
+    def is_long(self) -> bool:
+        return self._side == Side.LONG
+
+    @property
+    def is_short(self) -> bool:
+        return self._side == Side.SHORT
+
+    @property
+    def _side_sign(self) -> int:
+        """
+        +1 when long, -1 when short.
+
+        Multiply a raw signed quantity by this to express it in the direction we intend to trade.
+        """
+        return 1 if self._side == Side.LONG else -1
+
+    @property
+    def _entry_order_side(self) -> OrderSide:
+        """The venue side that opens/increases the position."""
+        return OrderSide.BUY if self.is_long else OrderSide.SELL
+
+    @property
+    def _exit_order_side(self) -> OrderSide:
+        """The venue side that closes/reduces the position."""
+        return OrderSide.SELL if self.is_long else OrderSide.BUY
+
+    def set_side(self, new_side: Side | str) -> None:
+        """
+        Switch between Side.LONG and Side.SHORT.
+
+        Accepts the enum or its plain string value. This is the only supported way to change
+        side: it is where the value is validated and the guards below are enforced.
+
+        Only allowed while flat with nothing resting. Open orders matter as much as the position:
+        on a netting venue, orders left over from the old side can fill alongside the new side's
+        and net to zero, stranding the exits. Since cancels are not instant, a caller that wants
+        to flip should cancel, wait for the cancels to confirm, then call this again.
+        """
+        try:
+            new_side = Side(new_side)
+        except ValueError:
+            valid = "', '".join(s.value for s in Side)
+            raise ValueError(f"side must be one of '{valid}', got {new_side!r}") from None
+        if new_side == self._side:
+            return
+        if self.position_qty != 0:
+            raise RuntimeError(f"Cannot switch side to '{new_side}' while position is {self.position_qty}")
+        if len(self.open_orders) > 0:
+            raise RuntimeError(f"Cannot switch side to '{new_side}' with {len(self.open_orders)} open order(s)")
+        self.log.info(f"Switching side from '{self._side}' to '{new_side}'", color=LogColor.YELLOW)
+        self._side = new_side
+
     @property
     def position_qty(self):
+        """Raw signed net position. Positive is long, negative is short, regardless of self.side."""
         return int(self.portfolio.net_position(self.config.instrument_id))
+
+    @property
+    def exposure(self) -> int:
+        """
+        Position size in the direction we intend to trade.
+
+        Positive means positioned correctly for self.side, negative means wrong-way.
+        """
+        return self.position_qty * self._side_sign
 
     @property
     def open_buys(self) -> set[OpenOrder]:
@@ -138,6 +221,16 @@ class BaseStrategy(Strategy):
     @property
     def open_orders(self) -> set[OpenOrder]:
         return self.open_buys.union(self.open_sells)
+
+    @property
+    def open_entries(self) -> set[OpenOrder]:
+        """Open orders that open/increase the position."""
+        return self.open_buys if self.is_long else self.open_sells
+
+    @property
+    def open_exits(self) -> set[OpenOrder]:
+        """Open orders that close/reduce the position."""
+        return self.open_sells if self.is_long else self.open_buys
 
     def clear_open_order_modify_params(self, order_event):
         # Find the OpenOrder based on the nt cache `order` and reset last_modify vals
@@ -177,6 +270,14 @@ class BaseStrategy(Strategy):
     def open_sell_qty(self):
         return sum(int(open_order.leaves_qty) for open_order in self._open_sells)
 
+    @property
+    def open_entry_qty(self):
+        return self.open_buy_qty if self.is_long else self.open_sell_qty
+
+    @property
+    def open_exit_qty(self):
+        return self.open_sell_qty if self.is_long else self.open_buy_qty
+
     def modify_open_order(self, open_order: OpenOrder, quantity, price):
         now_ns = self.clock.timestamp_ns()
         qty_obj = self.instrument.make_qty(quantity)
@@ -194,19 +295,19 @@ class BaseStrategy(Strategy):
                 self._remove_open_order(open_order)
                 self.cancel_order(order=open_order.order, client_id=client_id, params=params)
 
-    def sell_position_at_price(self, new_limit_price):
-        remaining_qty_to_sell = self.position_qty
-        for order in self.open_sells:
+    def exit_position_at_price(self, new_limit_price):
+        remaining_qty_to_exit = self.exposure
+        for order in self.open_exits:
             order_qty = order.quantity
-            remaining_qty_to_sell -= order_qty
+            remaining_qty_to_exit -= order_qty
             if order.price != new_limit_price:
                 modified = self.modify_open_order(order, quantity=order_qty, price=new_limit_price)
                 if not modified:
                     self.log.debug(
                         f"While stopping out, did not modify order {order.client_order_id} to {new_limit_price}."
                     )
-        if remaining_qty_to_sell > 0:
-            self.sell(quantity=remaining_qty_to_sell, limit_price=new_limit_price, tag="s")
+        if remaining_qty_to_exit > 0:
+            self.exit(quantity=remaining_qty_to_exit, limit_price=new_limit_price, tag="s")
 
     def _stop_out_if_needed(self, tick: TradeTick):
         if self.position_qty == 0:
@@ -217,23 +318,28 @@ class BaseStrategy(Strategy):
         if self.clock.timestamp_ns() - self._last_stop_out_attempt < self._ATTEMPT_STOP_OUT_EVERY_MS * 1e6:
             return
 
-        if self.position_qty > 0 and self.stop_price is None:
-            self.stop_price = tick.price - self.stop_loss
+        sign = self._side_sign
+        if self.exposure > 0 and self.stop_price is None:
+            # Below the market when long, above it when short
+            self.stop_price = tick.price - sign * self.stop_loss
             self.log.info(f"Setting stop price to {self.stop_price}")
 
         if self.stop_price is not None:
-            if tick.price <= self.stop_price:
+            if (float(tick.price) - float(self.stop_price)) * sign <= 0:
                 self._stopping_out = True
-                for order in self.open_buys:
+                for order in self.open_entries:
                     self.cancel_open_order(order)
 
                 self._last_stop_out_attempt = self.clock.timestamp_ns()
-                new_price = max(float(tick.price) * 0.90, float(tick.price) - 0.20)
+                if self.is_long:
+                    new_price = max(float(tick.price) * 0.90, float(tick.price) - 0.20)
+                else:
+                    new_price = min(float(tick.price) * 1.10, float(tick.price) + 0.20)
                 new_limit_price = self.instrument.make_price(new_price)
                 self.log.info(
-                    f"Stop price {self.stop_price} reached, selling at {new_limit_price}", color=LogColor.YELLOW
+                    f"Stop price {self.stop_price} reached, exiting at {new_limit_price}", color=LogColor.YELLOW
                 )
-                self.sell_position_at_price(new_limit_price)
+                self.exit_position_at_price(new_limit_price)
             else:
                 self._stopping_out = False
 
@@ -241,11 +347,13 @@ class BaseStrategy(Strategy):
     def max_position_allowed(self):
         return self.config.max_position_multiplier * self.config.trade_size
 
-    def _max_buy_qty_allowed(self):
-        return self.max_position_allowed - self.open_buy_qty - self.position_qty
+    def _max_entry_qty_allowed(self):
+        """How much more we may open before hitting max_position_allowed."""
+        return self.max_position_allowed - self.open_entry_qty - self.exposure
 
-    def _max_sell_qty_allowed(self):
-        return self.position_qty - self.open_sell_qty
+    def _max_exit_qty_allowed(self):
+        """How much we may close without flipping through flat onto the other side."""
+        return self.exposure - self.open_exit_qty
 
     def _raise_if_needed(self):
         """
@@ -310,31 +418,33 @@ class BaseStrategy(Strategy):
         self._historical_loaded = True
 
     def _submit_orders_if_allowed(self, order_or_order_list, expire_time=None) -> None:
-        buy_included = False
+        entry_included = False
+        entry_side = self._entry_order_side
         if self.config.allow_trades:
-            # For OrderList type, submit all at once, but parse through each to check for a buy order (from bracket)
-            # and to add to uncached
+            # For OrderList type, submit all at once, but parse through each to check for an entry order (from
+            # bracket) and to add to uncached
             if isinstance(order_or_order_list, OrderList):
                 raise ValueError("Need to figure out how to update open_buys and open_sells")
                 self.submit_order_list(order_or_order_list)
                 for order in order_or_order_list.orders:
-                    if order.side == OrderSide.BUY:
-                        buy_included = True
+                    if order.side == entry_side:
+                        entry_included = True
 
             # If single item, submit and add to uncached
             elif isinstance(order_or_order_list, Order):
                 self.submit_order(order_or_order_list)
                 open_order = OpenOrder(order_or_order_list, expire_time=expire_time)
                 if order_or_order_list.side == OrderSide.BUY:
-                    buy_included = True
                     self._open_buys.add(open_order)
                 if order_or_order_list.side == OrderSide.SELL:
                     self._open_sells.add(open_order)
+                if order_or_order_list.side == entry_side:
+                    entry_included = True
             else:
                 raise ValueError(f"Unexpected order type: {type(order_or_order_list)}")
-        if buy_included:
-            self.buy_orders_count += 1
-            self.last_buy_dt = self.clock.utc_now()
+        if entry_included:
+            self.entry_orders_count += 1
+            self.last_entry_dt = self.clock.utc_now()
 
     def _submit_limit_order(self, side: OrderSide, quantity: int, limit_price: float, tag: str, cancel_after_secs=None):
         tags = [tag]
@@ -351,28 +461,54 @@ class BaseStrategy(Strategy):
         expire_time = utc_now + timedelta(seconds=cancel_after_secs) if cancel_after_secs is not None else None
         self._submit_orders_if_allowed(order, expire_time=expire_time)
 
-    def buy(self, quantity, limit_price, tag, cancel_after_secs=None) -> None:
-        if not self.trading_enabled:
-            self.log.info("self.trading_enabled is False, skipping buy order")
-            return
+    def _submit_sided_limit_order(self, side: OrderSide, quantity, limit_price, tag, cancel_after_secs) -> None:
+        """
+        Shared body of _buy/_sell.
 
-        if self._stopping_out:
-            self.log.info(f"Ignoring buy request because self._stopping_out is True")
-            return
-        allowed_qty = min(quantity, self._max_buy_qty_allowed())
-        if allowed_qty != quantity:
-            self.log.debug(
-                f"Buy quantity reduced from {quantity} to {allowed_qty} to avoid exceeding max position of {self.max_position_allowed}."
-            )
-        if allowed_qty > 0:
-            self._submit_limit_order(OrderSide.BUY, allowed_qty, limit_price, tag, cancel_after_secs)
+        The trading_enabled and _stopping_out guards apply only when this order would OPEN the
+        position. Exits must always be allowed through, which is the whole point of stopping out.
+        """
+        is_entry = side == self._entry_order_side
+        if is_entry:
+            if not self.trading_enabled:
+                self.log.info(f"self.trading_enabled is False, skipping {self._side} entry order")
+                return
+            if self._stopping_out:
+                self.log.info("Ignoring entry request because self._stopping_out is True")
+                return
+            max_qty = self._max_entry_qty_allowed()
+            reason = f"to avoid exceeding max position of {self.max_position_allowed}"
+        else:
+            max_qty = self._max_exit_qty_allowed()
+            reason = f"to avoid flipping past flat (exposure {self.exposure})"
 
-    def sell(self, quantity, limit_price, tag, cancel_after_secs=None) -> None:
-        allowed_qty = min(quantity, self._max_sell_qty_allowed())
+        allowed_qty = min(quantity, max_qty)
         if allowed_qty != quantity:
-            self.log.info(f"Sell quantity reduced from {quantity} to {allowed_qty} to avoid going short.")
+            self.log.debug(f"Quantity reduced from {quantity} to {allowed_qty} {reason}.")
         if allowed_qty > 0:
-            self._submit_limit_order(OrderSide.SELL, allowed_qty, limit_price, tag, cancel_after_secs)
+            self._submit_limit_order(side, allowed_qty, limit_price, tag, cancel_after_secs)
+
+    def _buy(self, quantity, limit_price, tag, cancel_after_secs=None) -> None:
+        """Submit a literal BUY. The entry when long, the cover when short."""
+        self._submit_sided_limit_order(OrderSide.BUY, quantity, limit_price, tag, cancel_after_secs)
+
+    def _sell(self, quantity, limit_price, tag, cancel_after_secs=None) -> None:
+        """Submit a literal SELL. The exit when long, the entry when short."""
+        self._submit_sided_limit_order(OrderSide.SELL, quantity, limit_price, tag, cancel_after_secs)
+
+    def enter(self, quantity, limit_price, tag, cancel_after_secs=None) -> None:
+        """Open or increase the position, in the direction of self.side."""
+        if self.is_long:
+            self._buy(quantity, limit_price, tag, cancel_after_secs)
+        else:
+            self._sell(quantity, limit_price, tag, cancel_after_secs)
+
+    def exit(self, quantity, limit_price, tag, cancel_after_secs=None) -> None:
+        """Close or reduce the position, in the direction of self.side."""
+        if self.is_long:
+            self._sell(quantity, limit_price, tag, cancel_after_secs)
+        else:
+            self._buy(quantity, limit_price, tag, cancel_after_secs)
 
     @abstractmethod
     def _on_order_filled(self, order) -> None:
@@ -380,18 +516,20 @@ class BaseStrategy(Strategy):
 
     def on_order_filled(self, order) -> None:
         self._on_order_filled(order)
-        if order.order_side == OrderSide.BUY:
-            self._total_buy_qty += int(order.last_qty)
+        sign = self._side_sign
+        if order.order_side == self._entry_order_side:
+            self._total_entry_qty += int(order.last_qty)
             self.stop_loss = self.config.stop_loss
-            new_stop_price = float(order.last_px) - self.stop_loss
+            new_stop_price = float(order.last_px) - sign * self.stop_loss
             if self.stop_price is not None:
-                if new_stop_price > self.stop_price:
+                # Only ever tighten: upward when long, downward when short
+                if (new_stop_price - float(self.stop_price)) * sign > 0:
                     self.log.info(f"Changing stop price from {self.stop_price} to {new_stop_price}")
                     self.stop_price = new_stop_price
             else:
                 self.log.info(f"Setting stop price to {new_stop_price}")
                 self.stop_price = new_stop_price
-        elif order.order_side == OrderSide.SELL:
+        else:
             if self.save_artifacts:
                 realized_pnl = self.portfolio.realized_pnl(self.config.instrument_id)
                 if realized_pnl is not None:
@@ -405,10 +543,12 @@ class BaseStrategy(Strategy):
         if isinstance(order_event, OrderRejected):
             cache_order = self.cache.order(order_event.client_order_id)
             # self._remove_open_order(order)
-            if cache_order.side == OrderSide.BUY:
+            if cache_order.side == self._entry_order_side:
                 if "insufficient qty available" in cache_order.last_event.reason:
+                    wrong_way = "shorting" if self.is_long else "going long"
                     self.log.warning(
-                        f"Buy order rejected for insufficient quantity. Accidental shorting is likely. Running reconciliation."
+                        f"Entry order rejected for insufficient quantity. Accidental {wrong_way} is likely. "
+                        "Running reconciliation."
                     )
                     self._reconcile()
         elif isinstance(order_event, OrderModifyRejected):
@@ -476,7 +616,9 @@ class BaseStrategy(Strategy):
     def close_position_limit_order(self):
         last_trade = self.cache.trade_tick(self.config.instrument_id)
         limit_price = self.position_avg_px if last_trade is None else last_trade.price
-        self.sell_position_at_price(make_Price(limit_price * 0.9))
+        # Aggressive in the direction that closes: below the market when long, above when short
+        aggressive_price = limit_price * 0.9 if self.is_long else limit_price * 1.1
+        self.exit_position_at_price(make_Price(aggressive_price))
 
     def _trigger_nt_reconciliation(self):
         """Trigger an async force-reconciliation via the execution engine to re-sync cache with broker."""
@@ -502,24 +644,34 @@ class BaseStrategy(Strategy):
             # Running a backtest, so just use the local position
             position_at_broker = self.position_qty
 
-        # FLATTEN POSITION IF NEEDED
-        if position_at_broker < 0:
+        # FLATTEN POSITION IF NEEDED (position is opposite the side we are trading)
+        if position_at_broker * self._side_sign < 0:
             now_ns = self.clock.timestamp_ns()
-            if (now_ns - self._last_negative_flatten_ns) / 1e9 < 1.0:
+            if (now_ns - self._last_wrong_way_flatten_ns) / 1e9 < 1.0:
                 return  # Cooldown: only attempt flatten once per second
-            self._last_negative_flatten_ns = now_ns
-            self.log.error(
-                f"Position {position_at_broker} is negative! Canceling all existing open_sells and buying to flatten."
-            )
-            for open_order in self.open_sells:
-                self.cancel_open_order(open_order)
-            price = self._last_tick.price * 1.1
-            if len(self.open_buys) > 0:
-                open_buy_to_modify = list(self.open_buys)[0]
-                self.modify_open_order(open_buy_to_modify, quantity=abs(position_at_broker), price=price)
+            self._last_wrong_way_flatten_ns = now_ns
+            if position_at_broker < 0:
+                flatten_side = OrderSide.BUY
+                orders_to_cancel = self.open_sells  # Would deepen the short
+                orders_to_modify = self.open_buys
+                price = self._last_tick.price * 1.1
             else:
-                self._submit_limit_order(OrderSide.BUY, abs(position_at_broker), price, "flatten")
-            return  # Return from here to allow orders time to cancel and buy
+                flatten_side = OrderSide.SELL
+                orders_to_cancel = self.open_buys  # Would deepen the long
+                orders_to_modify = self.open_sells
+                price = self._last_tick.price * 0.9
+            self.log.error(
+                f"Position {position_at_broker} is opposite of side '{self._side}'! Canceling the open orders "
+                f"that would deepen it and submitting a {flatten_side} to flatten."
+            )
+            for open_order in orders_to_cancel:
+                self.cancel_open_order(open_order)
+            if len(orders_to_modify) > 0:
+                open_order_to_modify = list(orders_to_modify)[0]
+                self.modify_open_order(open_order_to_modify, quantity=abs(position_at_broker), price=price)
+            else:
+                self._submit_limit_order(flatten_side, abs(position_at_broker), price, "flatten")
+            return  # Return from here to allow orders time to cancel and flatten
 
         # CHECK POSITION DISCREPANCY BETWEEN LOCAL AND BROKER
         if self.position_qty != position_at_broker:
@@ -607,24 +759,24 @@ class BaseStrategy(Strategy):
         open_buys_str = "\n".join(str(o) for o in self.open_buys) if len(self.open_buys) > 0 else ""
         open_sells_str = "\n".join(str(o) for o in self.open_sells) if len(self.open_sells) > 0 else ""
         OpenBuysQty = int(sum(o.leaves_qty for o in self.open_buys))
-        OpenSellsQty = int(sum(o.leaves_qty for o in self.open_sells))
 
         position_str = ""
-        if self.position_qty > 0:
+        if self.exposure != 0:
             avg_px = self.position_avg_px
-            gain = self._last_tick.price - avg_px
-            unrealized = self.position_qty * gain
-            diff = self.position_qty - OpenSellsQty
+            gain = (self._last_tick.price - avg_px) * self._side_sign
+            unrealized = self.exposure * gain
+            OpenExitQty = int(sum(o.leaves_qty for o in self.open_exits))
+            diff = self.exposure - OpenExitQty
             if diff > 0:
                 self.log.warning(f"Diff: {diff}")
-            position_str = f"Position {self.position_qty} @ {round(avg_px, 2)} | PerShare {round(gain, 2)} | PnL ${round(unrealized, 2)} | {OpenSellsQty=} | Diff={diff}\n"
+            position_str = f"Position {self.position_qty} ({self._side}) @ {round(avg_px, 2)} | PerShare {round(gain, 2)} | PnL ${round(unrealized, 2)} | {OpenExitQty=} | Diff={diff}\n"
         metrics_data = {}
         for metric in self.metrics_to_save_on_tick + self.metrics_to_save_on_1min:
             vals = {k: str(round(v, 3)) if v is not None else "None" for k, v in metric.get_vals().items()}
             metrics_data = {**metrics_data, **vals}
         self.log.info(
             f"UPDATE: {self.config.instrument_id}\n{tick_str}\n"
-            f"Total Bought {self._total_buy_qty} | Realized: {realized_pnl} | {OpenBuysQty=} Orders: {open_buys_str}\n"
+            f"Total Entered {self._total_entry_qty} ({self._side}) | Realized: {realized_pnl} | {OpenBuysQty=} Orders: {open_buys_str}\n"
             f"{position_str}"
             # f"{open_sells_str}"
             f"{self._print_update()}"
@@ -715,9 +867,9 @@ class BaseStrategy(Strategy):
         # self.request_quote_ticks(self.config.instrument_id)
 
     def on_stop(self) -> None:
-        if self.position_qty > 0:
-            # Cancel BUY orders, but use "close_position_limit_order" to modify sell orders
-            self.cancel_all_orders(self.config.instrument_id, order_side=OrderSide.BUY)
+        if self.position_qty != 0:
+            # Cancel entry orders, but use "close_position_limit_order" to modify the exit orders
+            self.cancel_all_orders(self.config.instrument_id, order_side=self._entry_order_side)
             self.close_position_limit_order()
         else:
             self.cancel_all_orders(self.config.instrument_id)
