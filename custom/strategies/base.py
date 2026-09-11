@@ -204,36 +204,34 @@ class BaseStrategy(Strategy):
         """
         return self.position_qty * self._side_sign
 
-    @property
-    def _buys(self) -> set[OpenOrder]:
+    def _prune_closed(self) -> None:
         """
-        Literal open BUYs, pruned of closed orders.
+        Drop closed orders from the tracked sets.
 
-        Private: entry/exit is the vocabulary callers should use. Reads go through here, but
-        mutations go straight to `_buy_orders`, since this reassigns the set on every read.
+        Both lines rebind to a new set rather than mutating in place, and that is deliberate:
+        callers iterate the set returned by open_entries/open_exits while calling
+        cancel_open_order(), which discards from the rebound set, leaving the iteration
+        unaffected. Do not rewrite this as an in-place discard.
         """
         self._buy_orders = {open_order for open_order in self._buy_orders if open_order.is_open}
-        return self._buy_orders
-
-    @property
-    def _sells(self) -> set[OpenOrder]:
-        """Literal open SELLs, pruned of closed orders. See `_buys`."""
         self._sell_orders = {open_order for open_order in self._sell_orders if open_order.is_open}
-        return self._sell_orders
 
     @property
     def open_orders(self) -> set[OpenOrder]:
-        return self._buys.union(self._sells)
+        self._prune_closed()
+        return self._buy_orders | self._sell_orders
 
     @property
     def open_entries(self) -> set[OpenOrder]:
         """Open orders that open/increase the position."""
-        return self._buys if self.is_long else self._sells
+        self._prune_closed()
+        return self._buy_orders if self.is_long else self._sell_orders
 
     @property
     def open_exits(self) -> set[OpenOrder]:
         """Open orders that close/reduce the position."""
-        return self._sells if self.is_long else self._buys
+        self._prune_closed()
+        return self._sell_orders if self.is_long else self._buy_orders
 
     @property
     def open_entries_qty(self) -> int:
@@ -649,15 +647,16 @@ class BaseStrategy(Strategy):
             if (now_ns - self._last_wrong_way_flatten_ns) / 1e9 < 1.0:
                 return  # Cooldown: only attempt flatten once per second
             self._last_wrong_way_flatten_ns = now_ns
+            self._prune_closed()
             if position_at_broker < 0:
                 flatten_side = OrderSide.BUY
-                orders_to_cancel = self._sells  # Would deepen the short
-                orders_to_modify = self._buys
+                orders_to_cancel = self._sell_orders  # Would deepen the short
+                orders_to_modify = self._buy_orders
                 price = self._last_tick.price * 1.1
             else:
                 flatten_side = OrderSide.SELL
-                orders_to_cancel = self._buys  # Would deepen the long
-                orders_to_modify = self._sells
+                orders_to_cancel = self._buy_orders  # Would deepen the long
+                orders_to_modify = self._sell_orders
                 price = self._last_tick.price * 0.9
             self.log.error(
                 f"Position {position_at_broker} is opposite of side '{self._side}'! Canceling the open orders "
