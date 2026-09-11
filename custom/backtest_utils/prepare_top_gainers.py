@@ -23,11 +23,11 @@ def filter_top_gainers(top_gainers_df, rank_max, vol_30min_min, perc_gain_min, p
     return candidates
 
 
-def get_allow_buy_times_for_candidate(symbol, day_str, rank_max, vol_30min_min, perc_gain_min, price_min, price_max):
+def get_allow_trading_times_for_candidate(symbol, day_str, rank_max, vol_30min_min, perc_gain_min, price_min, price_max):
     top_gainers_df = pd.read_parquet(Path(TOP_GAINERS_DIR) / f"{day_str}.parquet")
     candidates = filter_top_gainers(top_gainers_df, rank_max, vol_30min_min, perc_gain_min, price_min, price_max)
-    allow_buy_times = candidates[candidates["symbol"] == symbol]["timestamp"].dt.tz_convert("UTC")
-    return allow_buy_times.to_list()
+    allow_trading_times = candidates[candidates["symbol"] == symbol]["timestamp"].dt.tz_convert("UTC")
+    return allow_trading_times.to_list()
 
 
 def make_top_gainers_candidates_txt_and_prepare_catalog(

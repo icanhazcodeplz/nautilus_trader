@@ -12,7 +12,7 @@ from custom.backtest_utils.backtest_run_utils import register_custom_statistics
 from custom.backtest_utils.backtest_run_utils import save_backtest_order_updates
 from custom.backtest_utils.load_catalog_data import CATALOG_TIME_STR_FMT
 from custom.backtest_utils.load_catalog_data import load_catalog_data_to_engine
-from custom.backtest_utils.prepare_top_gainers import get_allow_buy_times_for_candidate
+from custom.backtest_utils.prepare_top_gainers import get_allow_trading_times_for_candidate
 from custom.backtest_utils.prepare_top_gainers import parse_candidate_str
 from custom.strategies.base import BaseStrategy
 from custom.strategies.momo import MomoStrategy
@@ -30,7 +30,7 @@ def run_single_backtest(
     strategy_name,
     params,
     artifacts_location=None,
-    allow_buy_times=None,
+    allow_trading_times=None,
     log_level="ERROR",
     analyze=False,
 ):
@@ -53,11 +53,11 @@ def run_single_backtest(
     else:
         raise ValueError(f"Unknown strategy_name {strategy_name!r}")
 
-    # `allow_buy_times` / `internal_bars` are BaseStrategy-only concepts.
+    # `allow_trading_times` / `internal_bars` are BaseStrategy-only concepts.
     if isinstance(strategy, BaseStrategy):
-        if allow_buy_times is not None:
-            strategy.allow_buy_times = allow_buy_times
-            strategy.set_allow_buys(False)
+        if allow_trading_times is not None:
+            strategy.allow_trading_times = allow_trading_times
+            strategy.set_trading_enabled(False)
         strategy.internal_bars = True
 
     performance_stats = run_strategy(strategy, engine, artifacts_location, run_config=config.dict())
@@ -82,15 +82,15 @@ def run_single_backtest_from_top_gainers_candidate(
     price_max = params.pop("price_max")
 
     symbol, day_str = parse_candidate_str(candidate_str)
-    allow_buy_times = get_allow_buy_times_for_candidate(
+    allow_trading_times = get_allow_trading_times_for_candidate(
         symbol, day_str, rank_max, vol_30min_min, perc_gain_min, price_min, price_max
     )
 
-    start = allow_buy_times[0] - pd.Timedelta(minutes=30)
-    end = allow_buy_times[-1] + pd.Timedelta(minutes=20)
+    start = allow_trading_times[0] - pd.Timedelta(minutes=30)
+    end = allow_trading_times[-1] + pd.Timedelta(minutes=20)
 
-    # start = allow_buy_times[0] + pd.Timedelta(minutes=2)
-    # end = allow_buy_times[0] + pd.Timedelta(minutes=5)
+    # start = allow_trading_times[0] + pd.Timedelta(minutes=2)
+    # end = allow_trading_times[0] + pd.Timedelta(minutes=5)
     start_str = pd.Timestamp.strftime(start, CATALOG_TIME_STR_FMT)
     end_str = pd.Timestamp.strftime(end, CATALOG_TIME_STR_FMT)
 
@@ -100,7 +100,7 @@ def run_single_backtest_from_top_gainers_candidate(
         end_str,
         strategy_name,
         params,
-        allow_buy_times=allow_buy_times,
+        allow_trading_times=allow_trading_times,
         artifacts_location=artifacts_location,
         log_level=log_level,
         analyze=analyze,
@@ -189,7 +189,7 @@ if __name__ == "__main__":
     # )
 
     symbol = "AMZN"
-    day_str = "2026-08-11"
+    day_str = "2026-08-12"
     start_str = day_str + " " + "09:20-04:00"
     end_str__ = day_str + " " + "09:38-04:00"
     run_single_backtest(
@@ -198,7 +198,7 @@ if __name__ == "__main__":
         end_str__,
         strategy_name,
         params,
-        allow_buy_times=None,
+        allow_trading_times=None,
         artifacts_location=BACKTEST_RUNS_PATH,
         log_level=log_level,
         analyze=True,

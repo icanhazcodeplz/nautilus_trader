@@ -23,10 +23,10 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     stop_loss: float
 
     take_profit: float
-    lower_scalar_multiplier: float
-    upper_scalar_multiplier: float
-    vwap_window: int
-    variance_window: int
+    lower_scalar_multiplier: float = 1.0
+    upper_scalar_multiplier: float = 1.0
+    vwap_window: int = 150
+    variance_window: int = 300
     outer_band_multiplier: float = 1.0
     pressure_window: int = 50
 
@@ -150,15 +150,15 @@ class MomoStrategy(BaseStrategy):
         buy_orders = self.open_buys
         position_qty = self.position_qty
 
-        allow_buy = True
+        allow_trading = True
         if self._stopping_out:
-            allow_buy = False
+            allow_trading = False
         if self.config.only_buy_if_macd_positive:
             if not self.macd.initialized or self.macd.value < 0:
-                allow_buy = False
+                allow_trading = False
 
         # BUY LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-        if allow_buy:
+        if allow_trading:
             if self.config.random_buy:
                 if (
                     len(buy_orders) == 0

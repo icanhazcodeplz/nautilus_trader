@@ -58,8 +58,8 @@ class BaseStrategy(Strategy):
         self.stop_price = None
         self.stop_loss: float | None = None
         self.last_buy_dt: Timestamp = pd.Timestamp("1990", tz="UTC")
-        self._allow_buys: bool = True
-        self.allow_buy_times: Optional[set[pd.Timestamp]] = None
+        self._trading_enabled: bool = True
+        self.allow_trading_times: Optional[set[pd.Timestamp]] = None
         self.internal_bars = False
 
         self._tick_data_dicts = {}
@@ -106,16 +106,16 @@ class BaseStrategy(Strategy):
         else:
             self._tick_data_dicts[ts_event] = data_dict
 
-    def set_allow_buys(self, new_allow_buys: bool):
-        if new_allow_buys != self._allow_buys:
-            self._allow_buys = new_allow_buys
-            self.log.info(f"allow_buys set to {new_allow_buys}", color=LogColor.YELLOW)
+    def set_trading_enabled(self, new_trading_enabled: bool):
+        if new_trading_enabled != self._trading_enabled:
+            self._trading_enabled = new_trading_enabled
+            self.log.info(f"trading_enabled set to {new_trading_enabled}", color=LogColor.YELLOW)
             if self.save_artifacts:
-                self._add_tick_data(self.clock.timestamp_ns(), {"allow_buy": int(new_allow_buys)})
+                self._add_tick_data(self.clock.timestamp_ns(), {"allow_trading": int(new_trading_enabled)})
 
     @property
-    def allow_buys(self):
-        return self._allow_buys
+    def trading_enabled(self):
+        return self._trading_enabled
 
     @property
     def position_qty(self):
@@ -352,8 +352,8 @@ class BaseStrategy(Strategy):
         self._submit_orders_if_allowed(order, expire_time=expire_time)
 
     def buy(self, quantity, limit_price, tag, cancel_after_secs=None) -> None:
-        if not self.allow_buys:
-            self.log.info("self.allow_buys is False, skipping buy order")
+        if not self.trading_enabled:
+            self.log.info("self.trading_enabled is False, skipping buy order")
             return
 
         if self._stopping_out:
@@ -632,9 +632,9 @@ class BaseStrategy(Strategy):
             color=LogColor.CYAN,
         )
 
-    def _set_allow_buy_based_on_allow_buy_times(self, event: TimeEvent):
+    def _set_trading_enabled_based_on_allow_trading_times(self, event: TimeEvent):
         current_5min = pd.Timestamp(self.clock.utc_now()).floor("5min")
-        self.set_allow_buys(current_5min in self.allow_buy_times)
+        self.set_trading_enabled(current_5min in self.allow_trading_times)
 
     def on_start(self) -> None:
         if not self._initialized:
@@ -661,11 +661,11 @@ class BaseStrategy(Strategy):
             )
 
         # Only create buy_ranges check if needed
-        if self.allow_buy_times is not None:
+        if self.allow_trading_times is not None:
             self.clock.set_timer(
-                name="set_allow_buy_based_on_allow_buy_times",
+                name="set_trading_enabled_based_on_allow_trading_times",
                 interval=timedelta(seconds=15),
-                callback=self._set_allow_buy_based_on_allow_buy_times,
+                callback=self._set_trading_enabled_based_on_allow_trading_times,
             )
 
         self.instrument = self.cache.instrument(self.config.instrument_id)

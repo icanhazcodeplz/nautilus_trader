@@ -121,12 +121,12 @@ class NewsStrategy(BaseStrategy):
         buy_orders = self.open_buys
         position_qty = self.position_qty
 
-        allow_buy = True
+        allow_trading = True
         if self._stopping_out:
-            allow_buy = False
+            allow_trading = False
 
         # BUY LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-        if allow_buy:
+        if allow_trading:
             if self.config.random_buy:
                 if (
                     len(buy_orders) == 0
