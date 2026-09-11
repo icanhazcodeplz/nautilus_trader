@@ -217,8 +217,10 @@ class MomoStrategy(BaseStrategy):
                         self.modify_open_order(order, quantity=order.quantity, price=vwap_lower)
 
                 if len(entry_orders) == 0 and (self.clock.utc_now() - self.last_entry_dt).total_seconds() > 1:
-                    # FIXME: Clunky to add buy orders count tag here. Should be handled in buy()
-                    self.enter(self.config.trade_size, vwap_lower, cancel_after_secs=None, tag=f"{self.entry_orders_count}")
+                    # FIXME: Clunky to add entry orders count tag here. Should be handled in enter()
+                    self.enter(
+                        self.config.trade_size, vwap_lower, cancel_after_secs=None, tag=f"{self.entry_orders_count}"
+                    )
             elif (
                 price < self.vwap.low
                 # and price_1ago > self.vwap.low
@@ -246,7 +248,7 @@ class MomoStrategy(BaseStrategy):
                     self._rolling_tiered_take()
             else:
                 if (
-                    self.open_exit_qty < exposure
+                    self.open_exits_qty < exposure
                     # and price >= self.take_price
                     and (self.clock.utc_now() - self.last_take_ts).total_seconds() > 1
                 ):
@@ -287,7 +289,7 @@ class MomoStrategy(BaseStrategy):
         orders_to_be_modified = []
         existing_open_sell_qty = 0
         qty_taken_in_tiers = 0
-        for i, open_order in enumerate(sorted(self.open_sells, key=lambda order: order.price)):
+        for i, open_order in enumerate(sorted(self.open_exits, key=lambda order: order.price)):
             existing_open_sell_qty += open_order.leaves_qty
             if existing_open_sell_qty > position_qty:
                 self.log.info(
@@ -301,7 +303,7 @@ class MomoStrategy(BaseStrategy):
             # an available tier
             if (
                 len(tiers.prices) > 1  # At least two tiers
-                and (i + 1) == len(self.open_sells)  # Last open_sell in self.open_sells
+                and (i + 1) == len(self.open_exits)  # Last open exit in self.open_exits
                 and len(orders_to_be_modified) == 0  # No orders to be modified
                 and len(tiers.available_prices) > 0  # At least one available tier
                 and min(tiers.available_prices) == min(tiers.prices)  # Min tier price still available
@@ -347,7 +349,7 @@ class MomoStrategy(BaseStrategy):
                         self.log.error(
                             f"Requesting new_order_qty of {new_order_qty}. Skipping modification. position_qty: {position_qty}."
                         )
-                elif any(o.order.status == OrderStatus.PENDING_UPDATE for o in self.open_sells):
+                elif any(o.order.status == OrderStatus.PENDING_UPDATE for o in self.open_exits):
                     # Don't create new sell orders while existing sells are mid-modification,
                     # since the venue still holds the old (larger) qty until the replace confirms.
                     # This check is inside the loop (not before it) because a modify earlier in
@@ -368,7 +370,7 @@ class MomoStrategy(BaseStrategy):
 
         # If (position - sells) is non_zero for more than _MAX_ALLOWED_SELL_DIFF_SECS, sell diff at lowest tier
         # in a new order.
-        sell_diff = self.exposure - self.open_sells_qty
+        sell_diff = self.exposure - self.open_exits_qty
         if sell_diff == 0:
             self._sell_diff_start_ns = None
         elif self._sell_diff_start_ns is None:
@@ -384,8 +386,8 @@ class MomoStrategy(BaseStrategy):
             return round((self.clock.timestamp_ns() - open_order.order.last_event.ts_event) / 1e9, 1)
 
         if self.config.trailing_take:
-            if len(self.open_sells) > 0:
-                ordered_sells = sorted(self.open_sells, key=lambda x: x.price)
+            if len(self.open_exits) > 0:
+                ordered_sells = sorted(self.open_exits, key=lambda x: x.price)
                 sells_str = "\n".join(
                     f"{o.leaves_qty} @ {o.price}\t OpenSecs {open_for_secs(o)}\t {o.order.venue_order_id}\t {o.order.client_order_id}"
                     for o in ordered_sells

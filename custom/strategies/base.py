@@ -90,8 +90,8 @@ class BaseStrategy(Strategy):
         self.save_artifacts = False
         self._trader_helper = None
 
-        self._open_buys: set[OpenOrder] = set()
-        self._open_sells: set[OpenOrder] = set()
+        self._buy_orders: set[OpenOrder] = set()
+        self._sell_orders: set[OpenOrder] = set()
         self._position_discrepancy_start_ns = None
         self._raise_msg = None
         self._last_tick = None
@@ -205,32 +205,43 @@ class BaseStrategy(Strategy):
         return self.position_qty * self._side_sign
 
     @property
-    def open_buys(self) -> set[OpenOrder]:
-        self._open_buys = {open_order for open_order in self._open_buys if open_order.is_open}
-        return self._open_buys
+    def _buys(self) -> set[OpenOrder]:
+        """
+        Literal open BUYs, pruned of closed orders.
+
+        Private: entry/exit is the vocabulary callers should use. Reads go through here, but
+        mutations go straight to `_buy_orders`, since this reassigns the set on every read.
+        """
+        self._buy_orders = {open_order for open_order in self._buy_orders if open_order.is_open}
+        return self._buy_orders
 
     @property
-    def open_sells(self) -> set[OpenOrder]:
-        self._open_sells = {open_order for open_order in self._open_sells if open_order.is_open}
-        return self._open_sells
-
-    @property
-    def open_sells_qty(self) -> int:
-        return int(sum(o.leaves_qty for o in self.open_sells))
+    def _sells(self) -> set[OpenOrder]:
+        """Literal open SELLs, pruned of closed orders. See `_buys`."""
+        self._sell_orders = {open_order for open_order in self._sell_orders if open_order.is_open}
+        return self._sell_orders
 
     @property
     def open_orders(self) -> set[OpenOrder]:
-        return self.open_buys.union(self.open_sells)
+        return self._buys.union(self._sells)
 
     @property
     def open_entries(self) -> set[OpenOrder]:
         """Open orders that open/increase the position."""
-        return self.open_buys if self.is_long else self.open_sells
+        return self._buys if self.is_long else self._sells
 
     @property
     def open_exits(self) -> set[OpenOrder]:
         """Open orders that close/reduce the position."""
-        return self.open_sells if self.is_long else self.open_buys
+        return self._sells if self.is_long else self._buys
+
+    @property
+    def open_entries_qty(self) -> int:
+        return int(sum(o.leaves_qty for o in self.open_entries))
+
+    @property
+    def open_exits_qty(self) -> int:
+        return int(sum(o.leaves_qty for o in self.open_exits))
 
     def clear_open_order_modify_params(self, order_event):
         # Find the OpenOrder based on the nt cache `order` and reset last_modify vals
@@ -246,8 +257,8 @@ class BaseStrategy(Strategy):
             )
 
     def _remove_open_order(self, order):
-        self._open_buys.discard(order)
-        self._open_sells.discard(order)
+        self._buy_orders.discard(order)
+        self._sell_orders.discard(order)
 
     @property
     def position_avg_px(self):
@@ -261,22 +272,6 @@ class BaseStrategy(Strategy):
             return position_average
         else:
             raise RuntimeError("Multiple positions open")
-
-    @property
-    def open_buy_qty(self):
-        return sum(int(open_order.leaves_qty) for open_order in self._open_buys)
-
-    @property
-    def open_sell_qty(self):
-        return sum(int(open_order.leaves_qty) for open_order in self._open_sells)
-
-    @property
-    def open_entry_qty(self):
-        return self.open_buy_qty if self.is_long else self.open_sell_qty
-
-    @property
-    def open_exit_qty(self):
-        return self.open_sell_qty if self.is_long else self.open_buy_qty
 
     def modify_open_order(self, open_order: OpenOrder, quantity, price):
         now_ns = self.clock.timestamp_ns()
@@ -349,11 +344,11 @@ class BaseStrategy(Strategy):
 
     def _max_entry_qty_allowed(self):
         """How much more we may open before hitting max_position_allowed."""
-        return self.max_position_allowed - self.open_entry_qty - self.exposure
+        return self.max_position_allowed - self.open_entries_qty - self.exposure
 
     def _max_exit_qty_allowed(self):
         """How much we may close without flipping through flat onto the other side."""
-        return self.exposure - self.open_exit_qty
+        return self.exposure - self.open_exits_qty
 
     def _raise_if_needed(self):
         """
@@ -424,7 +419,7 @@ class BaseStrategy(Strategy):
             # For OrderList type, submit all at once, but parse through each to check for an entry order (from
             # bracket) and to add to uncached
             if isinstance(order_or_order_list, OrderList):
-                raise ValueError("Need to figure out how to update open_buys and open_sells")
+                raise ValueError("Need to figure out how to update _buy_orders and _sell_orders")
                 self.submit_order_list(order_or_order_list)
                 for order in order_or_order_list.orders:
                     if order.side == entry_side:
@@ -434,10 +429,11 @@ class BaseStrategy(Strategy):
             elif isinstance(order_or_order_list, Order):
                 self.submit_order(order_or_order_list)
                 open_order = OpenOrder(order_or_order_list, expire_time=expire_time)
+                # Bucketed by the real venue side, not entry/exit
                 if order_or_order_list.side == OrderSide.BUY:
-                    self._open_buys.add(open_order)
+                    self._buy_orders.add(open_order)
                 if order_or_order_list.side == OrderSide.SELL:
-                    self._open_sells.add(open_order)
+                    self._sell_orders.add(open_order)
                 if order_or_order_list.side == entry_side:
                     entry_included = True
             else:
@@ -606,9 +602,9 @@ class BaseStrategy(Strategy):
                 if not already_tracked:
                     open_order = OpenOrder(cache_order)
                     if cache_order.side == OrderSide.BUY:
-                        self._open_buys.add(open_order)
+                        self._buy_orders.add(open_order)
                     elif cache_order.side == OrderSide.SELL:
-                        self._open_sells.add(open_order)
+                        self._sell_orders.add(open_order)
                     self.log.error(
                         f"Re-added {cache_order.client_order_id} to open_orders (side={cache_order.side}, status={cache_order.status})"
                     )
@@ -645,6 +641,9 @@ class BaseStrategy(Strategy):
             position_at_broker = self.position_qty
 
         # FLATTEN POSITION IF NEEDED (position is opposite the side we are trading)
+        # Deliberately literal, not entry/exit: this branch runs precisely when the position
+        # contradicts self.side, so entry/exit is inverted here. Direction comes from the sign of
+        # the actual position instead.
         if position_at_broker * self._side_sign < 0:
             now_ns = self.clock.timestamp_ns()
             if (now_ns - self._last_wrong_way_flatten_ns) / 1e9 < 1.0:
@@ -652,13 +651,13 @@ class BaseStrategy(Strategy):
             self._last_wrong_way_flatten_ns = now_ns
             if position_at_broker < 0:
                 flatten_side = OrderSide.BUY
-                orders_to_cancel = self.open_sells  # Would deepen the short
-                orders_to_modify = self.open_buys
+                orders_to_cancel = self._sells  # Would deepen the short
+                orders_to_modify = self._buys
                 price = self._last_tick.price * 1.1
             else:
                 flatten_side = OrderSide.SELL
-                orders_to_cancel = self.open_buys  # Would deepen the long
-                orders_to_modify = self.open_sells
+                orders_to_cancel = self._buys  # Would deepen the long
+                orders_to_modify = self._sells
                 price = self._last_tick.price * 0.9
             self.log.error(
                 f"Position {position_at_broker} is opposite of side '{self._side}'! Canceling the open orders "
@@ -756,16 +755,15 @@ class BaseStrategy(Strategy):
         # Get P&L information
         realized_pnl = self.portfolio.realized_pnl(self.config.instrument_id)
 
-        open_buys_str = "\n".join(str(o) for o in self.open_buys) if len(self.open_buys) > 0 else ""
-        open_sells_str = "\n".join(str(o) for o in self.open_sells) if len(self.open_sells) > 0 else ""
-        OpenBuysQty = int(sum(o.leaves_qty for o in self.open_buys))
+        open_entries_str = "\n".join(str(o) for o in self.open_entries) if len(self.open_entries) > 0 else ""
+        OpenEntryQty = self.open_entries_qty
 
         position_str = ""
         if self.exposure != 0:
             avg_px = self.position_avg_px
             gain = (self._last_tick.price - avg_px) * self._side_sign
             unrealized = self.exposure * gain
-            OpenExitQty = int(sum(o.leaves_qty for o in self.open_exits))
+            OpenExitQty = self.open_exits_qty
             diff = self.exposure - OpenExitQty
             if diff > 0:
                 self.log.warning(f"Diff: {diff}")
@@ -776,9 +774,8 @@ class BaseStrategy(Strategy):
             metrics_data = {**metrics_data, **vals}
         self.log.info(
             f"UPDATE: {self.config.instrument_id}\n{tick_str}\n"
-            f"Total Entered {self._total_entry_qty} ({self._side}) | Realized: {realized_pnl} | {OpenBuysQty=} Orders: {open_buys_str}\n"
+            f"Total Entered {self._total_entry_qty} ({self._side}) | Realized: {realized_pnl} | {OpenEntryQty=} Orders: {open_entries_str}\n"
             f"{position_str}"
-            # f"{open_sells_str}"
             f"{self._print_update()}"
             f"{metrics_data}",
             color=LogColor.CYAN,

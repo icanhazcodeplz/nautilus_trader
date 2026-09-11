@@ -32,8 +32,8 @@ def _make_strategy(position_qty, open_sells, num_sell_tiers, vwap_high=10.00, me
     # the raw signed position. These tests are all long, so the two are the same.
     s.is_short = False
     s.exposure = position_qty
-    s.open_sells = set(open_sells)
-    s.open_sells_qty = sum(o.leaves_qty for o in open_sells)
+    s.open_exits = set(open_sells)
+    s.open_exits_qty = sum(o.leaves_qty for o in open_sells)
     s.config.num_sell_tiers = num_sell_tiers
     s.vwap.high = vwap_high
     s.vwap.mean_variance = mean_variance
