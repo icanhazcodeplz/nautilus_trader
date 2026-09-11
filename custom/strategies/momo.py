@@ -4,7 +4,7 @@ import random
 import pandas as pd
 import torch
 
-from custom.nt_extensions.indicators import PressureVWAPBands
+from custom.nt_extensions.indicators import PressureVWAPBands, VWAPBands
 from custom.strategies.base import BaseStrategy, BaseStrategyConfig
 from custom.strategies._tiers import Tiers
 from custom.strategies.metric import Metric
@@ -42,13 +42,6 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     allow_trades: bool = True
 
 
-def backfill_deque_with_value_if_empty(dq: deque, value):
-    if len(dq) == 0:
-        for i in range(dq.maxlen):
-            dq.append(value)
-    return dq
-
-
 def is_market_open(now_utc: pd.Timestamp) -> bool:
     now_est = now_utc.tz_convert("US/Eastern")
     market_open = now_est.replace(hour=9, minute=30, second=0, microsecond=0)
@@ -69,15 +62,17 @@ class MomoStrategy(BaseStrategy):
             raise ValueError("Cannot use more than one of trailing_buy_order, random_buy")
         # FIXME: This is temporary
         self.take_profit = self.config.take_profit if self.config.take_profit is not None else self.config.stop_loss
-        self.market_open_only = False  # TODO: remove this?
-        # self.vwap = VWAPBands(
-        self.vwap = PressureVWAPBands(
+        self.market_open_only = False
+
+        # self.vwap = PressureVWAPBands(
+        self.vwap = VWAPBands(
             lower_scalar_multiplier=self.config.lower_scalar_multiplier,
             upper_scalar_multiplier=self.config.upper_scalar_multiplier,
             rolling_window=self.config.vwap_window,
             variance_window=self.config.variance_window,
-            outer_band_multiplier=self.config.outer_band_multiplier,
-            pressure_window=self.config.pressure_window,
+            # Below used for PressureVWAPBands
+            # outer_band_multiplier=self.config.outer_band_multiplier,
+            # pressure_window=self.config.pressure_window,
         )
         # self.vwap_day = VolumeWeightedAveragePrice()
         self.macd = MACDHistogram(fast_period=12, slow_period=26, signal_period=9)
@@ -89,18 +84,18 @@ class MomoStrategy(BaseStrategy):
                     "value",
                     "low",
                     "high",
-                    "low_inner",
-                    "low_outer",
-                    "high_inner",
-                    "high_outer",
-                    "pressure",
+                    # Below used for PressureVWAPBands
+                    # "low_inner",
+                    # "low_outer",
+                    # "high_inner",
+                    # "high_outer",
+                    # "pressure",
                 ],
             ),
         ]
         if self.config.only_buy_if_macd_positive:
             self.metrics_to_save_on_1min.append(Metric(obj=self.macd, name="macd", attrs=["value"]))
 
-        self.price_dq = deque(maxlen=2)
         self.take_price = None
 
         self.metrics = []
@@ -147,12 +142,10 @@ class MomoStrategy(BaseStrategy):
             return
         if self.config.lstm_buy:
             self._update_candle_mids(tick)
-        backfill_deque_with_value_if_empty(self.price_dq, tick.price)
         if self.last_take_ts is None:
             self.last_take_ts = self.clock.utc_now()
 
         price = tick.price
-        self.price_dq.append(tick.price)
 
         buy_orders = self.open_buys
         position_qty = self.position_qty

@@ -3,13 +3,18 @@ import random
 from pathlib import Path
 from typing import Optional
 
-from custom.nt_extensions.indicators import PressureVWAPBands
 from custom.strategies.base import BaseStrategy, BaseStrategyConfig
-from custom.strategies.momo import backfill_deque_with_value_if_empty
 from custom.utils.alpaca_trader_http_client import AlpacaTraderHelper
 
 from nautilus_trader.model.data import TradeTick
 from nautilus_trader.model.identifiers import InstrumentId
+
+
+def backfill_deque_with_value_if_empty(dq: deque, value):
+    if len(dq) == 0:
+        for i in range(dq.maxlen):
+            dq.append(value)
+    return dq
 
 
 class NewsStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
@@ -70,7 +75,12 @@ class NewsStrategy(BaseStrategy):
         self._sell_diff_start_ns: int | None = None
         self._last_tier_adjustment_ns = None
 
-    def initialize(self, article_published_ns:int, artifacts_location: Optional[Path], trader_helper: Optional[AlpacaTraderHelper] = None):
+    def initialize(
+        self,
+        article_published_ns: int,
+        artifacts_location: Optional[Path],
+        trader_helper: Optional[AlpacaTraderHelper] = None,
+    ):
         super().initialize(artifacts_location=artifacts_location, trader_helper=trader_helper)
         self.article_published_ns = article_published_ns
 
