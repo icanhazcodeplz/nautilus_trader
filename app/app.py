@@ -6,7 +6,6 @@ sys.path.append(os.getcwd())
 import pandas as pd
 from flask import Flask
 from flask import jsonify
-from flask import render_template
 from flask_cors import CORS
 from flask_restful import Api
 
@@ -212,11 +211,6 @@ def create_horiz_lines_items(ticks):
         #     "opacity": 0.8,
         # },
     ]
-
-
-@app.route("/")
-def index():
-    return render_template("index.html")
 
 
 @app.route("/api/data")
