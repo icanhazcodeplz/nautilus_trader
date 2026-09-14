@@ -17,9 +17,10 @@ class Tiers:
         step_size = self._get_step_size(starting_price, mean_variance, step_fraction)
         target_prices = self._get_tier_prices(num_tiers, starting_price, step_size)
         target_prices = [make_Price(price) for price in target_prices]
-        target_qtys = self._get_tier_quantities(num_tiers, quantity)
         self.step_size = step_size
-        self.max_qty_per_tier = max(target_qtys)
+        # An even split across rungs, with the remainder folded into the largest clip.
+        # 10 shares over 3 tiers splits [4, 3, 3], so max_qty_per_tier is 4.
+        self.max_qty_per_tier = quantity // num_tiers + quantity % num_tiers
         self.prices = set(target_prices)
         self.available_prices = copy(self.prices)
 
@@ -73,15 +74,3 @@ class Tiers:
         step_ticks = max(1, round(step_size / tick))
         base_ticks = round(cls._snap_up(low_price, step_size, tick) / tick)
         return [round((base_ticks + i * step_ticks) * tick, 10) for i in range(tier_count)]
-
-    @staticmethod
-    def _get_tier_quantities(tier_count: int, qty: int) -> list[int]:
-        # TODO: not using this functionality. Remove?
-        if tier_count == 1:
-            return [qty]
-        # For most bins, use the same qty for each bin
-        qty_list = [int(qty / tier_count)] * (tier_count - 1)
-        # Fill in remainder at the front, so the largest clip exits at the rung nearest the market
-        remainder = qty - sum(qty_list)
-        qty_list = [remainder] + qty_list
-        return qty_list
