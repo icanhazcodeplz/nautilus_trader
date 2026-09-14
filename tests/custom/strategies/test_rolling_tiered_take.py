@@ -10,8 +10,7 @@ from custom.strategies.momo import MomoStrategy
 class MockOpenOrder:
     """Lightweight stand-in for OpenOrder with the properties _rolling_tiered_take reads."""
 
-    def __init__(self, price_str, leaves_qty, quantity=None, filled_qty=0,
-                 status=OrderStatus.ACCEPTED):
+    def __init__(self, price_str, leaves_qty, quantity=None, filled_qty=0, status=OrderStatus.ACCEPTED):
         self.price = Price.from_str(price_str)
         self.leaves_qty = leaves_qty
         self.quantity = quantity if quantity is not None else leaves_qty
@@ -24,8 +23,14 @@ class MockOpenOrder:
         return f"MockOpenOrder(price={self.price}, leaves={self.leaves_qty})"
 
 
-def _make_strategy(position_qty, open_sells, num_sell_tiers, vwap_high=10.00, mean_variance=0.05):
-    """Build a MagicMock that quacks like MomoStrategy for _rolling_tiered_take."""
+def _make_strategy(position_qty, open_sells, num_sell_tiers, vwap_high=10.00, mean_variance=0.03):
+    """
+    Build a MagicMock that quacks like MomoStrategy for _rolling_tiered_take.
+
+    mean_variance is sized so Tiers yields a 0.01 step at $10, which keeps the tier prices in
+    these tests readable. They are about which orders get modified/created, not about ladder
+    width -- see test_tiers.py for that.
+    """
     s = MagicMock()
     s.position_qty = position_qty
     # _rolling_tiered_take sizes off `exposure` (position in the direction of `side`) rather than
@@ -53,7 +58,7 @@ def _run(strategy):
 class TestRollingTieredTake:
     """Tests for the _rolling_tiered_take tier-management logic.
 
-    Default tier setup (vwap_high=10.00, mean_variance=0.05, step=0.01):
+    Default tier setup (vwap_high=10.00, mean_variance=0.03, step=0.01):
       2 tiers → prices {10.00, 10.01}, max_qty_per_tier = qty/2
       3 tiers → prices {10.00, 10.01, 10.02}
       4 tiers → prices {10.00, 10.01, 10.02, 10.03}

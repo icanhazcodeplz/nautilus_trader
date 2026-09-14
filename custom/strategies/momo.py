@@ -303,7 +303,7 @@ class MomoStrategy(BaseStrategy):
             # an available tier
             if (
                 len(tiers.prices) > 1  # At least two tiers
-                and (i + 1) == len(self.open_exits)  # Last open exit in self.open_exits
+                and (i + 1) == len(self.open_exits)  # This is the last open exit in self.open_exits
                 and len(orders_to_be_modified) == 0  # No orders to be modified
                 and len(tiers.available_prices) > 0  # At least one available tier
                 and min(tiers.available_prices) == min(tiers.prices)  # Min tier price still available
@@ -321,6 +321,7 @@ class MomoStrategy(BaseStrategy):
         available_qty_increase = position_qty - existing_open_sell_qty
 
         while len(tiers.available_prices) > 0:
+            # Use the lowest available price
             price = min(tiers.available_prices)
             tiers.available_prices.remove(price)
 
@@ -364,6 +365,7 @@ class MomoStrategy(BaseStrategy):
                     # Only reduce if qty_change is positive
                     available_qty_increase -= qty_change
 
+        # Cancel left-over orders
         for order in orders_to_be_modified:
             self.log.info(f"Canceling left over order_to_be_modified: {order}")
             self.cancel_open_order(order)
