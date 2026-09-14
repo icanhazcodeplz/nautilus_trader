@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 from nautilus_trader.model.enums import OrderStatus
 from nautilus_trader.model.objects import Price
 
+from custom.strategies._side import Side
 from custom.strategies.momo import MomoStrategy
 
 
@@ -23,24 +24,31 @@ class MockOpenOrder:
         return f"MockOpenOrder(price={self.price}, leaves={self.leaves_qty})"
 
 
-def _make_strategy(position_qty, open_sells, num_sell_tiers, vwap_high=10.00, mean_variance=0.03):
+def _make_strategy(position_qty, open_sells, num_sell_tiers, direction="long", band_price=10.00, mean_variance=0.03):
     """
     Build a MagicMock that quacks like MomoStrategy for _rolling_tiered_take.
 
-    mean_variance is sized so Tiers yields a 0.01 step at $10, which keeps the tier prices in
-    these tests readable. They are about which orders get modified/created, not about ladder
-    width -- see test_tiers.py for that.
+    mean_variance is sized so ExitTiers yields a 0.01 step at $10, which keeps the tier prices
+    in these tests readable. They are about which orders get modified/created, not about ladder
+    width -- see test_exit_tiers.py for that.
+
+    Both vwap bands are set to `band_price` so the ladder anchors at the same number either way:
+    a long ladder ascends from it, a short ladder descends.
     """
     s = MagicMock()
+    side = Side(direction)
     s.position_qty = position_qty
     # _rolling_tiered_take sizes off `exposure` (position in the direction of `side`) rather than
-    # the raw signed position. These tests are all long, so the two are the same.
-    s.is_short = False
+    # the raw signed position, so `exposure` is positive for a healthy position on either side.
+    s.side = side
+    s.is_long = side == Side.LONG
+    s.is_short = side == Side.SHORT
     s.exposure = position_qty
     s.open_exits = set(open_sells)
     s.open_exits_qty = sum(o.leaves_qty for o in open_sells)
     s.config.num_sell_tiers = num_sell_tiers
-    s.vwap.high = vwap_high
+    s.vwap.high = band_price
+    s.vwap.low = band_price
     s.vwap.mean_variance = mean_variance
     s.instrument.make_price = lambda p: Price.from_str(f"{p:.2f}")
     s.clock.timestamp_ns.return_value = 0
@@ -56,9 +64,9 @@ def _run(strategy):
 
 
 class TestRollingTieredTake:
-    """Tests for the _rolling_tiered_take tier-management logic.
+    """Tests for the _rolling_tiered_take tier-management logic, long side.
 
-    Default tier setup (vwap_high=10.00, mean_variance=0.03, step=0.01):
+    Default tier setup (band_price=10.00, mean_variance=0.03, step=0.01):
       2 tiers → prices {10.00, 10.01}, max_qty_per_tier = qty/2
       3 tiers → prices {10.00, 10.01, 10.02}
       4 tiers → prices {10.00, 10.01, 10.02, 10.03}
@@ -203,3 +211,69 @@ class TestRollingTieredTake:
             cancel_after_secs=None,
             tag="0",
         )
+
+
+class TestRollingTieredTakeShort:
+    """
+    The short mirror: exits are buy-to-cover, so the ladder descends from the lower vwap band.
+
+    Same setup as the long class but reflected (band_price=10.00, step=0.01):
+      2 tiers → prices {10.00, 9.99}
+      3 tiers → prices {10.00, 9.99, 9.98}
+    The rung "nearest the market" is now the HIGHEST, 10.00, not the lowest.
+    """
+
+    def _short(self, **kwargs):
+        return _make_strategy(direction="short", **kwargs)
+
+    def test_short_ladder_descends_from_the_lower_band(self):
+        s = self._short(position_qty=10, open_sells=[], num_sell_tiers=2)
+        _run(s)
+
+        assert s.exit.call_count == 2
+        prices = sorted(float(c.args[1]) for c in s.exit.call_args_list)
+        assert prices == [9.99, 10.00], "short ladder must sit at or below the band, not above it"
+
+    def test_no_open_buys_creates_new_orders(self):
+        s = self._short(position_qty=10, open_sells=[], num_sell_tiers=2)
+        _run(s)
+
+        s.modify_open_order.assert_not_called()
+        assert s.exit.call_count == 2
+        s.exit.assert_any_call(5, Price.from_str("10.00"), cancel_after_secs=None, tag="0")
+        s.exit.assert_any_call(5, Price.from_str("9.99"), cancel_after_secs=None, tag="0")
+
+    def test_single_order_at_nearest_tier_unchanged(self):
+        order = MockOpenOrder("10.00", leaves_qty=10)
+        s = self._short(position_qty=10, open_sells=[order], num_sell_tiers=2)
+        _run(s)
+
+        s.modify_open_order.assert_not_called()
+        s.exit.assert_not_called()
+
+    def test_single_order_at_further_tier_modified_to_nearest(self):
+        order = MockOpenOrder("9.99", leaves_qty=10)
+        s = self._short(position_qty=10, open_sells=[order], num_sell_tiers=2)
+        _run(s)
+
+        s.modify_open_order.assert_called_once_with(order, quantity=5, price=Price.from_str("10.00"))
+        s.exit.assert_called_once_with(5, Price.from_str("9.99"), cancel_after_secs=None, tag="0")
+
+    def test_two_orders_nearest_not_covered_furthest_moved_up(self):
+        """Mirror of the long force-down case: the rung furthest from the market gets pulled in."""
+        mid = MockOpenOrder("9.99", leaves_qty=5)
+        low = MockOpenOrder("9.98", leaves_qty=5)
+        s = self._short(position_qty=10, open_sells=[mid, low], num_sell_tiers=3)
+        _run(s)
+
+        # 3 tiers, qty 10 → max_qty_per_tier = 4, so new qty = 5 + (4 - 5) = 4
+        s.modify_open_order.assert_called_once_with(low, quantity=4, price=Price.from_str("10.00"))
+        s.exit.assert_called_once_with(1, Price.from_str("9.98"), cancel_after_secs=None, tag="0")
+
+    def test_short_no_longer_refuses_to_ladder(self):
+        """The removed guard used to log an error and return before placing anything."""
+        s = self._short(position_qty=10, open_sells=[], num_sell_tiers=2)
+        _run(s)
+
+        s.log.error.assert_not_called()
+        assert s.exit.call_count == 2

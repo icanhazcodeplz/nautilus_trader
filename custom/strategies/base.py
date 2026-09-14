@@ -1,7 +1,6 @@
 import asyncio
 from abc import abstractmethod
 from datetime import timedelta
-from enum import StrEnum
 from pathlib import Path
 from typing import Optional
 
@@ -10,6 +9,7 @@ from pandas import Timestamp
 
 from custom.artifacts import ArtifactsIO
 from custom.strategies._open_order import OpenOrder, CLOSED_STATUS_LIST
+from custom.strategies._side import Side  # noqa: F401  (re-exported: `from ...base import Side`)
 from custom.utils.alpaca_trader_http_client import AlpacaTraderHelper
 from custom.utils.precision_utils import make_Price
 from nautilus_trader.common.component import TimeEvent
@@ -32,18 +32,6 @@ from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.model.orders import LimitOrder, Order
 from nautilus_trader.model.orders.list import OrderList
 from nautilus_trader.trading.strategy import Strategy
-
-
-class Side(StrEnum):
-    """
-    The direction a strategy trades in.
-
-    A StrEnum so that `Side.LONG == "long"` and f-strings render the bare value, which keeps
-    config files, logs and saved artifacts readable.
-    """
-
-    LONG = "long"
-    SHORT = "short"
 
 
 class BaseStrategyConfig(StrategyConfig, frozen=True):

@@ -6,7 +6,7 @@ import torch
 
 from custom.nt_extensions.indicators import PressureVWAPBands, VWAPBands
 from custom.strategies.base import BaseStrategy, BaseStrategyConfig
-from custom.strategies._tiers import Tiers
+from custom.strategies._exit_tiers import ExitTiers
 from custom.strategies.metric import Metric
 from nautilus_trader.indicators.trend import MACDHistogram
 from nautilus_trader.model.data import TradeTick
@@ -265,13 +265,10 @@ class MomoStrategy(BaseStrategy):
                         self.last_take_ts = self.clock.utc_now()
 
     def _rolling_tiered_take(self):
-        # FIXME: This ladder is still long-only. Tiers ascends from starting_price (_tiers.py:56)
-        #  and the tier selection below picks with min(), so a short position would ladder the
-        #  wrong way. Threading direction through Tiers is a separate refactor; until then, fail
-        #  loudly rather than placing exits above a short.
-        if self.is_short:
-            self.log.error("_rolling_tiered_take does not support side='short' yet. Skipping.")
-            return
+        # NOTE: the `sell`/`take` naming through this method predates short support and now reads
+        #  wrong for a short, where these are buy-to-cover exits. `num_sell_tiers` is a config
+        #  field set in live_runner, optimize_params, strategy_backtest_runner and
+        #  managers/strategy_manager, so renaming is a breaking config change and is left alone.
         self._last_tier_adjustment_ns = self.clock.timestamp_ns()
         position_qty = self.exposure
         if position_qty == 0:
@@ -280,16 +277,19 @@ class MomoStrategy(BaseStrategy):
             self.log.info(f"Exposure {position_qty} is negative (wrong-way). Running reconciliation.")
             self._reconcile()
             return
-        tiers = Tiers(
+        tiers = ExitTiers(
+            direction=self.side,
             quantity=position_qty,
-            starting_price=self.vwap.high,
+            # Ladder away from the band the position is exiting into: up from the upper band when
+            # long, down from the lower band when short.
+            starting_price=self.vwap.high if self.is_long else self.vwap.low,
             mean_variance=self.vwap.mean_variance,
             num_tiers=self.config.num_sell_tiers,
         )
         orders_to_be_modified = []
         existing_open_sell_qty = 0
         qty_taken_in_tiers = 0
-        for i, open_order in enumerate(sorted(self.open_exits, key=lambda order: order.price)):
+        for i, open_order in enumerate(sorted(self.open_exits, key=lambda order: order.price, reverse=self.is_short)):
             existing_open_sell_qty += open_order.leaves_qty
             if existing_open_sell_qty > position_qty:
                 self.log.info(
@@ -306,8 +306,8 @@ class MomoStrategy(BaseStrategy):
                 and (i + 1) == len(self.open_exits)  # This is the last open exit in self.open_exits
                 and len(orders_to_be_modified) == 0  # No orders to be modified
                 and len(tiers.available_prices) > 0  # At least one available tier
-                and min(tiers.available_prices) == min(tiers.prices)  # Min tier price still available
-                and open_order.price != min(tiers.prices)  # This order is not at min
+                and tiers.nearest_available_price == tiers.nearest_price  # Nearest tier still available
+                and open_order.price != tiers.nearest_price  # This order is not at the nearest tier
             ):
                 orders_to_be_modified.append(open_order)
             elif open_order.price in tiers.prices:
@@ -321,9 +321,8 @@ class MomoStrategy(BaseStrategy):
         available_qty_increase = position_qty - existing_open_sell_qty
 
         while len(tiers.available_prices) > 0:
-            # Use the lowest available price
-            price = min(tiers.available_prices)
-            tiers.available_prices.remove(price)
+            # Use the available price nearest the market
+            price = tiers.pop_next_price()
 
             # Only sell up to (position_qty - qty_taken_in_tiers) to limit "insufficient qty" error
             qty_to_sell = position_qty - qty_taken_in_tiers
@@ -379,9 +378,9 @@ class MomoStrategy(BaseStrategy):
             self._sell_diff_start_ns = self.clock.timestamp_ns()
         elif (self.clock.timestamp_ns() - self._sell_diff_start_ns) / 1e9 > self._MAX_ALLOWED_SELL_DIFF_SECS:
             self.log.info(
-                f"Adding sell order for {sell_diff} at lowest tier because sell_diff existed for more than {self._MAX_ALLOWED_SELL_DIFF_SECS} secs."
+                f"Adding sell order for {sell_diff} at nearest tier because sell_diff existed for more than {self._MAX_ALLOWED_SELL_DIFF_SECS} secs."
             )
-            self.exit(sell_diff, min(tiers.prices), cancel_after_secs=None, tag=f"{self.entry_orders_count}")
+            self.exit(sell_diff, tiers.nearest_price, cancel_after_secs=None, tag=f"{self.entry_orders_count}")
 
     def _print_update(self):
         def open_for_secs(open_order):

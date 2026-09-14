@@ -249,12 +249,13 @@ if __name__ == "__main__":
         pd.Timestamp("2026-02-16"),  # Presidents' Day
         pd.Timestamp("2026-04-03"),  # Good Friday
         pd.Timestamp("2026-05-25"),  # Memorial Day
+        pd.Timestamp("2026-06-19"),  # Juneteenth
         pd.Timestamp("2026-07-03"),  # Independence Day (observed)
         pd.Timestamp("2026-09-07"),  # Labor Day
         pd.Timestamp("2026-11-26"),  # Thanksgiving
         pd.Timestamp("2026-12-25"),  # Christmas
     ]
-    trading_days = pd.bdate_range("2026-07-01", "2026-09-08", freq="C", holidays=nasdaq_holidays_2026)
+    trading_days = pd.bdate_range("2026-06-01", "2026-09-08", freq="C", holidays=nasdaq_holidays_2026)
 
     symbol = "AMZN"
     for day in trading_days:
