@@ -24,7 +24,7 @@ class MockOpenOrder:
         return f"MockOpenOrder(price={self.price}, leaves={self.leaves_qty})"
 
 
-def _make_strategy(position_qty, open_sells, num_sell_tiers, direction="long", band_price=10.00, mean_variance=0.03):
+def _make_strategy(position_qty, open_sells, num_exit_tiers, direction="long", band_price=10.00, mean_variance=0.03):
     """
     Build a MagicMock that quacks like MomoStrategy for _rolling_tiered_take.
 
@@ -46,7 +46,7 @@ def _make_strategy(position_qty, open_sells, num_sell_tiers, direction="long", b
     s.exposure = position_qty
     s.open_exits = set(open_sells)
     s.open_exits_qty = sum(o.leaves_qty for o in open_sells)
-    s.config.num_sell_tiers = num_sell_tiers
+    s.config.num_exit_tiers = num_exit_tiers
     s.vwap.high = band_price
     s.vwap.low = band_price
     s.vwap.mean_variance = mean_variance
@@ -77,7 +77,7 @@ class TestRollingTieredTake:
     # ------------------------------------------------------------------ #
     def test_single_order_at_higher_tier_modified_to_lowest(self):
         order = MockOpenOrder("10.01", leaves_qty=10)
-        s = _make_strategy(position_qty=10, open_sells=[order], num_sell_tiers=2)
+        s = _make_strategy(position_qty=10, open_sells=[order], num_exit_tiers=2)
         _run(s)
 
         # Order should be modified to the lowest tier price
@@ -90,7 +90,7 @@ class TestRollingTieredTake:
     # ------------------------------------------------------------------ #
     def test_single_order_at_lowest_tier_unchanged(self):
         order = MockOpenOrder("10.00", leaves_qty=10)
-        s = _make_strategy(position_qty=10, open_sells=[order], num_sell_tiers=2)
+        s = _make_strategy(position_qty=10, open_sells=[order], num_exit_tiers=2)
         _run(s)
 
         s.modify_open_order.assert_not_called()
@@ -102,7 +102,7 @@ class TestRollingTieredTake:
     def test_two_orders_lowest_covered_both_unchanged(self):
         low = MockOpenOrder("10.00", leaves_qty=5)
         high = MockOpenOrder("10.01", leaves_qty=5)
-        s = _make_strategy(position_qty=10, open_sells=[low, high], num_sell_tiers=2)
+        s = _make_strategy(position_qty=10, open_sells=[low, high], num_exit_tiers=2)
         _run(s)
 
         s.modify_open_order.assert_not_called()
@@ -114,7 +114,7 @@ class TestRollingTieredTake:
     def test_two_orders_lowest_not_covered_highest_moved_down(self):
         mid = MockOpenOrder("10.01", leaves_qty=5)
         high = MockOpenOrder("10.02", leaves_qty=5)
-        s = _make_strategy(position_qty=10, open_sells=[mid, high], num_sell_tiers=3)
+        s = _make_strategy(position_qty=10, open_sells=[mid, high], num_exit_tiers=3)
         _run(s)
 
         # The highest order (10.02) should be modified to the lowest tier (10.00)
@@ -137,7 +137,7 @@ class TestRollingTieredTake:
     # ------------------------------------------------------------------ #
     def test_single_tier_single_order_unaffected(self):
         order = MockOpenOrder("10.00", leaves_qty=10)
-        s = _make_strategy(position_qty=10, open_sells=[order], num_sell_tiers=1)
+        s = _make_strategy(position_qty=10, open_sells=[order], num_exit_tiers=1)
         _run(s)
 
         s.modify_open_order.assert_not_called()
@@ -148,7 +148,7 @@ class TestRollingTieredTake:
     # ------------------------------------------------------------------ #
     def test_single_order_outside_tiers_modified_to_lowest(self):
         order = MockOpenOrder("10.05", leaves_qty=10)
-        s = _make_strategy(position_qty=10, open_sells=[order], num_sell_tiers=2)
+        s = _make_strategy(position_qty=10, open_sells=[order], num_exit_tiers=2)
         _run(s)
 
         s.modify_open_order.assert_called_once_with(
@@ -167,7 +167,7 @@ class TestRollingTieredTake:
     # 7. No open sells → new sell orders created for every tier
     # ------------------------------------------------------------------ #
     def test_no_open_sells_creates_new_orders(self):
-        s = _make_strategy(position_qty=10, open_sells=[], num_sell_tiers=2)
+        s = _make_strategy(position_qty=10, open_sells=[], num_exit_tiers=2)
         _run(s)
 
         s.modify_open_order.assert_not_called()
@@ -193,7 +193,7 @@ class TestRollingTieredTake:
         o1 = MockOpenOrder("10.01", leaves_qty=7)
         o2 = MockOpenOrder("10.02", leaves_qty=7)
         o3 = MockOpenOrder("10.03", leaves_qty=6)
-        s = _make_strategy(position_qty=20, open_sells=[o1, o2, o3], num_sell_tiers=4)
+        s = _make_strategy(position_qty=20, open_sells=[o1, o2, o3], num_exit_tiers=4)
         _run(s)
 
         # 4 tiers, qty 20 → max_qty_per_tier = 5
@@ -227,7 +227,7 @@ class TestRollingTieredTakeShort:
         return _make_strategy(direction="short", **kwargs)
 
     def test_short_ladder_descends_from_the_lower_band(self):
-        s = self._short(position_qty=10, open_sells=[], num_sell_tiers=2)
+        s = self._short(position_qty=10, open_sells=[], num_exit_tiers=2)
         _run(s)
 
         assert s.exit.call_count == 2
@@ -235,7 +235,7 @@ class TestRollingTieredTakeShort:
         assert prices == [9.99, 10.00], "short ladder must sit at or below the band, not above it"
 
     def test_no_open_buys_creates_new_orders(self):
-        s = self._short(position_qty=10, open_sells=[], num_sell_tiers=2)
+        s = self._short(position_qty=10, open_sells=[], num_exit_tiers=2)
         _run(s)
 
         s.modify_open_order.assert_not_called()
@@ -245,7 +245,7 @@ class TestRollingTieredTakeShort:
 
     def test_single_order_at_nearest_tier_unchanged(self):
         order = MockOpenOrder("10.00", leaves_qty=10)
-        s = self._short(position_qty=10, open_sells=[order], num_sell_tiers=2)
+        s = self._short(position_qty=10, open_sells=[order], num_exit_tiers=2)
         _run(s)
 
         s.modify_open_order.assert_not_called()
@@ -253,7 +253,7 @@ class TestRollingTieredTakeShort:
 
     def test_single_order_at_further_tier_modified_to_nearest(self):
         order = MockOpenOrder("9.99", leaves_qty=10)
-        s = self._short(position_qty=10, open_sells=[order], num_sell_tiers=2)
+        s = self._short(position_qty=10, open_sells=[order], num_exit_tiers=2)
         _run(s)
 
         s.modify_open_order.assert_called_once_with(order, quantity=5, price=Price.from_str("10.00"))
@@ -263,7 +263,7 @@ class TestRollingTieredTakeShort:
         """Mirror of the long force-down case: the rung furthest from the market gets pulled in."""
         mid = MockOpenOrder("9.99", leaves_qty=5)
         low = MockOpenOrder("9.98", leaves_qty=5)
-        s = self._short(position_qty=10, open_sells=[mid, low], num_sell_tiers=3)
+        s = self._short(position_qty=10, open_sells=[mid, low], num_exit_tiers=3)
         _run(s)
 
         # 3 tiers, qty 10 → max_qty_per_tier = 4, so new qty = 5 + (4 - 5) = 4
@@ -272,7 +272,7 @@ class TestRollingTieredTakeShort:
 
     def test_short_no_longer_refuses_to_ladder(self):
         """The removed guard used to log an error and return before placing anything."""
-        s = self._short(position_qty=10, open_sells=[], num_sell_tiers=2)
+        s = self._short(position_qty=10, open_sells=[], num_exit_tiers=2)
         _run(s)
 
         s.log.error.assert_not_called()

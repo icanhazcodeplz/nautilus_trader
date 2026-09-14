@@ -36,7 +36,7 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     trailing_take: bool = False
     random_buy: bool = False
     lstm_buy: bool = False
-    num_sell_tiers: int = 1
+    num_exit_tiers: int = 1
     print_update_every_secs: int = None
 
     allow_trades: bool = True
@@ -265,10 +265,6 @@ class MomoStrategy(BaseStrategy):
                         self.last_take_ts = self.clock.utc_now()
 
     def _rolling_tiered_take(self):
-        # NOTE: the `sell`/`take` naming through this method predates short support and now reads
-        #  wrong for a short, where these are buy-to-cover exits. `num_sell_tiers` is a config
-        #  field set in live_runner, optimize_params, strategy_backtest_runner and
-        #  managers/strategy_manager, so renaming is a breaking config change and is left alone.
         self._last_tier_adjustment_ns = self.clock.timestamp_ns()
         position_qty = self.exposure
         if position_qty == 0:
@@ -284,7 +280,7 @@ class MomoStrategy(BaseStrategy):
             # long, down from the lower band when short.
             starting_price=self.vwap.high if self.is_long else self.vwap.low,
             mean_variance=self.vwap.mean_variance,
-            num_tiers=self.config.num_sell_tiers,
+            num_tiers=self.config.num_exit_tiers,
         )
         orders_to_be_modified = []
         existing_open_sell_qty = 0

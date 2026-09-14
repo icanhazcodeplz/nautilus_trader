@@ -160,7 +160,7 @@ if __name__ == "__main__":
             simple_take=False,
             only_buy_if_macd_positive=False,
             trailing_take=True,
-            num_sell_tiers=3,
+            num_exit_tiers=3,
             trailing_buy_order=False,
             random_buy=False,
             lstm_buy=False,
