@@ -148,8 +148,8 @@ if __name__ == "__main__":
         params = dict(
             allow_trades=True,
             max_position_multiplier=1,
-            trade_size=10,
-            stop_loss=0.2,
+            trade_size=50,
+            stop_loss=0.5,
             take_profit=None,
             upper_scalar_multiplier=0.5,
             lower_scalar_multiplier=0.5,
@@ -157,9 +157,9 @@ if __name__ == "__main__":
             variance_window=300,
             outer_band_multiplier=2.5,
             pressure_window=25,
-            simple_take=False,
             only_buy_if_macd_positive=False,
-            trailing_take=True,
+            simple_take=True,
+            trailing_take=False,
             num_exit_tiers=3,
             trailing_buy_order=False,
             random_buy=False,
@@ -188,7 +188,7 @@ if __name__ == "__main__":
     # )
 
     symbol = "AMZN"
-    day_str = "2026-08-12"
+    day_str = "2026-08-13"
     start_str = day_str + " " + "09:20-04:00"
     end_str__ = day_str + " " + "09:38-04:00"
     run_single_backtest(

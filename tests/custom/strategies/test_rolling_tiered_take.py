@@ -83,7 +83,7 @@ class TestRollingTieredTake:
         # Order should be modified to the lowest tier price
         s.modify_open_order.assert_called_once_with(order, quantity=5, price=Price.from_str("10.00"))
         # Remaining qty placed at the higher tier via a new sell
-        s.exit.assert_called_once_with(5, Price.from_str("10.01"), cancel_after_secs=None, tag="0")
+        s.exit.assert_called_once_with(5, Price.from_str("10.01"), cancel_after_secs=None)
 
     # ------------------------------------------------------------------ #
     # 2. Single order at lowest tier → unchanged
@@ -129,7 +129,6 @@ class TestRollingTieredTake:
             1,
             Price.from_str("10.02"),
             cancel_after_secs=None,
-            tag="0",
         )
 
     # ------------------------------------------------------------------ #
@@ -160,7 +159,6 @@ class TestRollingTieredTake:
             5,
             Price.from_str("10.01"),
             cancel_after_secs=None,
-            tag="0",
         )
 
     # ------------------------------------------------------------------ #
@@ -177,13 +175,11 @@ class TestRollingTieredTake:
             5,
             Price.from_str("10.00"),
             cancel_after_secs=None,
-            tag="0",
         )
         s.exit.assert_any_call(
             5,
             Price.from_str("10.01"),
             cancel_after_secs=None,
-            tag="0",
         )
 
     # ------------------------------------------------------------------ #
@@ -209,7 +205,6 @@ class TestRollingTieredTake:
             1,
             Price.from_str("10.03"),
             cancel_after_secs=None,
-            tag="0",
         )
 
 
@@ -240,8 +235,8 @@ class TestRollingTieredTakeShort:
 
         s.modify_open_order.assert_not_called()
         assert s.exit.call_count == 2
-        s.exit.assert_any_call(5, Price.from_str("10.00"), cancel_after_secs=None, tag="0")
-        s.exit.assert_any_call(5, Price.from_str("9.99"), cancel_after_secs=None, tag="0")
+        s.exit.assert_any_call(5, Price.from_str("10.00"), cancel_after_secs=None)
+        s.exit.assert_any_call(5, Price.from_str("9.99"), cancel_after_secs=None)
 
     def test_single_order_at_nearest_tier_unchanged(self):
         order = MockOpenOrder("10.00", leaves_qty=10)
@@ -257,7 +252,7 @@ class TestRollingTieredTakeShort:
         _run(s)
 
         s.modify_open_order.assert_called_once_with(order, quantity=5, price=Price.from_str("10.00"))
-        s.exit.assert_called_once_with(5, Price.from_str("9.99"), cancel_after_secs=None, tag="0")
+        s.exit.assert_called_once_with(5, Price.from_str("9.99"), cancel_after_secs=None)
 
     def test_two_orders_nearest_not_covered_furthest_moved_up(self):
         """Mirror of the long force-down case: the rung furthest from the market gets pulled in."""
@@ -268,7 +263,7 @@ class TestRollingTieredTakeShort:
 
         # 3 tiers, qty 10 → max_qty_per_tier = 4, so new qty = 5 + (4 - 5) = 4
         s.modify_open_order.assert_called_once_with(low, quantity=4, price=Price.from_str("10.00"))
-        s.exit.assert_called_once_with(1, Price.from_str("9.98"), cancel_after_secs=None, tag="0")
+        s.exit.assert_called_once_with(1, Price.from_str("9.98"), cancel_after_secs=None)
 
     def test_short_no_longer_refuses_to_ladder(self):
         """The removed guard used to log an error and return before placing anything."""

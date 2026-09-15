@@ -45,7 +45,7 @@ def is_market_open(now_utc: pd.Timestamp) -> bool:
 
 
 class MomoStrategy(BaseStrategy):
-    _ADJUST_TIERS_ONLY_EVERY_MS = 80
+    _ADJUST_EXITS_ONLY_EVERY_NS = 80e6  # e6 converts from ms to ns
     _MAX_ALLOWED_SELL_DIFF_SECS = 5
 
     def __init__(self, config: MomoStrategyConfig) -> None:
@@ -91,13 +91,12 @@ class MomoStrategy(BaseStrategy):
         if self.config.only_buy_if_macd_positive:
             self.metrics_to_save_on_1min.append(Metric(obj=self.macd, name="macd", attrs=["value"]))
 
-        self.take_price = None
+        self.last_entry_price = None
 
         self.metrics = []
 
-        self.last_take_ts = None
         self._sell_diff_start_ns: int | None = None
-        self._last_tier_adjustment_ns = None
+        self._last_exit_adjustment_ns: int | None = None
 
     def _on_trade_tick(self, tick: TradeTick) -> None:
         # self.log.info(f"Trade tick: {tick}")
@@ -106,8 +105,8 @@ class MomoStrategy(BaseStrategy):
         # best_bid = ob.best_bid_price()
         if self.market_open_only and not is_market_open(self.clock.utc_now()):
             return
-        if self.last_take_ts is None:
-            self.last_take_ts = self.clock.utc_now()
+        if self._last_exit_adjustment_ns is None:
+            self._last_exit_adjustment_ns = self.clock.timestamp_ns()
 
         price = tick.price
 
@@ -163,37 +162,23 @@ class MomoStrategy(BaseStrategy):
                     self.enter(self.config.trade_size, price, cancel_after_secs=1)
 
         # TAKE LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-        allow_take = True
-        if self._stopping_out:
-            allow_take = False
-        if allow_take:
+        if not self._stopping_out and (
+            self.clock.timestamp_ns() - self._last_exit_adjustment_ns > self._ADJUST_EXITS_ONLY_EVERY_NS
+        ):
+            self._last_exit_adjustment_ns = self.clock.timestamp_ns()
+
             if self.config.trailing_take:
-                if (
-                    self._last_tier_adjustment_ns is None
-                    or (self.clock.timestamp_ns() - self._last_tier_adjustment_ns) / 1e9
-                    > self._ADJUST_TIERS_ONLY_EVERY_MS / 1000
-                ):
-                    self._rolling_tiered_take()
-            else:
-                if (
-                    self.open_exits_qty < exposure
-                    # and price >= self.take_price
-                    and (self.clock.utc_now() - self.last_take_ts).total_seconds() > 1
-                ):
-                    if self.config.simple_take:
-                        self.exit(exposure, limit_price=self.take_price, tag="simple")
-                    elif (
-                        # price > self.vwap.upper
-                        # and price <= price_1ago
-                        tick.size > 1
-                    ):
-                        # and price > self.vwap.upper
-                        sell_qty = max(int(exposure), int(self.config.trade_size / 10), 1)
-                        self.exit(sell_qty, limit_price=price, tag="t", cancel_after_secs=10)
-                        self.last_take_ts = self.clock.utc_now()
+                self._rolling_tiered_take()
+            elif self.config.simple_take:
+                if self.open_exits_qty < exposure:
+                    if self.is_long:
+                        take_price = self.last_entry_price + self.take_profit
+                    else:
+                        take_price = self.last_entry_price - self.take_profit
+
+                    self.exit(exposure, limit_price=take_price, tag="simple")
 
     def _rolling_tiered_take(self):
-        self._last_tier_adjustment_ns = self.clock.timestamp_ns()
         position_qty = self.exposure
         if position_qty == 0:
             return
@@ -278,7 +263,7 @@ class MomoStrategy(BaseStrategy):
                     # since the venue still holds the old (larger) qty until the replace confirms.
                     # This check is inside the loop (not before it) because a modify earlier in
                     # this same loop iteration can put an order into PENDING_UPDATE.
-                    self.log.debug("Skipping new sell: existing sell order is PENDING_UPDATE")
+                    self.log.debug("Skipping new exit: existing exit order is PENDING_UPDATE")
                     break
                 else:
                     self.exit(qty_to_sell, price, cancel_after_secs=None)
@@ -322,5 +307,7 @@ class MomoStrategy(BaseStrategy):
         return ""
 
     def _on_order_filled(self, order_filled) -> None:
-        if order_filled.is_buy:
-            self.take_price = order_filled.last_px + self.take_profit
+        if self.is_long and order_filled.is_buy:
+            self.last_entry_price = order_filled.last_px
+        elif self.is_short and not order_filled.is_sell:
+            self.last_entry_price = order_filled.last_px
