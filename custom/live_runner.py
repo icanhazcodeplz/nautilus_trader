@@ -106,7 +106,7 @@ strategy_config = MomoStrategyConfig(
     trailing_buy_order=False,
     trailing_take=True,
     num_exit_tiers=3,
-    random_buy=True,
+    random_entry=True,
     simple_take=False,
     allow_trades=True,
     print_update_every_secs=5,
@@ -114,7 +114,7 @@ strategy_config = MomoStrategyConfig(
 )
 
 if not paper:
-    if strategy_config.trade_size > 3 or strategy_config.max_position_multiplier > 1 or strategy_config.random_buy:
+    if strategy_config.trade_size > 3 or strategy_config.max_position_multiplier > 1 or strategy_config.random_entry:
         raise ValueError("Can't run with these params live")
     print("\n⚠️  You are running LIVE with:")
     for key, value in strategy_config.dict().items():

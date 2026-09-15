@@ -30,7 +30,7 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     trailing_buy_order: bool = False
     simple_take: bool = False
     trailing_take: bool = False
-    random_buy: bool = False
+    random_entry: bool = False
     num_exit_tiers: int = 1
     print_update_every_secs: int = None
 
@@ -53,8 +53,8 @@ class MomoStrategy(BaseStrategy):
         if sum([self.config.trailing_take, self.config.simple_take]) > 1:
             raise ValueError("Cannot use more than one of simple_take, trailing_take")
 
-        if sum([self.config.trailing_buy_order, self.config.random_buy]) > 1:
-            raise ValueError("Cannot use more than one of trailing_buy_order, random_buy")
+        if sum([self.config.trailing_buy_order, self.config.random_entry]) > 1:
+            raise ValueError("Cannot use more than one of trailing_buy_order, random_entry")
         # FIXME: This is temporary
         self.take_profit = self.config.take_profit if self.config.take_profit is not None else self.config.stop_loss
         self.market_open_only = False
@@ -120,16 +120,16 @@ class MomoStrategy(BaseStrategy):
             if not self.macd.initialized or self.macd.value < 0:
                 allow_trading = False
 
-        # BUY LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        # ENTRY LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         if allow_trading:
-            if self.config.random_buy:
+            if self.config.random_entry:
                 if (
                     len(entry_orders) == 0
                     and (self.clock.utc_now() - self.last_entry_dt).total_seconds() > 20
                     and exposure < self.max_position_allowed
                     and random.random() < 0.3
                 ):
-                    # Only send buy command if it has been at least 10 seconds of flat
+                    # Only send the entry command if it has been at least 10 seconds of flat
                     all_positions = self.cache.positions(instrument_id=self.config.instrument_id)
                     if len(all_positions) > 0:
                         most_recent_close = all_positions[0].ts_closed
@@ -137,8 +137,11 @@ class MomoStrategy(BaseStrategy):
                         most_recent_close = 0
 
                     if (self.clock.timestamp_ns() - most_recent_close) / 1e9 > 10:
-                        buy_limit = tick.price + 0.00
-                        self.enter(self.config.trade_size, buy_limit, cancel_after_secs=10)
+                        # enter() submits a buy when long and a sell when short, so the only
+                        # thing this branch decides is the price -- and at a zero offset the
+                        # entry sits on the tick either way.
+                        entry_limit = tick.price + 0.00
+                        self.enter(self.config.trade_size, entry_limit, cancel_after_secs=10)
             elif self.config.trailing_buy_order:
                 vwap_lower = self.instrument.make_price(self.vwap.low)
                 for order in self.open_entries:
