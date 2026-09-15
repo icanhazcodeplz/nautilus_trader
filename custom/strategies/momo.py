@@ -139,9 +139,7 @@ class MomoStrategy(BaseStrategy):
 
                     if (self.clock.timestamp_ns() - most_recent_close) / 1e9 > 10:
                         buy_limit = tick.price + 0.00
-                        self.enter(
-                            self.config.trade_size, buy_limit, cancel_after_secs=10, tag=f"{self.entry_orders_count}"
-                        )
+                        self.enter(self.config.trade_size, buy_limit, cancel_after_secs=10)
             elif self.config.trailing_buy_order:
                 vwap_lower = self.instrument.make_price(self.vwap.low)
                 for order in self.open_entries:
@@ -150,9 +148,7 @@ class MomoStrategy(BaseStrategy):
 
                 if len(entry_orders) == 0 and (self.clock.utc_now() - self.last_entry_dt).total_seconds() > 1:
                     # FIXME: Clunky to add entry orders count tag here. Should be handled in enter()
-                    self.enter(
-                        self.config.trade_size, vwap_lower, cancel_after_secs=None, tag=f"{self.entry_orders_count}"
-                    )
+                    self.enter(self.config.trade_size, vwap_lower, cancel_after_secs=None)
             elif (
                 price < self.vwap.low
                 # and price_1ago > self.vwap.low
@@ -164,7 +160,7 @@ class MomoStrategy(BaseStrategy):
                     # and (self.clock.utc_now() - self.last_buy_ts).total_seconds() > random.randint(1, 20)
                     and (self.clock.utc_now() - self.last_entry_dt).total_seconds() > 1
                 ):
-                    self.enter(self.config.trade_size, price, cancel_after_secs=1, tag=f"{self.entry_orders_count}")
+                    self.enter(self.config.trade_size, price, cancel_after_secs=1)
 
         # TAKE LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         allow_take = True
@@ -185,7 +181,7 @@ class MomoStrategy(BaseStrategy):
                     and (self.clock.utc_now() - self.last_take_ts).total_seconds() > 1
                 ):
                     if self.config.simple_take:
-                        self.exit(exposure, limit_price=self.take_price, cancel_after_secs=None, tag="simple")
+                        self.exit(exposure, limit_price=self.take_price, tag="simple")
                     elif (
                         # price > self.vwap.upper
                         # and price <= price_1ago
@@ -193,7 +189,7 @@ class MomoStrategy(BaseStrategy):
                     ):
                         # and price > self.vwap.upper
                         sell_qty = max(int(exposure), int(self.config.trade_size / 10), 1)
-                        self.exit(sell_qty, limit_price=price, cancel_after_secs=10, tag="t")
+                        self.exit(sell_qty, limit_price=price, tag="t", cancel_after_secs=10)
                         self.last_take_ts = self.clock.utc_now()
 
     def _rolling_tiered_take(self):
@@ -285,7 +281,7 @@ class MomoStrategy(BaseStrategy):
                     self.log.debug("Skipping new sell: existing sell order is PENDING_UPDATE")
                     break
                 else:
-                    self.exit(qty_to_sell, price, cancel_after_secs=None, tag=f"{self.entry_orders_count}")
+                    self.exit(qty_to_sell, price, cancel_after_secs=None)
                     qty_change = qty_to_sell
                     qty_taken_in_tiers += qty_to_sell
                 if qty_change > 0:
@@ -308,7 +304,7 @@ class MomoStrategy(BaseStrategy):
             self.log.info(
                 f"Adding sell order for {sell_diff} at nearest tier because sell_diff existed for more than {self._MAX_ALLOWED_SELL_DIFF_SECS} secs."
             )
-            self.exit(sell_diff, tiers.nearest_price, cancel_after_secs=None, tag=f"{self.entry_orders_count}")
+            self.exit(sell_diff, tiers.nearest_price, cancel_after_secs=None)
 
     def _print_update(self):
         def open_for_secs(open_order):

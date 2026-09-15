@@ -428,8 +428,10 @@ class BaseStrategy(Strategy):
             self.entry_orders_count += 1
             self.last_entry_dt = self.clock.utc_now()
 
-    def _submit_limit_order(self, side: OrderSide, quantity: int, limit_price: float, tag: str, cancel_after_secs=None):
-        tags = [tag]
+    def _submit_limit_order(
+        self, side: OrderSide, quantity: int, limit_price: float, tag: str = None, cancel_after_secs: int = None
+    ):
+        tags = [tag] if tag is not None else None
         order: LimitOrder = self.order_factory.limit(
             instrument_id=self.config.instrument_id,
             order_side=side,
@@ -443,7 +445,9 @@ class BaseStrategy(Strategy):
         expire_time = utc_now + timedelta(seconds=cancel_after_secs) if cancel_after_secs is not None else None
         self._submit_orders_if_allowed(order, expire_time=expire_time)
 
-    def _submit_sided_limit_order(self, side: OrderSide, quantity, limit_price, tag, cancel_after_secs) -> None:
+    def _submit_sided_limit_order(
+        self, side: OrderSide, quantity, limit_price, tag=None, cancel_after_secs=None
+    ) -> None:
         """
         Shared body of _buy/_sell.
 
@@ -470,22 +474,22 @@ class BaseStrategy(Strategy):
         if allowed_qty > 0:
             self._submit_limit_order(side, allowed_qty, limit_price, tag, cancel_after_secs)
 
-    def _buy(self, quantity, limit_price, tag, cancel_after_secs=None) -> None:
+    def _buy(self, quantity, limit_price, tag=None, cancel_after_secs=None) -> None:
         """Submit a literal BUY. The entry when long, the cover when short."""
         self._submit_sided_limit_order(OrderSide.BUY, quantity, limit_price, tag, cancel_after_secs)
 
-    def _sell(self, quantity, limit_price, tag, cancel_after_secs=None) -> None:
+    def _sell(self, quantity, limit_price, tag=None, cancel_after_secs=None) -> None:
         """Submit a literal SELL. The exit when long, the entry when short."""
         self._submit_sided_limit_order(OrderSide.SELL, quantity, limit_price, tag, cancel_after_secs)
 
-    def enter(self, quantity, limit_price, tag, cancel_after_secs=None) -> None:
+    def enter(self, quantity, limit_price, tag=None, cancel_after_secs=None) -> None:
         """Open or increase the position, in the direction of self.side."""
         if self.is_long:
             self._buy(quantity, limit_price, tag, cancel_after_secs)
         else:
             self._sell(quantity, limit_price, tag, cancel_after_secs)
 
-    def exit(self, quantity, limit_price, tag, cancel_after_secs=None) -> None:
+    def exit(self, quantity, limit_price, tag=None, cancel_after_secs=None) -> None:
         """Close or reduce the position, in the direction of self.side."""
         if self.is_long:
             self._sell(quantity, limit_price, tag, cancel_after_secs)
