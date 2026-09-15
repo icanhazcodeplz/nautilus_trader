@@ -1,8 +1,6 @@
-from collections import deque
 import random
 
 import pandas as pd
-import torch
 
 from custom.nt_extensions.indicators import PressureVWAPBands, VWAPBands
 from custom.strategies.base import BaseStrategy, BaseStrategyConfig
@@ -12,8 +10,6 @@ from nautilus_trader.indicators.trend import MACDHistogram
 from nautilus_trader.model.data import TradeTick
 from nautilus_trader.model.enums import OrderStatus
 from nautilus_trader.model.identifiers import InstrumentId
-
-from lstm.lstm_common import TICK_LOOKBACK, build_live_features, get_device, load_model
 
 
 class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
@@ -35,7 +31,6 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     simple_take: bool = False
     trailing_take: bool = False
     random_buy: bool = False
-    lstm_buy: bool = False
     num_exit_tiers: int = 1
     print_update_every_secs: int = None
 
@@ -104,35 +99,6 @@ class MomoStrategy(BaseStrategy):
         self._sell_diff_start_ns: int | None = None
         self._last_tier_adjustment_ns = None
 
-        # LSTM Model internal params
-        self.lstm_model = None
-        self.lstm_device = None
-        self._candle_10s_mids = deque(maxlen=30)
-        self._candle_1m_mids = deque(maxlen=60)
-        self._last_10s_bucket = None
-        self._last_1m_bucket = None
-        if self.config.lstm_buy:
-            self.lstm_device = get_device()
-            self.lstm_model = load_model("lstm/lstm_best.pt", self.lstm_device)
-
-    def _update_candle_mids(self, tick: TradeTick):
-        ts_ns = tick.ts_event
-        bucket_10s = ts_ns // (10 * 1_000_000_000)
-        bucket_1m = ts_ns // (60 * 1_000_000_000)
-
-        quote = self.cache.quote_tick(self.config.instrument_id)
-        if quote is None:
-            return
-        mid = (float(quote.bid_price) + float(quote.ask_price)) / 2
-
-        if self._last_10s_bucket is not None and bucket_10s != self._last_10s_bucket:
-            self._candle_10s_mids.append(mid)
-        self._last_10s_bucket = bucket_10s
-
-        if self._last_1m_bucket is not None and bucket_1m != self._last_1m_bucket:
-            self._candle_1m_mids.append(mid)
-        self._last_1m_bucket = bucket_1m
-
     def _on_trade_tick(self, tick: TradeTick) -> None:
         # self.log.info(f"Trade tick: {tick}")
         # NOTE: Need to be subscribed to order book deltas to get best bid/ask prices
@@ -140,8 +106,6 @@ class MomoStrategy(BaseStrategy):
         # best_bid = ob.best_bid_price()
         if self.market_open_only and not is_market_open(self.clock.utc_now()):
             return
-        if self.config.lstm_buy:
-            self._update_candle_mids(tick)
         if self.last_take_ts is None:
             self.last_take_ts = self.clock.utc_now()
 
@@ -178,38 +142,6 @@ class MomoStrategy(BaseStrategy):
                         self.enter(
                             self.config.trade_size, buy_limit, cancel_after_secs=10, tag=f"{self.entry_orders_count}"
                         )
-            elif self.config.lstm_buy:
-                trade_ticks = self.cache.trade_ticks(self.config.instrument_id)
-                quote_tick = self.cache.quote_tick(self.config.instrument_id)
-                if (
-                    len(trade_ticks) >= TICK_LOOKBACK
-                    and quote_tick is not None
-                    and len(self._candle_10s_mids) >= 30
-                    and len(self._candle_1m_mids) >= 60
-                    and len(entry_orders) == 0
-                    and exposure < self.max_position_allowed
-                    and (self.clock.utc_now() - self.last_entry_dt).total_seconds() > 1
-                    and tick.price < self.vwap.low
-                ):
-                    tick_feat, ctx_feat = build_live_features(
-                        list(reversed(trade_ticks[:TICK_LOOKBACK])),
-                        quote_tick,
-                        list(self._candle_10s_mids),
-                        list(self._candle_1m_mids),
-                    )
-                    tick_feat = tick_feat.to(self.lstm_device)
-                    ctx_feat = ctx_feat.to(self.lstm_device)
-                    with torch.no_grad():
-                        logit = self.lstm_model(tick_feat, ctx_feat).item()
-                    prob_up = torch.sigmoid(torch.tensor(logit)).item()
-                    if prob_up > 0.85:
-                        self.enter(
-                            self.config.trade_size,
-                            tick.price,
-                            cancel_after_secs=10,
-                            tag=f"lstm_p{prob_up:.2f}",
-                        )
-
             elif self.config.trailing_buy_order:
                 vwap_lower = self.instrument.make_price(self.vwap.low)
                 for order in self.open_entries:

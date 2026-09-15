@@ -163,7 +163,6 @@ if __name__ == "__main__":
             num_exit_tiers=3,
             trailing_buy_order=False,
             random_buy=False,
-            lstm_buy=False,
             random_seed=1,
             # --- TOP GAINERS PARAMS ----------------
             # price_min=0.8,
