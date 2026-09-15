@@ -28,9 +28,9 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
 
     only_buy_if_macd_positive: bool = False
     trailing_buy_order: bool = False
+    random_entry: bool = False
     simple_take: bool = False
     trailing_take: bool = False
-    random_entry: bool = False
     num_exit_tiers: int = 1
     print_update_every_secs: int = None
 
@@ -121,7 +121,11 @@ class MomoStrategy(BaseStrategy):
                 allow_trading = False
 
         # ENTRY LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-        if allow_trading:
+        if (
+            allow_trading
+            and (exposure < self.max_position_allowed)
+            and (self.clock.utc_now() - self.last_entry_dt).total_seconds() > 1
+        ):
             if self.config.random_entry:
                 if (
                     len(entry_orders) == 0
@@ -149,20 +153,12 @@ class MomoStrategy(BaseStrategy):
                         self.modify_open_order(order, quantity=order.quantity, price=vwap_lower)
 
                 if len(entry_orders) == 0 and (self.clock.utc_now() - self.last_entry_dt).total_seconds() > 1:
-                    # FIXME: Clunky to add entry orders count tag here. Should be handled in enter()
                     self.enter(self.config.trade_size, vwap_lower, cancel_after_secs=None)
-            elif (
-                price < self.vwap.low
-                # and price_1ago > self.vwap.low
-                # and (price > price_1ago)
-            ):
-                if (
-                    exposure < self.max_position_allowed
-                    # and tick.size > 1
-                    # and (self.clock.utc_now() - self.last_buy_ts).total_seconds() > random.randint(1, 20)
-                    and (self.clock.utc_now() - self.last_entry_dt).total_seconds() > 1
-                ):
-                    self.enter(self.config.trade_size, price, cancel_after_secs=1)
+
+            elif self.is_long and price < self.vwap.low:
+                self.enter(self.config.trade_size, price, cancel_after_secs=1)
+            elif self.is_short and price > self.vwap.high:
+                self.enter(self.config.trade_size, price, cancel_after_secs=1)
 
         # TAKE LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         if not self._stopping_out and (
