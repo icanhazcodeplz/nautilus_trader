@@ -545,11 +545,14 @@ class BaseStrategy(Strategy):
                 "order is already in",  # filled/replaced/rejected state
                 "already closed",
                 "order already pending replacement",
-                "cannot be sold short",
                 "order chain not fully replaced",
                 "too_late_to_cancel",
                 "insufficient qty available for order",
             )
+            if self.is_long:
+                # This error sometimes shows up transiently when trying to sell a long position
+                _COOLDOWN_REASONS += ("cannot be sold short",)
+
             _SKIP_COOLDOWN_REASONS = (
                 "potential wash trade detected",  # This should only arise in testing when we have high buy orders
                 "order parameters are not changed",
