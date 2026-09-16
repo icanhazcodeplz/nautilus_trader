@@ -324,7 +324,5 @@ class MomoStrategy(BaseStrategy):
         return ""
 
     def _on_order_filled(self, order_filled) -> None:
-        if self.is_long and order_filled.is_buy:
-            self.last_entry_price = order_filled.last_px
-        elif self.is_short and not order_filled.is_sell:
+        if order_filled.order_side == self._entry_order_side:
             self.last_entry_price = order_filled.last_px
