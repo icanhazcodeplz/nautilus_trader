@@ -3,6 +3,7 @@ import random
 import pandas as pd
 
 from custom.nt_extensions.indicators import PressureVWAPBands, VWAPBands
+from custom.strategies._side import Side
 from custom.strategies.base import BaseStrategy, BaseStrategyConfig
 from custom.strategies._exit_tiers import ExitTiers
 from custom.strategies.metric import Metric
@@ -26,6 +27,7 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     outer_band_multiplier: float = 1.0
     pressure_window: int = 50
 
+    flip_side_on: str = "long_only"
     only_buy_if_macd_positive: bool = False
     trailing_entry_order: bool = False
     random_entry: bool = False
@@ -99,18 +101,31 @@ class MomoStrategy(BaseStrategy):
         self._sell_diff_start_ns: int | None = None
         self._last_exit_adjustment_ns: int | None = None
         self._last_entry_adjustment_ns: int | None = None
+        self._completed_first_tick_logic: bool = False
+
+    def _on_first_tick(self, tick: TradeTick):
+        if self._completed_first_tick_logic:
+            return
+
+        if self.config.flip_side_on == "long_only":
+            self.set_side(Side.LONG)
+        elif self.config.flip_side_on == "short_only":
+            self.set_side(Side.SHORT)
+        if self._last_exit_adjustment_ns is None:
+            self._last_exit_adjustment_ns = self.clock.timestamp_ns()
+        if self._last_entry_adjustment_ns is None:
+            self._last_entry_adjustment_ns = self.clock.timestamp_ns()
+
+        self._completed_first_tick_logic = True
 
     def _on_trade_tick(self, tick: TradeTick) -> None:
+        self._on_first_tick(tick)
         # self.log.info(f"Trade tick: {tick}")
         # NOTE: Need to be subscribed to order book deltas to get best bid/ask prices
         # ob = self.cache.order_book(self.config.instrument_id)
         # best_bid = ob.best_bid_price()
         if self.market_open_only and not is_market_open(self.clock.utc_now()):
             return
-        if self._last_exit_adjustment_ns is None:
-            self._last_exit_adjustment_ns = self.clock.timestamp_ns()
-        if self._last_entry_adjustment_ns is None:
-            self._last_entry_adjustment_ns = self.clock.timestamp_ns()
 
         price = tick.price
 

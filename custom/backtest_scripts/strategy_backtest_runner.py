@@ -158,10 +158,11 @@ if __name__ == "__main__":
             outer_band_multiplier=2.5,
             pressure_window=25,
             only_buy_if_macd_positive=False,
+            flip_side_on="short_only",
             simple_take=True,
             trailing_take=False,
             num_exit_tiers=3,
-            trailing_entry_order=True,
+            trailing_entry_order=False,
             random_entry=False,
             random_seed=1,
             # --- TOP GAINERS PARAMS ----------------
