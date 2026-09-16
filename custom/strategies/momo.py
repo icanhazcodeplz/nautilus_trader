@@ -46,6 +46,7 @@ def is_market_open(now_utc: pd.Timestamp) -> bool:
 
 class MomoStrategy(BaseStrategy):
     _ADJUST_EXITS_ONLY_EVERY_NS = 80e6  # e6 converts from ms to ns
+    _ADJUST_ENTRIES_ONLY_EVERY_NS = 100e6
     _MAX_ALLOWED_SELL_DIFF_SECS = 5
 
     def __init__(self, config: MomoStrategyConfig) -> None:
@@ -97,6 +98,7 @@ class MomoStrategy(BaseStrategy):
 
         self._sell_diff_start_ns: int | None = None
         self._last_exit_adjustment_ns: int | None = None
+        self._last_entry_adjustment_ns: int | None = None
 
     def _on_trade_tick(self, tick: TradeTick) -> None:
         # self.log.info(f"Trade tick: {tick}")
@@ -107,25 +109,29 @@ class MomoStrategy(BaseStrategy):
             return
         if self._last_exit_adjustment_ns is None:
             self._last_exit_adjustment_ns = self.clock.timestamp_ns()
+        if self._last_entry_adjustment_ns is None:
+            self._last_entry_adjustment_ns = self.clock.timestamp_ns()
 
         price = tick.price
 
         entry_orders = self.open_entries
         exposure = self.exposure
 
-        allow_trading = True
+        allow_entries = True
         if self._stopping_out:
-            allow_trading = False
+            allow_entries = False
         if self.config.only_buy_if_macd_positive:
             if not self.macd.initialized or self.macd.value < 0:
-                allow_trading = False
+                allow_entries = False
 
         # ENTRY LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         if (
-            allow_trading
+            allow_entries
             and (exposure < self.max_position_allowed)
-            and (self.clock.utc_now() - self.last_entry_dt).total_seconds() > 1
+            and (self.clock.timestamp_ns() - self._last_entry_adjustment_ns > self._ADJUST_ENTRIES_ONLY_EVERY_NS)
         ):
+            self._last_entry_adjustment_ns = self.clock.timestamp_ns()
+
             if self.config.random_entry:
                 if (
                     len(entry_orders) == 0
@@ -140,10 +146,7 @@ class MomoStrategy(BaseStrategy):
                         most_recent_close = 0
 
                     if (self.clock.timestamp_ns() - most_recent_close) / 1e9 > 10:
-                        # enter() submits a buy when long and a sell when short, so the only
-                        # thing this branch decides is the price -- and at a zero offset the
-                        # entry sits on the tick either way.
-                        entry_limit = tick.price + 0.00
+                        entry_limit = price
                         self.enter(self.config.trade_size, entry_limit, cancel_after_secs=10)
 
             elif self.config.trailing_entry_order:
@@ -157,9 +160,7 @@ class MomoStrategy(BaseStrategy):
                 if len(entry_orders) == 0:
                     self.enter(self.config.trade_size, trail_price, cancel_after_secs=None)
 
-            elif self.is_long and price < self.vwap.low:
-                self.enter(self.config.trade_size, price, cancel_after_secs=1)
-            elif self.is_short and price > self.vwap.high:
+            elif (self.is_long and price < self.vwap.low) or (self.is_short and price > self.vwap.high):
                 self.enter(self.config.trade_size, price, cancel_after_secs=1)
 
         # TAKE LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
