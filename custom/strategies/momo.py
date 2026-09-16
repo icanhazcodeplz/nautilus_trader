@@ -27,7 +27,7 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     pressure_window: int = 50
 
     only_buy_if_macd_positive: bool = False
-    trailing_buy_order: bool = False
+    trailing_entry_order: bool = False
     random_entry: bool = False
     simple_take: bool = False
     trailing_take: bool = False
@@ -53,8 +53,8 @@ class MomoStrategy(BaseStrategy):
         if sum([self.config.trailing_take, self.config.simple_take]) > 1:
             raise ValueError("Cannot use more than one of simple_take, trailing_take")
 
-        if sum([self.config.trailing_buy_order, self.config.random_entry]) > 1:
-            raise ValueError("Cannot use more than one of trailing_buy_order, random_entry")
+        if sum([self.config.trailing_entry_order, self.config.random_entry]) > 1:
+            raise ValueError("Cannot use more than one of trailing_entry_order, random_entry")
         # FIXME: This is temporary
         self.take_profit = self.config.take_profit if self.config.take_profit is not None else self.config.stop_loss
         self.market_open_only = False
@@ -130,7 +130,6 @@ class MomoStrategy(BaseStrategy):
                 if (
                     len(entry_orders) == 0
                     and (self.clock.utc_now() - self.last_entry_dt).total_seconds() > 20
-                    and exposure < self.max_position_allowed
                     and random.random() < 0.3
                 ):
                     # Only send the entry command if it has been at least 10 seconds of flat
@@ -146,14 +145,17 @@ class MomoStrategy(BaseStrategy):
                         # entry sits on the tick either way.
                         entry_limit = tick.price + 0.00
                         self.enter(self.config.trade_size, entry_limit, cancel_after_secs=10)
-            elif self.config.trailing_buy_order:
-                vwap_lower = self.instrument.make_price(self.vwap.low)
-                for order in self.open_entries:
-                    if order.price != vwap_lower:
-                        self.modify_open_order(order, quantity=order.quantity, price=vwap_lower)
 
-                if len(entry_orders) == 0 and (self.clock.utc_now() - self.last_entry_dt).total_seconds() > 1:
-                    self.enter(self.config.trade_size, vwap_lower, cancel_after_secs=None)
+            elif self.config.trailing_entry_order:
+                # enter() submits a buy when long and a sell when short, so trail the near
+                # band on the side the entry sits: the lower band when long, upper when short.
+                trail_price = self.instrument.make_price(self.vwap.high if self.is_short else self.vwap.low)
+                for order in self.open_entries:
+                    if order.price != trail_price:
+                        self.modify_open_order(order, quantity=order.quantity, price=trail_price)
+
+                if len(entry_orders) == 0:
+                    self.enter(self.config.trade_size, trail_price, cancel_after_secs=None)
 
             elif self.is_long and price < self.vwap.low:
                 self.enter(self.config.trade_size, price, cancel_after_secs=1)
