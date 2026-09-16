@@ -400,6 +400,9 @@ class RollingVWAP(Indicator):
         super().__init__(params=[rolling_window])
 
         self.rolling_window = rolling_window
+        # Read by Metric.tick_lookback to size the historical warmup request, so the window is
+        # already full by the first live tick.
+        self.tick_lookback = rolling_window
 
         self._trade_values = deque(maxlen=rolling_window)
         self._volumes = deque(maxlen=rolling_window)

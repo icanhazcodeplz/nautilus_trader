@@ -2,7 +2,7 @@ import random
 
 import pandas as pd
 
-from custom.nt_extensions.indicators import PressureVWAPBands, VWAPBands
+from custom.nt_extensions.indicators import PressureVWAPBands, RollingVWAP, VWAPBands
 from custom.strategies._side import Side
 from custom.strategies.base import BaseStrategy, BaseStrategyConfig
 from custom.strategies._exit_tiers import ExitTiers
@@ -28,6 +28,7 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     pressure_window: int = 50
 
     flip_side_on: str = "long_only"
+    rolling_vwap_window: int = 300
     only_buy_if_macd_positive: bool = False
     trailing_entry_order: bool = False
     random_entry: bool = False
@@ -73,6 +74,7 @@ class MomoStrategy(BaseStrategy):
             # pressure_window=self.config.pressure_window,
         )
         # self.vwap_day = VolumeWeightedAveragePrice()
+        self.rolling_vwap = RollingVWAP(rolling_window=self.config.rolling_vwap_window)
         self.macd = MACDHistogram(fast_period=12, slow_period=26, signal_period=9)
         self.metrics_to_save_on_tick = [
             Metric(
@@ -90,6 +92,7 @@ class MomoStrategy(BaseStrategy):
                     # "pressure",
                 ],
             ),
+            Metric(obj=self.rolling_vwap, name="rolling_vwap", attrs=["value"]),
         ]
         if self.config.only_buy_if_macd_positive:
             self.metrics_to_save_on_1min.append(Metric(obj=self.macd, name="macd", attrs=["value"]))

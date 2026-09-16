@@ -153,6 +153,7 @@ if __name__ == "__main__":
             take_profit=None,
             upper_scalar_multiplier=0.5,
             lower_scalar_multiplier=0.5,
+            rolling_vwap_window=1000,
             vwap_window=150,
             variance_window=300,
             outer_band_multiplier=2.5,
