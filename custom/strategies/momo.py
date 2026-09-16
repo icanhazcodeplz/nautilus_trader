@@ -47,7 +47,7 @@ def is_market_open(now_utc: pd.Timestamp) -> bool:
 class MomoStrategy(BaseStrategy):
     _ADJUST_EXITS_ONLY_EVERY_NS = 80e6  # e6 converts from ms to ns
     _ADJUST_ENTRIES_ONLY_EVERY_NS = 100e6
-    _MAX_ALLOWED_SELL_DIFF_SECS = 5
+    _MAX_ALLOWED_EXIT_DIFF_SECS = 5
 
     def __init__(self, config: MomoStrategyConfig) -> None:
         super().__init__(config)
@@ -181,16 +181,16 @@ class MomoStrategy(BaseStrategy):
                     self.exit(exposure, limit_price=take_price, tag="simple")
 
     def _rolling_tiered_take(self):
-        position_qty = self.exposure
-        if position_qty == 0:
+        exposure_qty = self.exposure
+        if exposure_qty == 0:
             return
-        elif position_qty < 0:
-            self.log.info(f"Exposure {position_qty} is negative (wrong-way). Running reconciliation.")
+        elif exposure_qty < 0:
+            self.log.info(f"Exposure {exposure_qty} is negative (wrong-way). Running reconciliation.")
             self._reconcile()
             return
         tiers = ExitTiers(
             direction=self.side,
-            quantity=position_qty,
+            quantity=exposure_qty,
             # Ladder away from the band the position is exiting into: up from the upper band when
             # long, down from the lower band when short.
             starting_price=self.vwap.high if self.is_long else self.vwap.low,
@@ -198,13 +198,13 @@ class MomoStrategy(BaseStrategy):
             num_tiers=self.config.num_exit_tiers,
         )
         orders_to_be_modified = []
-        existing_open_sell_qty = 0
+        existing_open_exit_qty = 0
         qty_taken_in_tiers = 0
         for i, open_order in enumerate(sorted(self.open_exits, key=lambda order: order.price, reverse=self.is_short)):
-            existing_open_sell_qty += open_order.leaves_qty
-            if existing_open_sell_qty > position_qty:
+            existing_open_exit_qty += open_order.leaves_qty
+            if existing_open_exit_qty > exposure_qty:
                 self.log.info(
-                    f"Existing open sell qty {existing_open_sell_qty} is greater than position qty {position_qty}. "
+                    f"Existing open exit qty {existing_open_exit_qty} is greater than position qty {exposure_qty}. "
                     "Canceling order and skipping adjusting tiers."
                 )
                 self.cancel_open_order(open_order)
@@ -229,25 +229,25 @@ class MomoStrategy(BaseStrategy):
 
         # If we adjust two orders at the same time, we often get an "insufficient qty" error from alpaca. To reduce
         # this likelihood, limit the amount of increase qty to the current position
-        available_qty_increase = position_qty - existing_open_sell_qty
+        available_qty_increase = exposure_qty - existing_open_exit_qty
 
         while len(tiers.available_prices) > 0:
             # Use the available price nearest the market
             price = tiers.pop_next_price()
 
-            # Only sell up to (position_qty - qty_taken_in_tiers) to limit "insufficient qty" error
-            qty_to_sell = position_qty - qty_taken_in_tiers
+            # Only exit up to (exposure_qty - qty_taken_in_tiers) to limit "insufficient qty" error
+            qty_to_exit = exposure_qty - qty_taken_in_tiers
 
-            # Minimize to tier max if there are more prices to sell at after this one
+            # Minimize to tier max if there are more prices to exit at after this one
             if len(tiers.available_prices) > 0:
-                qty_to_sell = min(tiers.max_qty_per_tier, qty_to_sell)
+                qty_to_exit = min(tiers.max_qty_per_tier, qty_to_exit)
 
-            if qty_to_sell > 0:
+            if qty_to_exit > 0:
                 # Modify an existing order if possible, otherwise create a new one
                 if len(orders_to_be_modified) > 0:
                     open_order = orders_to_be_modified.pop(0)
                     # Need to adjust based on leaves_qty incase order is already partially filled
-                    requested_qty_change = qty_to_sell - open_order.leaves_qty
+                    requested_qty_change = qty_to_exit - open_order.leaves_qty
 
                     qty_change = min(requested_qty_change, available_qty_increase)  # can be negative
                     new_order_qty = open_order.quantity + qty_change  # should be positive
@@ -258,19 +258,19 @@ class MomoStrategy(BaseStrategy):
                         self.modify_open_order(open_order, quantity=new_order_qty, price=price)
                     else:
                         self.log.error(
-                            f"Requesting new_order_qty of {new_order_qty}. Skipping modification. position_qty: {position_qty}."
+                            f"Requesting new_order_qty of {new_order_qty}. Skipping modification. exposure_qty: {exposure_qty}."
                         )
                 elif any(o.order.status == OrderStatus.PENDING_UPDATE for o in self.open_exits):
-                    # Don't create new sell orders while existing sells are mid-modification,
+                    # Don't create new exit orders while existing exits are mid-modification,
                     # since the venue still holds the old (larger) qty until the replace confirms.
                     # This check is inside the loop (not before it) because a modify earlier in
                     # this same loop iteration can put an order into PENDING_UPDATE.
                     self.log.debug("Skipping new exit: existing exit order is PENDING_UPDATE")
                     break
                 else:
-                    self.exit(qty_to_sell, price, cancel_after_secs=None)
-                    qty_change = qty_to_sell
-                    qty_taken_in_tiers += qty_to_sell
+                    self.exit(qty_to_exit, price, cancel_after_secs=None)
+                    qty_change = qty_to_exit
+                    qty_taken_in_tiers += qty_to_exit
                 if qty_change > 0:
                     # Only reduce if qty_change is positive
                     available_qty_increase -= qty_change
@@ -280,18 +280,18 @@ class MomoStrategy(BaseStrategy):
             self.log.info(f"Canceling left over order_to_be_modified: {order}")
             self.cancel_open_order(order)
 
-        # If (position - sells) is non_zero for more than _MAX_ALLOWED_SELL_DIFF_SECS, sell diff at lowest tier
+        # If (position - exits) is non_zero for more than _MAX_ALLOWED_EXIT_DIFF_SECS, exit diff at lowest tier
         # in a new order.
-        sell_diff = self.exposure - self.open_exits_qty
-        if sell_diff == 0:
-            self._sell_diff_start_ns = None
-        elif self._sell_diff_start_ns is None:
-            self._sell_diff_start_ns = self.clock.timestamp_ns()
-        elif (self.clock.timestamp_ns() - self._sell_diff_start_ns) / 1e9 > self._MAX_ALLOWED_SELL_DIFF_SECS:
+        exit_diff = self.exposure - self.open_exits_qty
+        if exit_diff == 0:
+            self._exit_diff_start_ns = None
+        elif self._exit_diff_start_ns is None:
+            self._exit_diff_start_ns = self.clock.timestamp_ns()
+        elif (self.clock.timestamp_ns() - self._exit_diff_start_ns) / 1e9 > self._MAX_ALLOWED_EXIT_DIFF_SECS:
             self.log.info(
-                f"Adding sell order for {sell_diff} at nearest tier because sell_diff existed for more than {self._MAX_ALLOWED_SELL_DIFF_SECS} secs."
+                f"Adding exit order for {exit_diff} at nearest tier because exit_diff existed for more than {self._MAX_ALLOWED_EXIT_DIFF_SECS} secs."
             )
-            self.exit(sell_diff, tiers.nearest_price, cancel_after_secs=None)
+            self.exit(exit_diff, tiers.nearest_price, cancel_after_secs=None)
 
     def _print_update(self):
         def open_for_secs(open_order):
@@ -299,12 +299,12 @@ class MomoStrategy(BaseStrategy):
 
         if self.config.trailing_take:
             if len(self.open_exits) > 0:
-                ordered_sells = sorted(self.open_exits, key=lambda x: x.price)
-                sells_str = "\n".join(
+                ordered_exits = sorted(self.open_exits, key=lambda x: x.price)
+                exits_str = "\n".join(
                     f"{o.leaves_qty} @ {o.price}\t OpenSecs {open_for_secs(o)}\t {o.order.venue_order_id}\t {o.order.client_order_id}"
-                    for o in ordered_sells
+                    for o in ordered_exits
                 )
-                msg = f"{round(self.vwap.mean_variance, 2)} {round(self.vwap.high, 3)}\n{sells_str}\n"
+                msg = f"{round(self.vwap.mean_variance, 2)} {round(self.vwap.high, 3)}\n{exits_str}\n"
                 return msg
         return ""
 
