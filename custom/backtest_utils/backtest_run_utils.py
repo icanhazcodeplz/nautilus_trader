@@ -6,7 +6,7 @@ from custom.artifacts import ArtifactsIO, BACKTEST_RUNS_PATH
 from custom.backtest_scripts.backtest_config import DATA_VENUE, prob_fill_on_limit, latency_model
 from custom.nt_extensions.limit_fill_model import LimitFillModel
 from custom.statistics.trade_avg import AvgTrade
-from custom.statistics.trade_avg_scaled import PnlPer100, TotalBought, AverageBuyPrice
+from custom.statistics.trade_avg_scaled import PnlPer100, TotalEntered
 from custom.statistics.trade_counts import Winners, Losers, NumTrades
 from custom.statistics.win_loss_ratio import WinLossRatio
 from custom.utils.orders_to_trades import orders_to_trades
@@ -120,7 +120,7 @@ def register_custom_statistics(engine):
     ]:
         engine.portfolio.analyzer.deregister_statistic(stat_class())
 
-    for stat_class in [NumTrades, Winners, Losers, WinLossRatio, AvgTrade, TotalBought, AverageBuyPrice, PnlPer100]:
+    for stat_class in [NumTrades, Winners, Losers, WinLossRatio, AvgTrade, TotalEntered, PnlPer100]:
         engine.portfolio.analyzer.register_statistic(stat_class())
 
 
@@ -172,11 +172,13 @@ def analyze_trades(trades, print_report=False):
     if len(trades) == 0:
         return 0
     trades = trades.copy()
-    trades = trades[trades["avg_sell_price"] > 0]
+    trades = trades[trades["avg_exit_price"] > 0]
+    trade_count = len(trades)
+    if trade_count == 0:
+        return 0
     wins = len(trades[trades["pnl"] > 0])
     losses = len(trades[trades["pnl"] < 0])
     scratches = len(trades[trades["pnl"] == 0])
-    trade_count = len(trades)
     win_ratio = round(wins / trade_count, 3)
     if print_report:
         print(f"\nTrades:  {trade_count}   {wins}|{losses}|{scratches} = {win_ratio}")
@@ -192,5 +194,5 @@ def analyze_backtest():
     print()
 
     orders_report = artifacts_io.load_orders_report()
-    trades, sell_legs = orders_to_trades(orders_report)
+    trades, exit_legs = orders_to_trades(orders_report)
     analyze_trades(trades, print_report=True)

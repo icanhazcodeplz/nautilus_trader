@@ -1,4 +1,3 @@
-from typing import Tuple
 
 import pandas as pd
 
@@ -19,65 +18,93 @@ def _process_nautilus_orders_df(orders_df: pd.DataFrame) -> pd.DataFrame:
     return orders
 
 
-def orders_to_trades(orders_report: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def _split_entries_and_exits(orders: pd.DataFrame) -> tuple[list, list]:
+    """
+    Split filled orders into the legs that opened positions and the legs that closed them.
+
+    Walks the fills in time order tracking the running signed position. Whichever side moves the
+    position off flat opens an "epoch" and fixes that epoch's entry side, so a short epoch counts
+    its sells as entries and its buys as exits.
+
+    An epoch never spans a direction change, because `set_side` (custom/strategies/base.py) refuses
+    to flip unless the position is flat with nothing resting.
+
+    Returns (entries, exits) in time order. Each entry carries the sign of its own epoch, so a run
+    that switched sides midway still prices every trade against the direction it was actually
+    taken in.
+    """
+    entries = []
+    exits = []
+    running_qty = 0
+    entry_side = None
+    for row in orders.itertuples(index=False):
+        if running_qty == 0:
+            entry_side = row.side
+        if row.side == entry_side:
+            sign = 1 if entry_side == "BUY" else -1
+            entries.append((row.ts_last, row.filled_qty, row.avg_px, row.tags, sign))
+        else:
+            exits.append((row.ts_last, row.filled_qty, row.avg_px, row.tags))
+        running_qty += row.filled_qty if row.side == "BUY" else -row.filled_qty
+    return entries, exits
+
+
+def orders_to_trades(orders_report: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     if orders_report.empty:
         return pd.DataFrame(), pd.DataFrame()
     orders = orders_report[orders_report["filled_qty"].astype(int) > 0]
 
     orders = _process_nautilus_orders_df(orders)
-    buys_df = orders[orders["side"] == "BUY"].drop(columns="side")
-    sells_df = orders[(orders["side"] == "SELL")].drop(columns="side")
-    buys = [tuple(row) for row in buys_df.to_numpy()]
-    sells = [tuple(row) for row in sells_df.to_numpy()]
+    entries, exits = _split_entries_and_exits(orders)
     trades = []
-    sell_legs = []
-    for buy_id, (buy_dt, buy_qty, buy_price, b_desc) in enumerate(buys, start=1):
-        qty = buy_qty
-        sell_value = 0
-        latest_sell_dt = buy_dt  # just to initialize
+    exit_legs = []
+    for trade_id, (entry_dt, entry_qty, entry_price, e_desc, sign) in enumerate(entries, start=1):
+        qty = entry_qty
+        exit_value = 0
+        latest_exit_dt = entry_dt  # just to initialize
         record_trade = True  # Only record trades that get completely closed
         while qty > 0:
-            if not sells:
-                print(f"No more sells. Ignoring last buy: {buy_dt} qty {buy_qty} at ${buy_price}.")
+            if not exits:
+                print(f"No more exits. Ignoring last entry: {entry_dt} qty {entry_qty} at ${entry_price}.")
                 record_trade = False
                 break
-            sell_dt, sell_qty, sell_price, s_desc = sells.pop(0)
+            exit_dt, exit_qty, exit_price, x_desc = exits.pop(0)
 
-            latest_sell_dt = max(sell_dt, latest_sell_dt)
+            latest_exit_dt = max(exit_dt, latest_exit_dt)
 
-            if sell_qty > qty:
-                remaining_sell_qty = sell_qty - qty
-                new_sell_row = (sell_dt, remaining_sell_qty, sell_price, s_desc)
-                sells = [new_sell_row, *sells]
-                sell_qty = qty
+            if exit_qty > qty:
+                remaining_exit_qty = exit_qty - qty
+                new_exit_row = (exit_dt, remaining_exit_qty, exit_price, x_desc)
+                exits = [new_exit_row, *exits]
+                exit_qty = qty
 
-            sell_value += sell_qty * sell_price
-            qty -= sell_qty
-            sell_legs += [
+            exit_value += exit_qty * exit_price
+            qty -= exit_qty
+            exit_legs += [
                 dict(
-                    buy_id=buy_id,
-                    desc=s_desc,
-                    dt=sell_dt,
-                    qty=sell_qty,
-                    price=sell_price,
-                    pnl=market_round_3_or_4((sell_price - buy_price) * sell_qty),
+                    trade_id=trade_id,
+                    desc=x_desc,
+                    dt=exit_dt,
+                    qty=exit_qty,
+                    price=exit_price,
+                    pnl=market_round_3_or_4((exit_price - entry_price) * exit_qty * sign),
                 )
             ]
         if record_trade:
-            sell_price = market_round_3_or_4(sell_value / buy_qty)
-            price_diff = market_round_3_or_4(sell_price - buy_price)
+            exit_price = market_round_3_or_4(exit_value / entry_qty)
+            price_diff = market_round_3_or_4(exit_price - entry_price)
             trades += [
                 dict(
-                    buy_id=buy_id,
-                    desc=b_desc,
-                    buy_dt=buy_dt,
-                    sell_dt=latest_sell_dt,
-                    duration=(latest_sell_dt - buy_dt),
-                    qty=buy_qty,
-                    buy_price=buy_price,
-                    avg_sell_price=sell_price,
-                    pnl=market_round_3_or_4(price_diff * buy_qty),
+                    trade_id=trade_id,
+                    desc=e_desc,
+                    entry_dt=entry_dt,
+                    exit_dt=latest_exit_dt,
+                    duration=(latest_exit_dt - entry_dt),
+                    qty=entry_qty,
+                    entry_price=entry_price,
+                    avg_exit_price=exit_price,
+                    pnl=market_round_3_or_4(price_diff * entry_qty * sign),
                 )
             ]
 
-    return pd.DataFrame(trades), pd.DataFrame(sell_legs)
+    return pd.DataFrame(trades), pd.DataFrame(exit_legs)

@@ -15,56 +15,49 @@
 from typing import Any
 
 from nautilus_trader.analysis.statistic import PortfolioStatistic
-from nautilus_trader.model.position import Position
 from nautilus_trader.model.events import OrderFilled
+from nautilus_trader.model.position import Position
+
+
+def _entry_fills(pos: Position) -> list[OrderFilled]:
+    """
+    The fills that OPENED or increased the position.
+
+    Keyed on `pos.entry` (the order side of the fill that opened the position) rather than on
+    BUY, so a short position reports its sells. The opposite side is the exit and must not be
+    counted as size entered.
+    """
+    return [e for e in pos.events if isinstance(e, OrderFilled) and e.order_side == pos.entry]
 
 
 class PnlPer100(PortfolioStatistic):
-
-    def __init__(self, per_x_bought: int = 100):
-        self.per_x_bought = per_x_bought
+    def __init__(self, per_x_entered: int = 100):
+        self.per_x_entered = per_x_entered
 
     def calculate_from_positions(self, positions: list[Position]) -> Any | None:
         if not positions:
             return None
 
-        total_shares_bought = 0
+        total_shares_entered = 0
         total_pnl = 0
         for pos in positions:
             total_pnl += pos.realized_pnl
-            shares_bought = sum(e.last_qty for e in pos.events if isinstance(e, OrderFilled) and e.is_buy)
-            total_shares_bought += shares_bought
+            total_shares_entered += sum(e.last_qty for e in _entry_fills(pos))
 
-        return round(float(total_pnl / total_shares_bought) * 100, 3)
+        # A position that is still open can have no entry fills at all, so this is not dead code.
+        if total_shares_entered == 0:
+            return None
 
-class TotalBought(PortfolioStatistic):
+        return round(float(total_pnl / total_shares_entered) * self.per_x_entered, 3)
 
+
+class TotalEntered(PortfolioStatistic):
     def calculate_from_positions(self, positions: list[Position]) -> Any | None:
         if not positions:
             return None
 
-        total_shares_bought = 0
+        total_shares_entered = 0
         for pos in positions:
-            shares_bought = sum(e.last_qty for e in pos.events if isinstance(e, OrderFilled) and e.is_buy)
-            total_shares_bought += shares_bought
+            total_shares_entered += sum(e.last_qty for e in _entry_fills(pos))
 
-        return int(total_shares_bought)
-
-class AverageBuyPrice(PortfolioStatistic):
-
-    def calculate_from_positions(self, positions: list[Position]) -> Any | None:
-        if not positions:
-            return None
-
-        total_cost = 0
-        total_shares_bought = 0
-        for pos in positions:
-            for e in pos.events:
-                if isinstance(e, OrderFilled) and e.is_buy:
-                    total_cost += float(e.last_px) * float(e.last_qty)
-                    total_shares_bought += float(e.last_qty)
-
-        if total_shares_bought == 0:
-            return None
-
-        return round(total_cost / total_shares_bought, 4)
+        return int(total_shares_entered)

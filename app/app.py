@@ -220,14 +220,17 @@ def get_data():
 
     orders_report, fills, positions, order_durations_list = artifacts_io.get_run_data()
 
-    trades, sell_legs = orders_to_trades(orders_report)
+    trades, exit_legs = orders_to_trades(orders_report)
     analyze_trades(trades, print_report=True)
 
     if not trades.empty:
-        trades["desc"] = trades["buy_id"].astype(str)
+        trades["desc"] = trades["trade_id"].astype(str)
+    # `fills` is sorted by ts_event, and nothing can close a position before one is opened, so the
+    # first fill is always an entry -- that is what tells a short run from a long one.
+    entry_side = fills[0]["side"] if fills else "buy"
     trades_markers = CreateMarkers().create_trades_markers(trades)
     order_markers = CreateMarkers().create_order_markers(order_durations_list)
-    fill_markers = CreateMarkers().create_fill_markers(fills)
+    fill_markers = CreateMarkers().create_fill_markers(fills, entry_side=entry_side)
     markers = sorted(trades_markers + fill_markers + order_markers, key=lambda x: x["time"])
 
     # Markers may not have same time as a tick

@@ -25,8 +25,8 @@ optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout)
 # optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 user_attrs_map = {
-    "total_bought": "Total Bought",
-    "average_buy_price": "Average Buy Price",
+    "total_entered": "Total Entered",
+    "average_entry_price": "Average Entry Price",
     "max_loser": "Max Loser",
     "pnl": "PnL (total)",
 }
@@ -249,16 +249,16 @@ if __name__ == "__main__":
 
     bins = [0, 1.0, 2.0, 3.0, 6.0, float("inf")]
     bin_labels = ["0-1", "1-2", "2-3", "3-6", "6+"]
-    df["price_bin"] = pd.cut(df["average_buy_price"], bins=bins, labels=bin_labels)
+    df["price_bin"] = pd.cut(df["average_entry_price"], bins=bins, labels=bin_labels)
 
     print("=== Avg Value by Param & Price Bin ===")
     for col in param_names:
         table = df.groupby([col, "price_bin"], observed=False)["value"].mean().unstack("price_bin").round(2)
         counts = df.groupby("price_bin").size()
-        avg_bought = df.groupby("price_bin")["total_bought"].mean().round(1)
+        avg_entered = df.groupby("price_bin")["total_entered"].mean().round(1)
         print(f"\n--- {col} ---")
         print(f"{'trials':>30s}  {counts.to_dict()}")
-        print(f"{'avg_total_bought':>30s}  {avg_bought.to_dict()}")
+        print(f"{'avg_total_entered':>30s}  {avg_entered.to_dict()}")
         print(table)
     print()
 

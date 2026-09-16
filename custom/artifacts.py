@@ -418,32 +418,32 @@ class CreateMarkers:
             time=dt, position="aboveBar", color=color, shape="circle", text=text, price=market_round(price), size=0.0
         )
 
-    def create_trades_markers(self, trades, sell_legs=None):
+    def create_trades_markers(self, trades, exit_legs=None):
         if trades.empty:
             print("No trades to create markers for")
             return []
-        trades = trades[trades["avg_sell_price"] > 0]
+        trades = trades[trades["avg_exit_price"] > 0]
 
         price_markers = []
 
         for _, ser in trades.iterrows():
-            # Buy markers
+            # Entry markers (the opening leg -- a buy when long, a sell when short)
             text = f"{ser['desc']}|{ser['qty']}"
-            price_markers.append(self._arrow_above(ser["buy_dt"], ser["buy_price"], Colors.ORANGE, text))
+            price_markers.append(self._arrow_above(ser["entry_dt"], ser["entry_price"], Colors.ORANGE, text))
 
             # Trade ending markers
             price_markers.append(
                 self._arrow_above(
-                    dt=ser["sell_dt"],
+                    dt=ser["exit_dt"],
                     color=(Colors.RED if ser["pnl"] < 0 else Colors.GREEN),
                     text=f"{ser['desc']}|{ser['pnl']}",
-                    price=ser["avg_sell_price"],
+                    price=ser["avg_exit_price"],
                 )
             )
 
-        if sell_legs is not None:
-            # Sell leg markers
-            for _, ser in sell_legs.iterrows():
+        if exit_legs is not None:
+            # Exit leg markers
+            for _, ser in exit_legs.iterrows():
                 color = Colors.RED if ser["pnl"] < 0 else Colors.GREEN
                 text = f"{ser['qty']}"
                 price_markers.append(self._arrow_below(dt=ser["dt"], color=color, text=text, price=ser["price"]))
@@ -451,13 +451,19 @@ class CreateMarkers:
         price_markers.sort(key=lambda x: x["time"])
         return price_markers
 
-    def create_fill_markers(self, fills):
+    def create_fill_markers(self, fills, entry_side="buy"):
+        """
+        Mark every fill, entry-side fills in YELLOW and exit-side in BLUE.
+
+        `entry_side` is "buy" for a long run and "sell" for a short one; keying the colours on the
+        venue side directly would paint a short's entries in the exit colour.
+        """
         if len(fills) == 0:
             print("No fills to create markers for")
             return []
         markers = []
         for fill in fills:
-            color = Colors.YELLOW if fill["side"] == "buy" else Colors.BLUE
+            color = Colors.YELLOW if fill["side"] == entry_side else Colors.BLUE
             markers.append(
                 self._arrow_below(
                     dt=fill["ts_event"],
