@@ -1,4 +1,5 @@
 import random
+from datetime import time
 from enum import StrEnum
 
 import pandas as pd
@@ -51,9 +52,23 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     simple_take: bool = False
     trailing_take: bool = False
     num_exit_tiers: int = 1
+    # "HH:MM" in US/Eastern. Once the clock reaches this time no new entries are placed for the
+    # rest of the day; exits keep running. None disables the cutoff.
+    stop_entries_after: str | None = None
 
     print_update_every_secs: int = None
     allow_trades: bool = True
+
+
+def parse_est_time(value: str | None) -> time | None:
+    """Parse an "HH:MM" wall-clock string into a `time`, or None when no value is given."""
+    if value is None:
+        return None
+    try:
+        hour, minute = (int(part) for part in value.split(":"))
+        return time(hour=hour, minute=minute)
+    except (ValueError, TypeError):
+        raise ValueError(f"Expected a time formatted as 'HH:MM' (e.g. '09:31'), got {value!r}") from None
 
 
 def is_market_open(now_utc: pd.Timestamp) -> bool:
@@ -78,6 +93,8 @@ class MomoStrategy(BaseStrategy):
 
         self.direction_strategy = DirectionStrategy(self.config.direction_strategy)
         self.direction_threshold = DirectionThreshold(self.config.direction_threshold)
+
+        self._stop_entries_after: time | None = parse_est_time(self.config.stop_entries_after)
 
         self.take_profit = self.config.take_profit if self.config.take_profit is not None else self.config.stop_loss
         self.market_open_only = True
@@ -244,6 +261,8 @@ class MomoStrategy(BaseStrategy):
         if self.config.only_buy_if_macd_positive:
             if not self.macd.initialized or self.macd.value < 0:
                 allow_entries = False
+        if self._entries_stopped_for_the_day():
+            allow_entries = False
 
         # ENTRY LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         if (
@@ -300,6 +319,13 @@ class MomoStrategy(BaseStrategy):
                         take_price = self.last_entry_price - self.take_profit
 
                     self.exit(exposure, limit_price=take_price, tag="simple")
+
+    def _entries_stopped_for_the_day(self) -> bool:
+        """True once the Eastern wall clock has reached `stop_entries_after`."""
+        if self._stop_entries_after is None:
+            return False
+        now_est = self.clock.utc_now().tz_convert("US/Eastern")
+        return now_est.time() >= self._stop_entries_after
 
     def _rolling_tiered_take(self):
         exposure_qty = self.exposure

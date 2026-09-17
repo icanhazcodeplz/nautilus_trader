@@ -167,6 +167,7 @@ if __name__ == "__main__":
             trailing_entry_order=False,
             random_entry=False,
             random_seed=1,
+            stop_entries_after="09:31",
             # --- TOP GAINERS PARAMS ----------------
             # price_min=0.8,
             # price_max=20.0,

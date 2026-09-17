@@ -13,7 +13,7 @@ import pandas as pd
 import pytest
 
 from custom.strategies._side import Side
-from custom.strategies.momo import DirectionStrategy, DirectionThreshold, MomoStrategy
+from custom.strategies.momo import DirectionStrategy, DirectionThreshold, MomoStrategy, parse_est_time
 
 
 CONFIRM = 3  # Small enough to step through by hand
@@ -354,12 +354,13 @@ def test_no_cancels_are_issued_before_the_flip_arms():
 # ---------------------------------------------------------------------------
 
 
-def _tick_strategy(flipping, market_open_only=False, now=POST_OPEN):
+def _tick_strategy(flipping, market_open_only=False, now=POST_OPEN, stop_entries_after=None):
     """A MomoStrategy mock wired for the real _on_trade_tick."""
     s = MagicMock(spec=MomoStrategy)
     s._stopping_out = False
     s._flipping = flipping
     s.market_open_only = market_open_only
+    s._stop_entries_after = parse_est_time(stop_entries_after)
     s.is_long = True
     s.is_short = False
     s.exposure = 100
@@ -385,6 +386,7 @@ def _tick_strategy(flipping, market_open_only=False, now=POST_OPEN):
     s.clock.timestamp_ns.return_value = 10**12
     s.clock.utc_now.return_value = now
     s._on_first_tick = MagicMock()
+    s._entries_stopped_for_the_day = MomoStrategy._entries_stopped_for_the_day.__get__(s, MomoStrategy)
     s._flip_side_if_needed = MagicMock()  # exercised on its own above
     s._rolling_tiered_take = MagicMock()
     s.enter = MagicMock()
@@ -443,3 +445,43 @@ def test_open_threshold_trades_normally_after_the_open():
     s = _tick_strategy(flipping=False, market_open_only=True, now=POST_OPEN)
     s._on_trade_tick(MagicMock(price=8.0))
     s.enter.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# stop_entries_after: no new entries once the ET clock reaches the cutoff
+# ---------------------------------------------------------------------------
+
+
+def _et(hhmm):
+    return pd.Timestamp(f"2026-03-10 {hhmm}", tz="US/Eastern").tz_convert("UTC")
+
+
+def test_entries_allowed_before_the_cutoff():
+    s = _tick_strategy(flipping=False, now=_et("09:30:59"), stop_entries_after="09:31")
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.enter.assert_called_once()
+
+
+def test_entries_blocked_at_and_after_the_cutoff():
+    for hhmm in ("09:31:00", "09:31:01", "15:59:00"):
+        s = _tick_strategy(flipping=False, now=_et(hhmm), stop_entries_after="09:31")
+        s._on_trade_tick(MagicMock(price=8.0))
+        s.enter.assert_not_called(), hhmm
+
+
+def test_exit_ladder_keeps_running_after_the_cutoff():
+    s = _tick_strategy(flipping=False, now=_et("10:00:00"), stop_entries_after="09:31")
+    s._on_trade_tick(MagicMock(price=8.0))
+    s._rolling_tiered_take.assert_called_once()
+
+
+def test_no_cutoff_when_unset():
+    s = _tick_strategy(flipping=False, now=_et("15:59:00"), stop_entries_after=None)
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.enter.assert_called_once()
+
+
+@pytest.mark.parametrize("bad", ["9", "09:31:00", "nine", "25:00"])
+def test_bad_cutoff_string_is_rejected(bad):
+    with pytest.raises(ValueError):
+        parse_est_time(bad)
