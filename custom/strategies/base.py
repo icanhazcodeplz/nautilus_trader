@@ -18,6 +18,7 @@ from nautilus_trader.common.enums import LogColor
 from nautilus_trader.config import StrategyConfig
 from nautilus_trader.core.data import Data
 from nautilus_trader.core.message import Event
+from nautilus_trader.indicators.base import Indicator
 from nautilus_trader.model.book import OrderBook
 from nautilus_trader.model.data import BarType, Bar
 from nautilus_trader.model.data import OrderBookDeltas
@@ -86,6 +87,7 @@ class BaseStrategy(Strategy):
         self._total_entry_qty = 0
 
         self._stopping_out = False
+        self._flipping = False  # Waiting to go flat so set_side() can switch.
         self._last_stop_out_attempt = 0
         self._exec_engine = None  # Set by run_utils after node.build()
         self._force_reconcile_count = 0
@@ -141,6 +143,11 @@ class BaseStrategy(Strategy):
         Multiply a raw signed quantity by this to express it in the direction we intend to trade.
         """
         return 1 if self._side == Side.LONG else -1
+
+    @property
+    def direction_value(self) -> int:
+        """+1 when long, -1 when short. Saved per tick as a metric so the side can be charted."""
+        return self._side_sign
 
     @property
     def _entry_order_side(self) -> OrderSide:
@@ -451,8 +458,9 @@ class BaseStrategy(Strategy):
         """
         Shared body of _buy/_sell.
 
-        The trading_enabled and _stopping_out guards apply only when this order would OPEN the
-        position. Exits must always be allowed through, which is the whole point of stopping out.
+        The trading_enabled, _stopping_out and _flipping guards apply only when this order would
+        OPEN the position. Exits must always be allowed through, which is the whole point of
+        stopping out -- and of flipping, which gets flat by letting the existing exits fill.
         """
         is_entry = side == self._entry_order_side
         if is_entry:
@@ -461,6 +469,9 @@ class BaseStrategy(Strategy):
                 return
             if self._stopping_out:
                 self.log.info("Ignoring entry request because self._stopping_out is True")
+                return
+            if self._flipping:
+                self.log.info("Ignoring entry request because self._flipping is True")
                 return
             max_qty = self._max_entry_qty_allowed()
             reason = f"to avoid exceeding max position of {self.max_position_allowed}"
@@ -821,7 +832,10 @@ class BaseStrategy(Strategy):
         # Register indicators and request historical trade ticks if needed
         max_tick_lookback = self.MIN_TICK_LOOKBACK
         for metric in self.metrics_to_save_on_tick:
-            self.register_indicator_for_trade_ticks(self.config.instrument_id, metric.obj)
+            # A metric can also read plain attributes off a non-indicator object (e.g. the
+            # strategy itself); only real indicators get fed ticks by the engine.
+            if isinstance(metric.obj, Indicator):
+                self.register_indicator_for_trade_ticks(self.config.instrument_id, metric.obj)
             max_tick_lookback = max(max_tick_lookback, metric.tick_lookback)
 
         if max_tick_lookback > 0:

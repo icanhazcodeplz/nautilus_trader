@@ -45,6 +45,7 @@ class _FakeStrategy(BaseStrategy):
         self.stop_price = None
         self._trading_enabled = True
         self._stopping_out = False
+        self._flipping = False
         self._last_stop_out_attempt = 0
         self._last_wrong_way_flatten_ns = 0
         self._trader_helper = None
@@ -183,6 +184,19 @@ def test_exit_is_never_blocked_by_stopping_out_but_entry_is():
     for side, pos in (("long", 500), ("short", -500)):
         s = _FakeStrategy(side, position_qty=pos)
         s._stopping_out = True
+
+        s.enter(100, 10.0, tag="t")
+        assert s._submit_limit_order.call_count == 0, f"{side}: entry should be blocked"
+
+        s.exit(100, 10.0, tag="t")
+        assert s._submit_limit_order.call_count == 1, f"{side}: exit should go through"
+
+
+def test_exit_is_never_blocked_by_flipping_but_entry_is():
+    """A flip reaches flat by letting the exits fill, so blocking them would deadlock it."""
+    for side, pos in (("long", 500), ("short", -500)):
+        s = _FakeStrategy(side, position_qty=pos)
+        s._flipping = True
 
         s.enter(100, 10.0, tag="t")
         assert s._submit_limit_order.call_count == 0, f"{side}: entry should be blocked"

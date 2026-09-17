@@ -308,9 +308,10 @@ def get_data():
             # dict(key="allow_trading", color="#e70f0f", color_negative=baby_blue, width=1, type=1),
             # dict(key="macd_value", color="#e70f0f", color_negative=baby_blue, width=1, type=1),
             # dict(key="pnl", color="green", color_negative="red", width=1, type=1),
+            dict(key="direction_value", color="green", color_negative="red", width=1, type=1),
         ],
         TickChart3Lines=[
-            # dict(key="position", color="#e70f0f", color_negative=baby_blue, width=1, type=1),
+            dict(key="position", color="#e70f0f", color_negative=baby_blue, width=1, type=1),
         ],
         VertLines=vert_lines,
         HorizLines=create_horiz_lines_items(ticks),

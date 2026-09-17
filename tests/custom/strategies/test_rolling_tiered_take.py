@@ -53,8 +53,8 @@ def _make_strategy(position_qty, open_sells, num_exit_tiers, direction="long", b
     s.instrument.make_price = lambda p: Price.from_str(f"{p:.2f}")
     s.clock.timestamp_ns.return_value = 0
     s.entry_orders_count = 0
-    # Start the sell-diff timer unarmed so the fallback order is not placed on the first pass
-    s._sell_diff_start_ns = None
+    # Start the exit-diff timer unarmed so the fallback order is not placed on the first pass
+    s._exit_diff_start_ns = None
     return s
 
 

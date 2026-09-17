@@ -1,4 +1,5 @@
 import random
+from enum import StrEnum
 
 import pandas as pd
 
@@ -7,10 +8,23 @@ from custom.strategies._side import Side
 from custom.strategies.base import BaseStrategy, BaseStrategyConfig
 from custom.strategies._exit_tiers import ExitTiers
 from custom.strategies.metric import Metric
+from nautilus_trader.common.enums import LogColor
 from nautilus_trader.indicators.trend import MACDHistogram
 from nautilus_trader.model.data import TradeTick
 from nautilus_trader.model.enums import OrderStatus
 from nautilus_trader.model.identifiers import InstrumentId
+
+
+class DirectionStrategy(StrEnum):
+    LONG_ONLY = "long_only"
+    SHORT_ONLY = "short_only"
+    REVERSION = "reversion"  # Above the threshold -> SHORT, below -> LONG
+    MOMENTUM = "momentum"  # Above the threshold -> LONG, below -> SHORT
+
+
+class DirectionThreshold(StrEnum):
+    ROLLING_VWAP = "rolling_vwap"
+    OPEN = "open"  # First tick price at/after the market open; trading is blocked before then
 
 
 class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
@@ -18,25 +32,27 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     trade_size: int
     max_position_multiplier: int
     stop_loss: float
-
     take_profit: float
+
     lower_scalar_multiplier: float = 1.0
     upper_scalar_multiplier: float = 1.0
     vwap_window: int = 150
     variance_window: int = 300
     outer_band_multiplier: float = 1.0
     pressure_window: int = 50
+    rolling_vwap_window: int = 1000
 
-    flip_side_on: str = "long_only"
-    rolling_vwap_window: int = 300
+    direction_strategy: DirectionStrategy = DirectionStrategy.LONG_ONLY
+    direction_threshold: DirectionThreshold = DirectionThreshold.OPEN
+    flip_side_confirm_ticks: int = 50
     only_buy_if_macd_positive: bool = False
     trailing_entry_order: bool = False
     random_entry: bool = False
     simple_take: bool = False
     trailing_take: bool = False
     num_exit_tiers: int = 1
-    print_update_every_secs: int = None
 
+    print_update_every_secs: int = None
     allow_trades: bool = True
 
 
@@ -59,9 +75,12 @@ class MomoStrategy(BaseStrategy):
 
         if sum([self.config.trailing_entry_order, self.config.random_entry]) > 1:
             raise ValueError("Cannot use more than one of trailing_entry_order, random_entry")
-        # FIXME: This is temporary
+
+        self.direction_strategy = DirectionStrategy(self.config.direction_strategy)
+        self.direction_threshold = DirectionThreshold(self.config.direction_threshold)
+
         self.take_profit = self.config.take_profit if self.config.take_profit is not None else self.config.stop_loss
-        self.market_open_only = False
+        self.market_open_only = True
 
         # self.vwap = PressureVWAPBands(
         self.vwap = VWAPBands(
@@ -93,6 +112,7 @@ class MomoStrategy(BaseStrategy):
                 ],
             ),
             Metric(obj=self.rolling_vwap, name="rolling_vwap", attrs=["value"]),
+            Metric(obj=self, name="", attrs=["direction_value"]),
         ]
         if self.config.only_buy_if_macd_positive:
             self.metrics_to_save_on_1min.append(Metric(obj=self.macd, name="macd", attrs=["value"]))
@@ -101,19 +121,25 @@ class MomoStrategy(BaseStrategy):
 
         self.metrics = []
 
-        self._sell_diff_start_ns: int | None = None
+        self._exit_diff_start_ns: int | None = None
         self._last_exit_adjustment_ns: int | None = None
         self._last_entry_adjustment_ns: int | None = None
         self._completed_first_tick_logic: bool = False
+
+        self._pending_side_signal: Side | None = None
+        self._side_signal_count: int = 0
+        self._direction_threshold_value: float | None = None
 
     def _on_first_tick(self, tick: TradeTick):
         if self._completed_first_tick_logic:
             return
 
-        if self.config.flip_side_on == "long_only":
+        if self.direction_strategy == DirectionStrategy.LONG_ONLY:
             self.set_side(Side.LONG)
-        elif self.config.flip_side_on == "short_only":
+        elif self.direction_strategy == DirectionStrategy.SHORT_ONLY:
             self.set_side(Side.SHORT)
+        else:
+            pass
         if self._last_exit_adjustment_ns is None:
             self._last_exit_adjustment_ns = self.clock.timestamp_ns()
         if self._last_entry_adjustment_ns is None:
@@ -121,12 +147,87 @@ class MomoStrategy(BaseStrategy):
 
         self._completed_first_tick_logic = True
 
+    def _update_direction_threshold(self, tick: TradeTick) -> None:
+        if self.direction_threshold == DirectionThreshold.ROLLING_VWAP:
+            # `initialized` is True after one tick, which says nothing about how much data is
+            # behind `value`. Wait for a full window before acting on it.
+            if self.rolling_vwap.window_full:
+                self._direction_threshold_value = self.rolling_vwap.value
+        elif self.direction_threshold == DirectionThreshold.OPEN:
+            # The first tick seen at/after the open. Set once, never reset (single-day runs).
+            if self._direction_threshold_value is None and is_market_open(self.clock.utc_now()):
+                self._direction_threshold_value = float(tick.price)
+
+    def _flip_side_if_needed(self, tick: TradeTick) -> None:
+        """
+        `set_side` only switches while flat with nothing resting, so a flip is two phases. Phase
+        one sets `_flipping`, which blocks new entries and cancels the resting ones while the
+        existing exits are left to fill on their own. Phase two switches the side, and only once
+        the position is confirmed flat -- flipping `_side` with stock still on means `exposure`
+        goes negative, which sends `_rolling_tiered_take` into reconciliation and trips the
+        wrong-way flatten in `_reconcile`.
+
+        The signal compares the tick price to the direction threshold; `direction_strategy`
+        decides which side "above" means. A tick exactly on the threshold is ignored: it neither
+        advances nor resets the confirm counter.
+        """
+        # Always tracked, even when the side is fixed, so the threshold can be charted.
+        self._update_direction_threshold(tick)
+        if self.direction_strategy in (DirectionStrategy.LONG_ONLY, DirectionStrategy.SHORT_ONLY):
+            return
+        threshold = self._direction_threshold_value
+        if threshold is None:
+            return
+
+        price = float(tick.price)
+        if price != threshold:
+            self._count_side_signal(self._signal_for(price > threshold))
+
+        if not self._flipping:
+            return
+
+        # Entries would deepen the position we are trying to close out of. Re-issued every tick
+        # rather than once: cancel_open_order is a silent no-op until the venue id lands, and a
+        # rejected cancel can put the order back (see on_order_event in base).
+        for order in self.open_entries:
+            self.cancel_open_order(order)
+
+        if self.position_qty == 0 and len(self.open_orders) == 0:
+            self.set_side(self._pending_side_signal)
+            self._flipping = False
+
+    def _signal_for(self, above_threshold: bool) -> Side:
+        if self.direction_strategy == DirectionStrategy.REVERSION:
+            return Side.SHORT if above_threshold else Side.LONG
+        return Side.LONG if above_threshold else Side.SHORT  # MOMENTUM
+
+    def _count_side_signal(self, signal: Side) -> None:
+        if signal == self._pending_side_signal:
+            self._side_signal_count += 1
+        else:
+            self._pending_side_signal = signal
+            self._side_signal_count = 1
+
+        if self._side_signal_count >= self.config.flip_side_confirm_ticks:
+            # One rule arms and disarms, so calling off a flip costs the same N ticks as starting
+            # one. Without that symmetry a single tick back across the line would un-arm a flip
+            # that has already canceled its entries, and the pair would thrash near the signal line.
+            was_flipping = self._flipping
+            self._flipping = signal != self._side
+            if was_flipping and not self._flipping:
+                # `signal` is the side we just reconfirmed, i.e. the one we already are -- the
+                # abandoned flip was to its opposite, so don't name `signal` as the target here.
+                self.log.info(f"Flip called off; staying '{self._side}'", color=LogColor.YELLOW)
+            elif self._flipping and not was_flipping:
+                self.log.info(f"Flipping from '{self._side}' to '{signal}'", color=LogColor.YELLOW)
+
     def _on_trade_tick(self, tick: TradeTick) -> None:
         self._on_first_tick(tick)
         # self.log.info(f"Trade tick: {tick}")
         # NOTE: Need to be subscribed to order book deltas to get best bid/ask prices
         # ob = self.cache.order_book(self.config.instrument_id)
         # best_bid = ob.best_bid_price()
+        self._flip_side_if_needed(tick)
         if self.market_open_only and not is_market_open(self.clock.utc_now()):
             return
 
@@ -137,6 +238,8 @@ class MomoStrategy(BaseStrategy):
 
         allow_entries = True
         if self._stopping_out:
+            allow_entries = False
+        if self._flipping:
             allow_entries = False
         if self.config.only_buy_if_macd_positive:
             if not self.macd.initialized or self.macd.value < 0:

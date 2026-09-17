@@ -8,7 +8,10 @@ class Metric:
     attrs: list[str]
 
     def get_vals(self):
-        return {f"{self.name}_{attr}": getattr(self.obj, attr) for attr in self.attrs}
+        # An empty name records each attr under its own name, for attrs that already read well
+        # as a column (e.g. a strategy's `direction_value`).
+        prefix = f"{self.name}_" if self.name else ""
+        return {f"{prefix}{attr}": getattr(self.obj, attr) for attr in self.attrs}
 
     @property
     def tick_lookback(self):

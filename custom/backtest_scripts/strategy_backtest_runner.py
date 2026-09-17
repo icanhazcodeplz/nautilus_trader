@@ -15,7 +15,7 @@ from custom.backtest_utils.load_catalog_data import load_catalog_data_to_engine
 from custom.backtest_utils.prepare_top_gainers import get_allow_trading_times_for_candidate
 from custom.backtest_utils.prepare_top_gainers import parse_candidate_str
 from custom.strategies.base import BaseStrategy
-from custom.strategies.momo import MomoStrategy
+from custom.strategies.momo import MomoStrategy, DirectionStrategy, DirectionThreshold
 from custom.strategies.momo import MomoStrategyConfig
 from custom.strategies.open_fade import OpenFade
 from custom.strategies.open_fade import OpenFadeConfig
@@ -149,20 +149,21 @@ if __name__ == "__main__":
             allow_trades=True,
             max_position_multiplier=1,
             trade_size=50,
-            stop_loss=0.5,
+            stop_loss=0.50,
             take_profit=None,
             upper_scalar_multiplier=0.5,
             lower_scalar_multiplier=0.5,
-            rolling_vwap_window=1000,
+            rolling_vwap_window=2000,
             vwap_window=150,
             variance_window=300,
             outer_band_multiplier=2.5,
             pressure_window=25,
             only_buy_if_macd_positive=False,
-            flip_side_on="short_only",
+            direction_strategy=DirectionStrategy.REVERSION,
+            direction_threshold=DirectionThreshold.ROLLING_VWAP,
             simple_take=True,
             trailing_take=False,
-            num_exit_tiers=3,
+            num_exit_tiers=2,
             trailing_entry_order=False,
             random_entry=False,
             random_seed=1,
@@ -190,9 +191,9 @@ if __name__ == "__main__":
     # )
 
     symbol = "AMZN"
-    day_str = "2026-08-13"
+    day_str = "2026-08-14"
     start_str = day_str + " " + "09:20-04:00"
-    end_str__ = day_str + " " + "09:38-04:00"
+    end_str__ = day_str + " " + "09:36-04:00"
     run_single_backtest(
         symbol,
         start_str,

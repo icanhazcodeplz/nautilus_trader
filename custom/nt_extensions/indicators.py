@@ -408,6 +408,16 @@ class RollingVWAP(Indicator):
         self._volumes = deque(maxlen=rolling_window)
         self.value = None
 
+    @property
+    def window_full(self) -> bool:
+        """
+        Whether the window holds a full `rolling_window` of trades.
+
+        `initialized` goes True on the very first tick, so it says nothing about how much data
+        backs `value`. Callers that need a meaningful VWAP should wait on this instead.
+        """
+        return len(self._trade_values) == self._trade_values.maxlen
+
     def handle_trade_tick(self, tick: TradeTick):
         self.update_raw(price=float(tick.price), volume=float(tick.size))
 
