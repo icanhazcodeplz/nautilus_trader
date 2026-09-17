@@ -55,6 +55,10 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     # "HH:MM" in US/Eastern. Once the clock reaches this time no new entries are placed for the
     # rest of the day; exits keep running. None disables the cutoff.
     stop_entries_after: str | None = None
+    # Price distance from the direction threshold. With `reversion`, entries are blocked while the
+    # price is within this band of the threshold. With `momentum`, entries are only allowed while
+    # the price is within it. None disables the band; long_only/short_only ignore it.
+    entry_exclusion_band: float | None = None
 
     print_update_every_secs: int = None
     allow_trades: bool = True
@@ -95,6 +99,9 @@ class MomoStrategy(BaseStrategy):
         self.direction_threshold = DirectionThreshold(self.config.direction_threshold)
 
         self._stop_entries_after: time | None = parse_est_time(self.config.stop_entries_after)
+        if self.config.entry_exclusion_band is not None and self.config.entry_exclusion_band < 0:
+            raise ValueError(f"entry_exclusion_band must be >= 0 or None, got {self.config.entry_exclusion_band!r}")
+        self._entry_exclusion_band: float | None = self.config.entry_exclusion_band
 
         self.take_profit = self.config.take_profit if self.config.take_profit is not None else self.config.stop_loss
         self.market_open_only = True
@@ -263,6 +270,8 @@ class MomoStrategy(BaseStrategy):
                 allow_entries = False
         if self._entries_stopped_for_the_day():
             allow_entries = False
+        if self._entry_blocked_by_exclusion_band(float(price)):
+            allow_entries = False
 
         # ENTRY LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         if (
@@ -326,6 +335,22 @@ class MomoStrategy(BaseStrategy):
             return False
         now_est = self.clock.utc_now().tz_convert("US/Eastern")
         return now_est.time() >= self._stop_entries_after
+
+    def _entry_blocked_by_exclusion_band(self, price: float) -> bool:
+        """Apply `entry_exclusion_band` around the direction threshold."""
+        band = self._entry_exclusion_band
+        if band is None:
+            return False
+        threshold = self._direction_threshold_value
+        if self.direction_strategy == DirectionStrategy.REVERSION:
+            # Reversion fades the threshold, so entries right on top of it are the low-edge ones
+            # and get blocked. No threshold yet means nothing to measure against, so unaffected.
+            return threshold is not None and abs(price - threshold) <= band
+        if self.direction_strategy == DirectionStrategy.MOMENTUM:
+            # Momentum wants to join a move away from the threshold, so only entries still close
+            # to it are allowed. No threshold yet means an entry cannot qualify.
+            return threshold is None or abs(price - threshold) > band
+        return False
 
     def _rolling_tiered_take(self):
         exposure_qty = self.exposure

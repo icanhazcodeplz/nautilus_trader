@@ -354,13 +354,24 @@ def test_no_cancels_are_issued_before_the_flip_arms():
 # ---------------------------------------------------------------------------
 
 
-def _tick_strategy(flipping, market_open_only=False, now=POST_OPEN, stop_entries_after=None):
+def _tick_strategy(
+    flipping,
+    market_open_only=False,
+    now=POST_OPEN,
+    stop_entries_after=None,
+    direction_strategy=DirectionStrategy.LONG_ONLY,
+    threshold=None,
+    entry_exclusion_band=None,
+):
     """A MomoStrategy mock wired for the real _on_trade_tick."""
     s = MagicMock(spec=MomoStrategy)
     s._stopping_out = False
     s._flipping = flipping
     s.market_open_only = market_open_only
     s._stop_entries_after = parse_est_time(stop_entries_after)
+    s.direction_strategy = direction_strategy
+    s._direction_threshold_value = threshold
+    s._entry_exclusion_band = entry_exclusion_band
     s.is_long = True
     s.is_short = False
     s.exposure = 100
@@ -387,6 +398,7 @@ def _tick_strategy(flipping, market_open_only=False, now=POST_OPEN, stop_entries
     s.clock.utc_now.return_value = now
     s._on_first_tick = MagicMock()
     s._entries_stopped_for_the_day = MomoStrategy._entries_stopped_for_the_day.__get__(s, MomoStrategy)
+    s._entry_blocked_by_exclusion_band = MomoStrategy._entry_blocked_by_exclusion_band.__get__(s, MomoStrategy)
     s._flip_side_if_needed = MagicMock()  # exercised on its own above
     s._rolling_tiered_take = MagicMock()
     s.enter = MagicMock()
@@ -485,3 +497,74 @@ def test_no_cutoff_when_unset():
 def test_bad_cutoff_string_is_rejected(bad):
     with pytest.raises(ValueError):
         parse_est_time(bad)
+
+
+# ---------------------------------------------------------------------------
+# entry_exclusion_band: a price band around the direction threshold
+# ---------------------------------------------------------------------------
+# The tick helper is long with vwap.low=9.0, so a price of 8.0 would normally enter. The
+# threshold is placed relative to that price to put it inside or outside the band.
+
+
+def _band_strategy(direction_strategy, threshold, band=0.5):
+    return _tick_strategy(
+        flipping=False,
+        direction_strategy=direction_strategy,
+        threshold=threshold,
+        entry_exclusion_band=band,
+    )
+
+
+@pytest.mark.parametrize("threshold", [8.0, 8.5, 7.5])  # on it, and exactly at each edge
+def test_reversion_blocks_entries_within_the_band(threshold):
+    s = _band_strategy(DirectionStrategy.REVERSION, threshold)
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.enter.assert_not_called()
+
+
+@pytest.mark.parametrize("threshold", [8.51, 7.49])
+def test_reversion_allows_entries_outside_the_band(threshold):
+    s = _band_strategy(DirectionStrategy.REVERSION, threshold)
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.enter.assert_called_once()
+
+
+@pytest.mark.parametrize("threshold", [8.0, 8.5, 7.5])
+def test_momentum_allows_entries_within_the_band(threshold):
+    s = _band_strategy(DirectionStrategy.MOMENTUM, threshold)
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.enter.assert_called_once()
+
+
+@pytest.mark.parametrize("threshold", [8.51, 7.49])
+def test_momentum_blocks_entries_outside_the_band(threshold):
+    s = _band_strategy(DirectionStrategy.MOMENTUM, threshold)
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.enter.assert_not_called()
+
+
+def test_reversion_is_unaffected_before_the_threshold_exists():
+    s = _band_strategy(DirectionStrategy.REVERSION, threshold=None)
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.enter.assert_called_once()
+
+
+def test_momentum_cannot_enter_before_the_threshold_exists():
+    s = _band_strategy(DirectionStrategy.MOMENTUM, threshold=None)
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.enter.assert_not_called()
+
+
+@pytest.mark.parametrize("mode", [DirectionStrategy.LONG_ONLY, DirectionStrategy.SHORT_ONLY])
+def test_fixed_sides_ignore_the_band(mode):
+    s = _band_strategy(mode, threshold=8.0)
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.enter.assert_called_once()
+
+
+def test_no_band_means_no_effect():
+    s = _tick_strategy(
+        flipping=False, direction_strategy=DirectionStrategy.MOMENTUM, threshold=100.0, entry_exclusion_band=None
+    )
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.enter.assert_called_once()

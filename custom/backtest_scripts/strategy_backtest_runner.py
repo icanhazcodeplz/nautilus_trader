@@ -149,8 +149,8 @@ if __name__ == "__main__":
             allow_trades=True,
             max_position_multiplier=1,
             trade_size=50,
-            stop_loss=0.50,
-            take_profit=None,
+            stop_loss=3.0,
+            take_profit=0.5,
             upper_scalar_multiplier=0.5,
             lower_scalar_multiplier=0.5,
             rolling_vwap_window=2000,
@@ -160,7 +160,7 @@ if __name__ == "__main__":
             pressure_window=25,
             only_buy_if_macd_positive=False,
             direction_strategy=DirectionStrategy.REVERSION,
-            direction_threshold=DirectionThreshold.ROLLING_VWAP,
+            direction_threshold=DirectionThreshold.OPEN,
             simple_take=True,
             trailing_take=False,
             num_exit_tiers=2,
@@ -168,6 +168,7 @@ if __name__ == "__main__":
             random_entry=False,
             random_seed=1,
             stop_entries_after="09:31",
+            entry_exclusion_band=0.5
             # --- TOP GAINERS PARAMS ----------------
             # price_min=0.8,
             # price_max=20.0,
@@ -192,7 +193,7 @@ if __name__ == "__main__":
     # )
 
     symbol = "AMZN"
-    day_str = "2026-08-14"
+    day_str = "2026-08-13"
     start_str = day_str + " " + "09:20-04:00"
     end_str__ = day_str + " " + "09:36-04:00"
     run_single_backtest(
