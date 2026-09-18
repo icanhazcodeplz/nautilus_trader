@@ -24,7 +24,7 @@ OPTUNA_DB_DIR = "optuna_dbs"
 optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
 # optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-user_attrs_map = {
+custom_metrics_attrs_map = {
     "total_entered": "Total Entered",
     "average_entry_price": "Average Entry Price",
     "max_loser": "Max Loser",
@@ -106,7 +106,7 @@ def optimize(trial):
         dataset, "momo", params, artifacts_location=None, log_level="ERROR"
     )
     try:
-        for col_name, p_stat_name in user_attrs_map.items():
+        for col_name, p_stat_name in custom_metrics_attrs_map.items():
             trial.set_user_attr(col_name, performance_stats[p_stat_name])
 
         value = performance_stats["Pnl Per100"]
@@ -214,7 +214,7 @@ if __name__ == "__main__":
 
     param_names = list(search_space.keys())
     rename_map = {f"params_{p}": p for p in param_names}
-    rename_map = {**rename_map, **{f"user_attrs_{u}": u for u in user_attrs_map.keys()}}
+    rename_map = {**rename_map, **{f"user_attrs_{u}": u for u in custom_metrics_attrs_map.keys()}}
 
     if MAKE_RESULTS_PICKLE:
         all_dfs = []
@@ -230,7 +230,7 @@ if __name__ == "__main__":
         df = pd.concat(all_dfs)
         df = df[df["state"] == "COMPLETE"]
         df = df.rename(columns=rename_map)
-        df = df[["value", "dataset", *param_names, *user_attrs_map.keys()]]
+        df = df[["value", "dataset", *param_names, *custom_metrics_attrs_map.keys()]]
         df = df[~df.duplicated()]
         df = df[df["value"] != -1.0]
         df.to_pickle(f"{OPTUNA_DB_DIR}/{study_name}.pkl")
@@ -243,7 +243,7 @@ if __name__ == "__main__":
     param_names = [p for p in param_names if p not in single_value_cols]
 
     print("=== Avg Value per Dataset ===")
-    agg_cols = ["value", *user_attrs_map.keys()]
+    agg_cols = ["value", *custom_metrics_attrs_map.keys()]
     print(df.groupby("dataset")[agg_cols].mean().round(2).sort_values("value").to_string())
     print()
 
