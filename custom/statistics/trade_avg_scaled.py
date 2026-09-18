@@ -61,3 +61,23 @@ class TotalEntered(PortfolioStatistic):
             total_shares_entered += sum(e.last_qty for e in _entry_fills(pos))
 
         return int(total_shares_entered)
+
+
+class AverageEntryPrice(PortfolioStatistic):
+    """Fill-weighted average price of every entry fill across all positions."""
+
+    def calculate_from_positions(self, positions: list[Position]) -> Any | None:
+        if not positions:
+            return None
+
+        total_cost = 0.0
+        total_shares_entered = 0.0
+        for pos in positions:
+            for e in _entry_fills(pos):
+                total_cost += float(e.last_px) * float(e.last_qty)
+                total_shares_entered += float(e.last_qty)
+
+        if total_shares_entered == 0:
+            return None
+
+        return round(total_cost / total_shares_entered, 4)

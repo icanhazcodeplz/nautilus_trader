@@ -6,7 +6,7 @@ from custom.artifacts import ArtifactsIO, BACKTEST_RUNS_PATH
 from custom.backtest_scripts.backtest_config import DATA_VENUE, prob_fill_on_limit, latency_model
 from custom.nt_extensions.limit_fill_model import LimitFillModel
 from custom.statistics.trade_avg import AvgTrade
-from custom.statistics.trade_avg_scaled import PnlPer100, TotalEntered
+from custom.statistics.trade_avg_scaled import AverageEntryPrice, PnlPer100, TotalEntered
 from custom.statistics.trade_counts import Winners, Losers, NumTrades
 from custom.statistics.win_loss_ratio import WinLossRatio
 from custom.utils.orders_to_trades import orders_to_trades
@@ -120,7 +120,7 @@ def register_custom_statistics(engine):
     ]:
         engine.portfolio.analyzer.deregister_statistic(stat_class())
 
-    for stat_class in [NumTrades, Winners, Losers, WinLossRatio, AvgTrade, TotalEntered, PnlPer100]:
+    for stat_class in [NumTrades, Winners, Losers, WinLossRatio, AvgTrade, TotalEntered, AverageEntryPrice, PnlPer100]:
         engine.portfolio.analyzer.register_statistic(stat_class())
 
 
