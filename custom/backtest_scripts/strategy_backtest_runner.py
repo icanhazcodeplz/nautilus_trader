@@ -14,11 +14,8 @@ from custom.backtest_utils.load_catalog_data import CATALOG_TIME_STR_FMT
 from custom.backtest_utils.load_catalog_data import load_catalog_data_to_engine
 from custom.backtest_utils.prepare_top_gainers import get_allow_trading_times_for_candidate
 from custom.backtest_utils.prepare_top_gainers import parse_candidate_str
-from custom.strategies.base import BaseStrategy
 from custom.strategies.momo import MomoStrategy, DirectionStrategy, DirectionThreshold
 from custom.strategies.momo import MomoStrategyConfig
-from custom.strategies.open_fade import OpenFade
-from custom.strategies.open_fade import OpenFadeConfig
 from custom.utils.run_utils import run_strategy
 from nautilus_trader.adapters.alpaca.utils import ns_to_iso_8601
 
@@ -47,18 +44,13 @@ def run_single_backtest(
     if strategy_name == "momo":
         config = MomoStrategyConfig(instrument_id=test_instrument.id, **params_copy)
         strategy = MomoStrategy(config=config)
-    elif strategy_name == "open_fade":
-        config = OpenFadeConfig(instrument_id=test_instrument.id, **params_copy)
-        strategy = OpenFade(config=config)
     else:
         raise ValueError(f"Unknown strategy_name {strategy_name!r}")
 
-    # `allow_trading_times` / `internal_bars` are BaseStrategy-only concepts.
-    if isinstance(strategy, BaseStrategy):
-        if allow_trading_times is not None:
-            strategy.allow_trading_times = allow_trading_times
-            strategy.set_trading_enabled(False)
-        strategy.internal_bars = True
+    if allow_trading_times is not None:
+        strategy.allow_trading_times = allow_trading_times
+        strategy.set_trading_enabled(False)
+    strategy.internal_bars = True
 
     performance_stats = run_strategy(strategy, engine, artifacts_location, run_config=config.dict())
 
@@ -175,15 +167,6 @@ if __name__ == "__main__":
             # vol_30min_min=100_000,
             # perc_gain_min=30,
             # rank_max=5,
-        )
-
-    elif strategy_name == "open_fade":
-        params = dict(
-            trade_size=10,
-            entry_offsets=(0.50,),
-            stop_offset=0.5,
-            flip_threshold=0.30,
-            random_seed=1,
         )
 
     # candidate_str = "2026-03-19_LNKS"
