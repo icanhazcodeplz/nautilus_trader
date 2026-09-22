@@ -18,8 +18,10 @@ from custom.strategies.momo import (
     DirectionThreshold,
     EntryStrategy,
     MomoStrategy,
+    MomoStrategyConfig,
     parse_est_time,
 )
+from nautilus_trader.model.identifiers import InstrumentId
 
 
 CONFIRM = 3  # Small enough to step through by hand
@@ -362,26 +364,28 @@ def test_no_cancels_are_issued_before_the_flip_arms():
 
 def _tick_strategy(
     flipping,
-    market_open_only=False,
     now=POST_OPEN,
+    start_trading_at=None,
     stop_entries_after=None,
     direction_strategy=DirectionStrategy.LONG_ONLY,
     threshold=None,
     entry_exclusion_band=None,
     entry_strategy=EntryStrategy.CROSS_VWAP_BAND,
+    entry_distance=None,
+    is_long=True,
 ):
     """A MomoStrategy mock wired for the real _on_trade_tick."""
     s = MagicMock(spec=MomoStrategy)
     s._stopping_out = False
     s._flipping = flipping
-    s.market_open_only = market_open_only
+    s._start_trading_at = parse_est_time(start_trading_at)
     s._stop_entries_after = parse_est_time(stop_entries_after)
     s.direction_strategy = direction_strategy
     s.entry_strategy = entry_strategy
     s._direction_threshold_value = threshold
     s._entry_exclusion_band = entry_exclusion_band
-    s.is_long = True
-    s.is_short = False
+    s.is_long = is_long
+    s.is_short = not is_long
     s.exposure = 100
     s.max_position_allowed = 1000
     s.open_entries = set()
@@ -394,7 +398,10 @@ def _tick_strategy(
         trailing_take=True,
         simple_take=False,
         trade_size=50,
+        entry_distance=entry_distance,
     )
+    s.instrument = MagicMock(make_price=lambda price: round(price, 2))
+    s.modify_open_order = MagicMock()
     s._ADJUST_ENTRIES_ONLY_EVERY_NS = 0
     s._ADJUST_EXITS_ONLY_EVERY_NS = 0
     s._last_entry_adjustment_ns = 0
@@ -403,6 +410,7 @@ def _tick_strategy(
     s.clock.timestamp_ns.return_value = 10**12
     s.clock.utc_now.return_value = now
     s._on_first_tick = MagicMock()
+    s._trading_has_started = MomoStrategy._trading_has_started.__get__(s, MomoStrategy)
     s._entries_stopped_for_the_day = MomoStrategy._entries_stopped_for_the_day.__get__(s, MomoStrategy)
     s._entry_blocked_by_exclusion_band = MomoStrategy._entry_blocked_by_exclusion_band.__get__(s, MomoStrategy)
     s._flip_side_if_needed = MagicMock()  # exercised on its own above
@@ -445,22 +453,40 @@ def test_stopping_out_still_suppresses_the_take_ladder():
 
 
 # ---------------------------------------------------------------------------
-# The "open" threshold blocks trading until the market is open
+# start_trading_at: nothing runs until the ET clock reaches the start
 # ---------------------------------------------------------------------------
 
 
-def test_open_threshold_blocks_all_trading_before_the_open():
-    s = _tick_strategy(flipping=False, market_open_only=True, now=PRE_OPEN)
+def test_nothing_trades_before_the_start():
+    s = _tick_strategy(flipping=False, start_trading_at="09:30", now=PRE_OPEN)
     s._on_trade_tick(MagicMock(price=8.0))
     s.enter.assert_not_called()
-    s._rolling_tiered_take.assert_not_called()
-    # The flip check still runs pre-open so the threshold keeps tracking; the `open`
-    # threshold guards on is_market_open itself, so no side can change before 9:30.
+    s._rolling_tiered_take.assert_not_called()  # Unlike stop_entries_after, exits are held too
+    # The flip check still runs, so the threshold keeps tracking through the wait.
     s._flip_side_if_needed.assert_called_once()
 
 
-def test_open_threshold_trades_normally_after_the_open():
-    s = _tick_strategy(flipping=False, market_open_only=True, now=POST_OPEN)
+def test_trading_runs_normally_after_the_start():
+    s = _tick_strategy(flipping=False, start_trading_at="09:30", now=POST_OPEN)
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.enter.assert_called_once()
+
+
+def test_the_start_is_inclusive():
+    s = _tick_strategy(flipping=False, start_trading_at="09:31", now=_et("09:31:00"))
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.enter.assert_called_once()
+
+
+def test_one_second_before_the_start_is_still_blocked():
+    s = _tick_strategy(flipping=False, start_trading_at="09:31", now=_et("09:30:59"))
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.enter.assert_not_called()
+
+
+def test_no_start_trades_from_the_first_tick_even_pre_market():
+    """The market-open requirement is gone: unset means trade whenever ticks arrive."""
+    s = _tick_strategy(flipping=False, start_trading_at=None, now=PRE_OPEN)
     s._on_trade_tick(MagicMock(price=8.0))
     s.enter.assert_called_once()
 
@@ -574,3 +600,139 @@ def test_no_band_means_no_effect():
     )
     s._on_trade_tick(MagicMock(price=8.0))
     s.enter.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# sit_at_distance: one entry resting a fixed distance from the threshold
+# ---------------------------------------------------------------------------
+
+
+def _distance_strategy(threshold=10.0, distance=0.5, is_long=True, resting=()):
+    s = _tick_strategy(
+        flipping=False,
+        entry_strategy=EntryStrategy.SIT_AT_DISTANCE,
+        entry_distance=distance,
+        threshold=threshold,
+        is_long=is_long,
+    )
+    s.open_entries = set(resting)
+    return s
+
+
+def test_long_rests_below_the_threshold():
+    s = _distance_strategy(threshold=10.0, distance=0.5)
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.enter.assert_called_once_with(50, 9.5, cancel_after_secs=None)
+
+
+def test_short_rests_above_the_threshold():
+    s = _distance_strategy(threshold=10.0, distance=0.5, is_long=False)
+    s._on_trade_tick(MagicMock(price=12.0))
+    s.enter.assert_called_once_with(50, 10.5, cancel_after_secs=None)
+
+
+def test_the_resting_entry_ignores_where_the_tick_printed():
+    """Unlike cross_vwap_band, the price that triggers the tick has no bearing on the entry."""
+    for tick_price in (5.0, 9.5, 20.0):
+        s = _distance_strategy(threshold=10.0, distance=0.5)
+        s._on_trade_tick(MagicMock(price=tick_price))
+        s.enter.assert_called_once_with(50, 9.5, cancel_after_secs=None)
+
+
+def test_nothing_rests_before_the_threshold_exists():
+    s = _distance_strategy(threshold=None)
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.enter.assert_not_called()
+    s.modify_open_order.assert_not_called()
+
+
+def test_a_resting_order_is_repriced_when_the_threshold_moves():
+    order = MagicMock(price=9.5, quantity=50)
+    s = _distance_strategy(threshold=10.4, distance=0.5, resting=[order])
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.modify_open_order.assert_called_once_with(order, quantity=50, price=9.9)
+    s.enter.assert_not_called()  # Repriced, not re-sent
+
+
+def test_a_correctly_priced_order_is_left_alone():
+    order = MagicMock(price=9.5, quantity=50)
+    s = _distance_strategy(threshold=10.0, distance=0.5, resting=[order])
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.modify_open_order.assert_not_called()
+    s.enter.assert_not_called()
+
+
+def test_zero_distance_rests_on_the_threshold():
+    s = _distance_strategy(threshold=10.0, distance=0.0)
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.enter.assert_called_once_with(50, 10.0, cancel_after_secs=None)
+
+
+# ---------------------------------------------------------------------------
+# sit_at_distance: config combinations it refuses
+# ---------------------------------------------------------------------------
+
+
+def _config(**overrides):
+    params = dict(
+        instrument_id=InstrumentId.from_str("AMZN.ALPACA"),
+        trade_size=50,
+        max_position_multiplier=1,
+        stop_loss=3.0,
+        take_profit=0.5,
+        entry_strategy=EntryStrategy.SIT_AT_DISTANCE,
+        entry_distance=0.5,
+    )
+    return MomoStrategyConfig(**{**params, **overrides})
+
+
+def test_a_valid_sit_at_distance_config_is_accepted():
+    strategy = MomoStrategy(config=_config(direction_strategy=DirectionStrategy.REVERSION))
+    assert strategy.entry_strategy == EntryStrategy.SIT_AT_DISTANCE
+
+
+def test_entry_distance_is_required():
+    with pytest.raises(ValueError, match="entry_distance is required"):
+        MomoStrategy(config=_config(entry_distance=None))
+
+
+def test_negative_entry_distance_is_rejected():
+    with pytest.raises(ValueError, match="entry_distance must be >= 0"):
+        MomoStrategy(config=_config(entry_distance=-0.5))
+
+
+def test_entry_exclusion_band_is_rejected():
+    with pytest.raises(ValueError, match="entry_exclusion_band cannot be used"):
+        MomoStrategy(config=_config(entry_exclusion_band=0.5))
+
+
+def test_momentum_is_rejected():
+    with pytest.raises(ValueError, match="cannot be used with entry_strategy"):
+        MomoStrategy(config=_config(direction_strategy=DirectionStrategy.MOMENTUM))
+
+
+def test_the_other_entry_strategies_do_not_require_entry_distance():
+    strategy = MomoStrategy(config=_config(entry_strategy=EntryStrategy.CROSS_VWAP_BAND, entry_distance=None))
+    assert strategy.entry_strategy == EntryStrategy.CROSS_VWAP_BAND
+
+
+def test_a_start_at_or_after_the_stop_is_rejected():
+    for start in ("09:31", "09:32"):
+        with pytest.raises(ValueError, match="is not before"):
+            MomoStrategy(config=_config(start_trading_at=start, stop_entries_after="09:31"))
+
+
+def test_a_start_before_the_stop_is_accepted():
+    strategy = MomoStrategy(config=_config(start_trading_at="09:30", stop_entries_after="09:31"))
+    assert strategy._start_trading_at == parse_est_time("09:30")
+
+
+def test_either_bound_alone_is_accepted():
+    assert MomoStrategy(config=_config(start_trading_at="09:30"))._stop_entries_after is None
+    assert MomoStrategy(config=_config(stop_entries_after="09:31"))._start_trading_at is None
+
+
+@pytest.mark.parametrize("bad", ["9", "09:30:00", "nine"])
+def test_a_bad_start_string_is_rejected(bad):
+    with pytest.raises(ValueError, match="Expected a time formatted"):
+        MomoStrategy(config=_config(start_trading_at=bad))

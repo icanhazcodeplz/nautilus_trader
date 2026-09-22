@@ -25,7 +25,7 @@ class DirectionStrategy(StrEnum):
 
 class DirectionThreshold(StrEnum):
     ROLLING_VWAP = "rolling_vwap"
-    OPEN = "open"  # First tick price at/after the market open; trading is blocked before then
+    OPEN = "open"  # First tick price at/after the market open; no threshold exists before then
 
 
 class EntryStrategy(StrEnum):
@@ -35,6 +35,8 @@ class EntryStrategy(StrEnum):
     FOLLOW_VWAP_BAND = "follow_vwap_band"
     # Enter at random intervals
     RANDOM = "random"
+    # Rest at a fixed distance from the direction threshold, on the side we trade into
+    SIT_AT_DISTANCE = "sit_at_distance"
 
 
 class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
@@ -57,9 +59,16 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     flip_side_confirm_ticks: int = 50
     only_buy_if_macd_positive: bool = False
     entry_strategy: EntryStrategy = EntryStrategy.CROSS_VWAP_BAND
+    # Distance from the direction threshold that `sit_at_distance` rests its entry at. Required
+    # by that strategy, ignored by the others.
+    entry_distance: float | None = None
     simple_take: bool = False
     trailing_take: bool = False
     num_exit_tiers: int = 1
+    # "HH:MM" in US/Eastern. Nothing trades until the clock reaches this time -- no entries, no
+    # exits, no ticks acted on at all. None trades from the first tick received, which for a feed
+    # that carries pre-market prints means trading before the open.
+    start_trading_at: str | None = None
     # "HH:MM" in US/Eastern. Once the clock reaches this time no new entries are placed for the
     # rest of the day; exits keep running. None disables the cutoff.
     stop_entries_after: str | None = None
@@ -104,10 +113,37 @@ class MomoStrategy(BaseStrategy):
         self.direction_strategy = DirectionStrategy(self.config.direction_strategy)
         self.direction_threshold = DirectionThreshold(self.config.direction_threshold)
 
+        self._start_trading_at: time | None = parse_est_time(self.config.start_trading_at)
         self._stop_entries_after: time | None = parse_est_time(self.config.stop_entries_after)
+        if (
+            self._start_trading_at is not None
+            and self._stop_entries_after is not None
+            and self._start_trading_at >= self._stop_entries_after
+        ):
+            raise ValueError(
+                f"start_trading_at {self.config.start_trading_at!r} is not before "
+                f"stop_entries_after {self.config.stop_entries_after!r}, so no entry could ever be placed"
+            )
         if self.config.entry_exclusion_band is not None and self.config.entry_exclusion_band < 0:
             raise ValueError(f"entry_exclusion_band must be >= 0 or None, got {self.config.entry_exclusion_band!r}")
         self._entry_exclusion_band: float | None = self.config.entry_exclusion_band
+
+        if self.entry_strategy == EntryStrategy.SIT_AT_DISTANCE:
+            if self.config.entry_distance is None:
+                raise ValueError(f"entry_distance is required with entry_strategy '{self.entry_strategy}'")
+            if self.config.entry_distance < 0:
+                raise ValueError(f"entry_distance must be >= 0, got {self.config.entry_distance!r}")
+            if self._entry_exclusion_band is not None:
+                # Both measure from the direction threshold, and they contradict: the band blocks
+                # entries near the threshold, which is exactly where this strategy rests its own.
+                raise ValueError(f"entry_exclusion_band cannot be used with entry_strategy '{self.entry_strategy}'")
+            if self.direction_strategy == DirectionStrategy.MOMENTUM:
+                # Momentum reads a move away from the threshold as the signal, so it goes long
+                # above it -- while this rests its long entry below it, fading the same move.
+                raise ValueError(
+                    f"direction_strategy '{DirectionStrategy.MOMENTUM}' cannot be used with "
+                    f"entry_strategy '{self.entry_strategy}'"
+                )
 
         self.take_profit = self.config.take_profit if self.config.take_profit is not None else self.config.stop_loss
         lower_scalar_multiplier = (
@@ -115,8 +151,6 @@ class MomoStrategy(BaseStrategy):
             if self.config.lower_scalar_multiplier is not None
             else self.config.upper_scalar_multiplier
         )
-        self.market_open_only = True
-
         # self.vwap = PressureVWAPBands(
         self.vwap = VWAPBands(
             lower_scalar_multiplier=lower_scalar_multiplier,
@@ -263,7 +297,7 @@ class MomoStrategy(BaseStrategy):
         # ob = self.cache.order_book(self.config.instrument_id)
         # best_bid = ob.best_bid_price()
         self._flip_side_if_needed(tick)
-        if self.market_open_only and not is_market_open(self.clock.utc_now()):
+        if not self._trading_has_started():
             return
 
         price = tick.price
@@ -320,6 +354,21 @@ class MomoStrategy(BaseStrategy):
                 if len(entry_orders) == 0:
                     self.enter(self.config.trade_size, trail_price, cancel_after_secs=None)
 
+            elif self.entry_strategy == EntryStrategy.SIT_AT_DISTANCE:
+                # Keep one entry resting `entry_distance` from the threshold, below it when long
+                # and above it when short. Nothing rests until the threshold exists, and it is
+                # repriced whenever the threshold moves (`rolling_vwap`) rather than re-sent.
+                threshold = self._direction_threshold_value
+                if threshold is not None:
+                    offset = -self.config.entry_distance if self.is_long else self.config.entry_distance
+                    entry_price = self.instrument.make_price(threshold + offset)
+                    for order in self.open_entries:
+                        if order.price != entry_price:
+                            self.modify_open_order(order, quantity=order.quantity, price=entry_price)
+
+                    if len(entry_orders) == 0:
+                        self.enter(self.config.trade_size, entry_price, cancel_after_secs=None)
+
             elif self.entry_strategy == EntryStrategy.CROSS_VWAP_BAND and (
                 (self.is_long and price < self.vwap.low) or (self.is_short and price > self.vwap.high)
             ):
@@ -341,6 +390,18 @@ class MomoStrategy(BaseStrategy):
                         take_price = self.last_entry_price - self.take_profit
 
                     self.exit(exposure, limit_price=take_price, tag="simple")
+
+    def _trading_has_started(self) -> bool:
+        """
+        True once the Eastern wall clock has reached `start_trading_at`.
+
+        The mirror of `_entries_stopped_for_the_day`, except this gates the whole tick rather
+        than entries alone: before the start there is nothing to exit, so nothing to run.
+        """
+        if self._start_trading_at is None:
+            return True
+        now_est = self.clock.utc_now().tz_convert("US/Eastern")
+        return now_est.time() >= self._start_trading_at
 
     def _entries_stopped_for_the_day(self) -> bool:
         """True once the Eastern wall clock has reached `stop_entries_after`."""

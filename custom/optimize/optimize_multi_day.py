@@ -195,6 +195,7 @@ def optimize(trial):
         num_exit_tiers=2,
         entry_strategy=EntryStrategy.CROSS_VWAP_BAND,
         random_seed=1,
+        start_trading_at="09:30",
         stop_entries_after="09:31",
         entry_exclusion_band=0.5,
     )

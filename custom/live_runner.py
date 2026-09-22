@@ -110,13 +110,15 @@ strategy_config = MomoStrategyConfig(
     pressure_window=25,
     only_buy_if_macd_positive=False,
     direction_strategy=DirectionStrategy.REVERSION,
-    direction_threshold=DirectionThreshold.OPEN,
+    direction_threshold=DirectionThreshold.ROLLING_VWAP,
     simple_take=True,
     trailing_take=False,
     num_exit_tiers=2,
-    entry_strategy=EntryStrategy.CROSS_VWAP_BAND,
+    entry_strategy=EntryStrategy.SIT_AT_DISTANCE,
+    entry_distance=0.5,
+    start_trading_at="09:29",
     stop_entries_after="09:35",
-    entry_exclusion_band=0.75,
+    entry_exclusion_band=None,
     print_update_every_secs=5,
 )
 
