@@ -3,6 +3,7 @@ import sys
 
 from custom.strategies.momo import DirectionStrategy
 from custom.strategies.momo import DirectionThreshold
+from custom.strategies.momo import EntryStrategy
 from custom.strategies.momo import MomoStrategy
 from custom.strategies.momo import MomoStrategyConfig
 from custom.utils.paths import run_artifacts_subdir, DT_STR
@@ -113,8 +114,7 @@ strategy_config = MomoStrategyConfig(
     simple_take=True,
     trailing_take=False,
     num_exit_tiers=2,
-    trailing_entry_order=False,
-    random_entry=False,
+    entry_strategy=EntryStrategy.CROSS_BAND,
     stop_entries_after="09:35",
     entry_exclusion_band=0.75,
     print_update_every_secs=5,
@@ -126,8 +126,8 @@ if not paper:
         blocking.append(f"trade_size={strategy_config.trade_size} (max 3)")
     if strategy_config.max_position_multiplier > 1:
         blocking.append(f"max_position_multiplier={strategy_config.max_position_multiplier} (max 1)")
-    if strategy_config.random_entry:
-        blocking.append("random_entry=True")
+    if strategy_config.entry_strategy == EntryStrategy.RANDOM:
+        blocking.append(f"entry_strategy={EntryStrategy.RANDOM}")
     if blocking:
         raise ValueError(f"Can't run with these params live: {', '.join(blocking)}")
     print("\n⚠️  You are running LIVE with:")

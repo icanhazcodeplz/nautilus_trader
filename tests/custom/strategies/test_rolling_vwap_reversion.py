@@ -13,7 +13,13 @@ import pandas as pd
 import pytest
 
 from custom.strategies._side import Side
-from custom.strategies.momo import DirectionStrategy, DirectionThreshold, MomoStrategy, parse_est_time
+from custom.strategies.momo import (
+    DirectionStrategy,
+    DirectionThreshold,
+    EntryStrategy,
+    MomoStrategy,
+    parse_est_time,
+)
 
 
 CONFIRM = 3  # Small enough to step through by hand
@@ -362,6 +368,7 @@ def _tick_strategy(
     direction_strategy=DirectionStrategy.LONG_ONLY,
     threshold=None,
     entry_exclusion_band=None,
+    entry_strategy=EntryStrategy.CROSS_BAND,
 ):
     """A MomoStrategy mock wired for the real _on_trade_tick."""
     s = MagicMock(spec=MomoStrategy)
@@ -370,6 +377,7 @@ def _tick_strategy(
     s.market_open_only = market_open_only
     s._stop_entries_after = parse_est_time(stop_entries_after)
     s.direction_strategy = direction_strategy
+    s.entry_strategy = entry_strategy
     s._direction_threshold_value = threshold
     s._entry_exclusion_band = entry_exclusion_band
     s.is_long = True
@@ -383,8 +391,6 @@ def _tick_strategy(
     s.vwap = MagicMock(low=9.0, high=11.0)
     s.config = MagicMock(
         only_buy_if_macd_positive=False,
-        random_entry=False,
-        trailing_entry_order=False,
         trailing_take=True,
         simple_take=False,
         trade_size=50,

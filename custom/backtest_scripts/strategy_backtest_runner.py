@@ -16,7 +16,7 @@ from custom.backtest_utils.load_catalog_data import CATALOG_TIME_STR_FMT
 from custom.backtest_utils.load_catalog_data import load_catalog_data_to_engine
 from custom.backtest_utils.prepare_top_gainers import get_allow_trading_times_for_candidate
 from custom.backtest_utils.prepare_top_gainers import parse_candidate_str
-from custom.strategies.momo import MomoStrategy, DirectionStrategy, DirectionThreshold
+from custom.strategies.momo import MomoStrategy, DirectionStrategy, DirectionThreshold, EntryStrategy
 from custom.strategies.momo import MomoStrategyConfig
 from custom.utils.run_utils import run_strategy
 from nautilus_trader.adapters.alpaca.utils import ns_to_iso_8601
@@ -159,8 +159,7 @@ if __name__ == "__main__":
             simple_take=True,
             trailing_take=False,
             num_exit_tiers=2,
-            trailing_entry_order=False,
-            random_entry=False,
+            entry_strategy=EntryStrategy.CROSS_BAND,
             random_seed=1,
             stop_entries_after="09:31",
             entry_exclusion_band=0.5

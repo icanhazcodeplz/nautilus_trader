@@ -28,6 +28,15 @@ class DirectionThreshold(StrEnum):
     OPEN = "open"  # First tick price at/after the market open; trading is blocked before then
 
 
+class EntryStrategy(StrEnum):
+    # Take the current price once it trades through the near VWAP band
+    CROSS_BAND = "cross_band"
+    # Rest on the near VWAP band and reprice with it, rather than crossing the spread
+    FOLLOW_VWAP_BAND = "follow_vwap_band"
+    # Enter at random intervals
+    RANDOM = "random"
+
+
 class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     instrument_id: InstrumentId
     trade_size: int
@@ -47,8 +56,7 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     direction_threshold: DirectionThreshold = DirectionThreshold.OPEN
     flip_side_confirm_ticks: int = 50
     only_buy_if_macd_positive: bool = False
-    trailing_entry_order: bool = False
-    random_entry: bool = False
+    entry_strategy: EntryStrategy = EntryStrategy.CROSS_BAND
     simple_take: bool = False
     trailing_take: bool = False
     num_exit_tiers: int = 1
@@ -92,9 +100,7 @@ class MomoStrategy(BaseStrategy):
         if sum([self.config.trailing_take, self.config.simple_take]) > 1:
             raise ValueError("Cannot use more than one of simple_take, trailing_take")
 
-        if sum([self.config.trailing_entry_order, self.config.random_entry]) > 1:
-            raise ValueError("Cannot use more than one of trailing_entry_order, random_entry")
-
+        self.entry_strategy = EntryStrategy(self.config.entry_strategy)
         self.direction_strategy = DirectionStrategy(self.config.direction_strategy)
         self.direction_threshold = DirectionThreshold(self.config.direction_threshold)
 
@@ -286,7 +292,7 @@ class MomoStrategy(BaseStrategy):
         ):
             self._last_entry_adjustment_ns = self.clock.timestamp_ns()
 
-            if self.config.random_entry:
+            if self.entry_strategy == EntryStrategy.RANDOM:
                 if (
                     len(entry_orders) == 0
                     and (self.clock.utc_now() - self.last_entry_dt).total_seconds() > 20
@@ -303,7 +309,7 @@ class MomoStrategy(BaseStrategy):
                         entry_limit = price
                         self.enter(self.config.trade_size, entry_limit, cancel_after_secs=10)
 
-            elif self.config.trailing_entry_order:
+            elif self.entry_strategy == EntryStrategy.FOLLOW_VWAP_BAND:
                 # enter() submits a buy when long and a sell when short, so trail the near
                 # band on the side the entry sits: the lower band when long, upper when short.
                 trail_price = self.instrument.make_price(self.vwap.high if self.is_short else self.vwap.low)
@@ -314,7 +320,9 @@ class MomoStrategy(BaseStrategy):
                 if len(entry_orders) == 0:
                     self.enter(self.config.trade_size, trail_price, cancel_after_secs=None)
 
-            elif (self.is_long and price < self.vwap.low) or (self.is_short and price > self.vwap.high):
+            elif self.entry_strategy == EntryStrategy.CROSS_BAND and (
+                (self.is_long and price < self.vwap.low) or (self.is_short and price > self.vwap.high)
+            ):
                 self.enter(self.config.trade_size, price, cancel_after_secs=1)
 
         # TAKE LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

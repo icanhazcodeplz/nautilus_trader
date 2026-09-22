@@ -72,11 +72,6 @@ class ArtifactsIO:
         ]:
             if drop_key in config:
                 config.pop(drop_key)
-        # Renamed fields: a saved run predates the rename, and MomoStrategyConfig rejects unknown
-        # keyword arguments outright, so replay_live_run would raise TypeError without this.
-        for old_key, new_key in [("random_buy", "random_entry")]:
-            if old_key in config:
-                config[new_key] = config.pop(old_key)
         return config
 
     @staticmethod

@@ -19,6 +19,7 @@ from custom.backtest_utils.prepare_top_gainers import (
 )
 from custom.utils.process_manager import ProcessManager
 from custom.backtest_scripts.strategy_backtest_runner import run_single_backtest_from_top_gainers_candidate
+from custom.strategies.momo import EntryStrategy
 
 OPTUNA_DB_DIR = "optuna_dbs"
 optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
@@ -72,14 +73,13 @@ def optimize(trial):
         lower_scalar_multiplier=2.4,
         upper_scalar_multiplier=0.6,
         outer_band_multiplier=3.0,
-        trailing_entry_order=False,
         only_buy_if_macd_positive=True,
         simple_take=False,
         trailing_take=True,
         num_exit_tiers=3,
         allow_trades=True,
         pressure_window=10,
-        random_entry=False,
+        entry_strategy=EntryStrategy.CROSS_BAND,
         random_seed=None,
         # --- TOP GAINERS PARAMS ----------------
         price_min=1.0,
@@ -162,7 +162,7 @@ if __name__ == "__main__":
         outer_band_multiplier=linspace_float(low=1.0, high=3.0, step=1.0),
         pressure_window=linspace_int(low=5, high=15, step=10),
         # num_exit_tiers=linspace_int(1,4,step=1),
-        # random_entry=[True, False],
+        # entry_strategy=[EntryStrategy.CROSS_BAND, EntryStrategy.RANDOM],
         rank_max=linspace_int(low=3, high=3, step=1),
         vol_30min_min=linspace_int(low=100_000, high=100_000, step=1),
         perc_gain_min=linspace_int(low=30, high=30, step=1),
