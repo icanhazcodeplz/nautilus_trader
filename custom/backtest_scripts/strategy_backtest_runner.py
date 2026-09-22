@@ -5,6 +5,8 @@ import pandas as pd
 
 from custom.artifacts import BACKTEST_RUNS_PATH
 from custom.artifacts import ArtifactsIO
+from custom.backtest_scripts.backtest_config import DATA_DELAY_SECS
+from custom.backtest_scripts.backtest_config import DATA_DELAY_WINDOWS
 from custom.backtest_utils.backtest_run_utils import add_default_venue
 from custom.backtest_utils.backtest_run_utils import analyze_backtest
 from custom.backtest_utils.backtest_run_utils import build_backtest_engine
@@ -51,6 +53,7 @@ def run_single_backtest(
         strategy.allow_trading_times = allow_trading_times
         strategy.set_trading_enabled(False)
     strategy.internal_bars = True
+    strategy.set_data_delay(default_secs=DATA_DELAY_SECS, windows=DATA_DELAY_WINDOWS)
 
     performance_stats = run_strategy(strategy, engine, artifacts_location, run_config=config.dict())
 

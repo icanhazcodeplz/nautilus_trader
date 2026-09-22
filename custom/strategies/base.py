@@ -1,5 +1,8 @@
 import asyncio
 from abc import abstractmethod
+from collections import deque
+from itertools import pairwise
+from datetime import time
 from datetime import timedelta
 from pathlib import Path
 from typing import Optional
@@ -35,6 +38,26 @@ from nautilus_trader.model.orders.list import OrderList
 from nautilus_trader.trading.strategy import Strategy
 
 
+ET_TZ = "US/Eastern"
+NS_PER_SEC = 1_000_000_000
+
+
+def parse_et_time(value: time | str) -> time:
+    """Parse an "HH:MM" or "HH:MM:SS" US/Eastern wall-clock string into a `time`."""
+    if isinstance(value, time):
+        return value
+    try:
+        parts = [int(part) for part in value.split(":")]
+    except (AttributeError, ValueError):
+        raise ValueError(f"Expected a time formatted as 'HH:MM' or 'HH:MM:SS', got {value!r}") from None
+    if len(parts) == 2:
+        parts.append(0)
+    if len(parts) != 3:
+        raise ValueError(f"Expected a time formatted as 'HH:MM' or 'HH:MM:SS', got {value!r}")
+    hour, minute, second = parts
+    return time(hour=hour, minute=minute, second=second)
+
+
 class BaseStrategyConfig(StrategyConfig, frozen=True):
     instrument_id: InstrumentId
     trade_size: int
@@ -50,6 +73,7 @@ class BaseStrategy(Strategy):
     _MODIFY_REJECT_COOLDOWN_SECS = 1  # Seconds to block retries after a ModifyRejected
     _RECONCILE_COOLDOWN_SECS = 3  # Minimum seconds between reconciliation attempts
     _ATTEMPT_STOP_OUT_EVERY_MS = 60
+    _DELAY_RELEASE_INTERVAL_MS = 100  # How often the delay buffer is checked for ticks now due
 
     def __init__(self, config: BaseStrategyConfig) -> None:
         super().__init__(config)
@@ -96,6 +120,16 @@ class BaseStrategy(Strategy):
         self._reconciliation_task: asyncio.Task | None = None
         self._historical_loaded = False
         self._historical_ticks: list[TradeTick] = []
+
+        # Data delay buffer (backtests only, see set_data_delay)
+        self._tick_delay_enabled = False
+        self._tick_delay_default_ns: int = 0
+        self._tick_delay_windows: list[tuple[time, time, int]] = []
+        self._delayed_ticks: deque[TradeTick] = deque()
+        self._window_bounds: list[tuple[int, int, int]] = []  # [start_ns, stop_ns, delay_ns) for one ET day
+        self._window_bounds_day: tuple[int, int] | None = None  # ET day the bounds above were built for
+        self._tick_indicators: list[Indicator] = []  # Fed from the buffer while the delay is on
+        self._feed_indicators_manually = False
 
     def initialize(self, artifacts_location: Optional[Path], trader_helper: Optional[AlpacaTraderHelper] = None):
         self._initialized = True
@@ -363,15 +397,146 @@ class BaseStrategy(Strategy):
             "size": int(tick.size),
             "ts_event": tick.ts_event,
             # These can be used to measure data latency
-            # "ts_recv": tick.ts_init,
-            # "ts_clock": self.clock.utc_now(),
+            "ts_init": tick.ts_init,
+            "ts_clock": self.clock.utc_now(),
             # "ts_now": pd.Timestamp.utcnow(),
         }
         for metric in self.metrics_to_save_on_tick:
             tick_data = {**tick_data, **metric.get_vals()}
         self._add_tick_data(self._tick_event_dt_adjusted, tick_data)
 
+    # DATA DELAY BUFFER ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+    def set_data_delay(self, default_secs: float = 0.0, windows=None) -> None:
+        """
+        Hold trade ticks back before acting on them, to mirror live feed latency in a backtest.
+
+        A backtest hands the strategy every print the instant it happens; live, the same print
+        arrives late (measured at ~25ms typically, and over a second through the opening burst).
+        This buffers each tick and releases it once `clock - tick.ts_event >= delay`. The simulated
+        venue is unaffected: the engine feeds the exchange before it feeds subscribers, so the
+        exchange stays current while the strategy reacts late, which is the live skew.
+
+        Leave this off for live runs, where the latency is already real, and call it before the
+        run starts -- the release timer is registered in `on_start`.
+
+        Parameters
+        ----------
+        default_secs : float
+            Delay for ticks outside every window. 0 with no windows disables buffering entirely.
+        windows : iterable of (start, stop, delay_secs), optional
+            Per-time-of-day overrides covering [start, stop), e.g.
+            [("09:30:00", "09:30:10", 1.5), ("09:30:10", "09:31:00", 0.5)]. Times are US/Eastern
+            wall clock as "HH:MM"/"HH:MM:SS" (or `time` objects) and may not overlap. Ticks outside
+            all windows use `default_secs`.
+
+        """
+        if default_secs < 0:
+            raise ValueError(f"default_secs must be >= 0, got {default_secs!r}")
+
+        parsed: list[tuple[time, time, int]] = []
+        for window in windows or []:
+            start, stop, delay_secs = window
+            start, stop = parse_et_time(start), parse_et_time(stop)
+            if start >= stop:
+                raise ValueError(f"Window start must be before stop, got {start} -> {stop}")
+            if delay_secs < 0:
+                raise ValueError(f"Window delay must be >= 0, got {delay_secs!r}")
+            parsed.append((start, stop, int(delay_secs * NS_PER_SEC)))
+
+        parsed.sort(key=lambda w: w[0])
+        for (_, prev_stop, _), (next_start, _, _) in pairwise(parsed):
+            if next_start < prev_stop:
+                raise ValueError(f"Windows overlap: {next_start} starts before {prev_stop}")
+
+        self._tick_delay_default_ns = int(default_secs * NS_PER_SEC)
+        self._tick_delay_windows = parsed
+        self._tick_delay_enabled = self._tick_delay_default_ns > 0 or bool(parsed)
+        self._window_bounds = []
+        self._window_bounds_day = None
+
+        if self._tick_delay_enabled:
+            windows_str = ", ".join(f"{s}-{e} {ns / NS_PER_SEC}s" for s, e, ns in parsed) or "none"
+            self.log.info(
+                f"Data delay enabled: default {self._tick_delay_default_ns / NS_PER_SEC}s, windows: {windows_str}",
+                color=LogColor.YELLOW,
+            )
+
+    def _tick_delay_ns(self, ts_event: int) -> int:
+        """Return the delay that applies to a tick, by the wall-clock time of day it printed at."""
+        if not self._tick_delay_windows:
+            return self._tick_delay_default_ns
+
+        if self._window_bounds_day is None or not (
+            self._window_bounds_day[0] <= ts_event < self._window_bounds_day[1]
+        ):
+            self._build_window_bounds(ts_event)
+
+        for start_ns, stop_ns, delay_ns in self._window_bounds:
+            if start_ns <= ts_event < stop_ns:
+                return delay_ns
+
+        return self._tick_delay_default_ns
+
+    def _build_window_bounds(self, ts_event: int) -> None:
+        """
+        Resolve the window wall-clock times against the ET day holding `ts_event`.
+
+        Done once per day rather than per tick: the result is a list of raw nanosecond ranges, so
+        the lookup above stays integer comparisons.
+        """
+        day = pd.Timestamp(ts_event, unit="ns", tz="UTC").tz_convert(ET_TZ).normalize()
+        # 26h clears the next midnight whether the day is 23, 24 or 25 hours long (DST).
+        next_day = (day + pd.Timedelta(hours=26)).normalize()
+        self._window_bounds_day = (day.value, next_day.value)
+        self._window_bounds = [
+            (
+                (day + pd.Timedelta(hours=start.hour, minutes=start.minute, seconds=start.second)).value,
+                (day + pd.Timedelta(hours=stop.hour, minutes=stop.minute, seconds=stop.second)).value,
+                delay_ns,
+            )
+            for start, stop, delay_ns in self._tick_delay_windows
+        ]
+
+    def _release_delayed_ticks(self, event: TimeEvent = None) -> None:
+        """Process every buffered tick whose delay has now elapsed, oldest first."""
+        ts_now = self.clock.timestamp_ns()
+        while self._delayed_ticks:
+            tick = self._delayed_ticks[0]
+            if ts_now - tick.ts_event < self._tick_delay_ns(tick.ts_event):
+                return  # Ticks are buffered in order, so nothing behind this one is due either
+            self._delayed_ticks.popleft()
+            self._process_trade_tick(tick)
+
+    def _indicators_ready(self) -> bool:
+        """
+        Return whether the tick indicators hold enough data to act on.
+
+        `indicators_initialized` only covers indicators registered with the engine, and it returns
+        True when none are -- which is the case while the delay buffer feeds them instead.
+        """
+        if self._feed_indicators_manually:
+            return all(indicator.initialized for indicator in self._tick_indicators)
+        return self.indicators_initialized()
+
+    # TICK HANDLING ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
     def on_trade_tick(self, tick: TradeTick) -> None:
+        if not self._tick_delay_enabled:
+            self._process_trade_tick(tick)
+            return
+
+        self._delayed_ticks.append(tick)
+        self._release_delayed_ticks()
+
+    def _process_trade_tick(self, tick: TradeTick) -> None:
+        if self._feed_indicators_manually:
+            # The engine updates registered indicators the moment a tick is delivered, which would
+            # leave them ahead of the delayed decision path. Feed them here instead, so they see
+            # exactly what the strategy has seen -- as they do live.
+            for indicator in self._tick_indicators:
+                indicator.handle_trade_tick(tick)
+
         self._raise_if_needed()
         self._last_tick = tick
 
@@ -381,7 +546,7 @@ class BaseStrategy(Strategy):
         self._stop_out_if_needed(tick)
 
         #  Actual operations of this method
-        if self._historical_loaded and self.indicators_initialized():
+        if self._historical_loaded and self._indicators_ready():
             self._on_trade_tick(tick)
 
         self._save_tick_data(tick)
@@ -399,6 +564,9 @@ class BaseStrategy(Strategy):
 
     def on_historical_data(self, data) -> None:
         if isinstance(data, TradeTick):
+            if self._feed_indicators_manually:
+                for indicator in self._tick_indicators:
+                    indicator.handle_trade_tick(data)
             self._historical_ticks.append(data)
             self._save_tick_data(data)
 
@@ -835,8 +1003,22 @@ class BaseStrategy(Strategy):
             # A metric can also read plain attributes off a non-indicator object (e.g. the
             # strategy itself); only real indicators get fed ticks by the engine.
             if isinstance(metric.obj, Indicator):
-                self.register_indicator_for_trade_ticks(self.config.instrument_id, metric.obj)
+                if self._tick_delay_enabled:
+                    self._tick_indicators.append(metric.obj)
+                else:
+                    self.register_indicator_for_trade_ticks(self.config.instrument_id, metric.obj)
             max_tick_lookback = max(max_tick_lookback, metric.tick_lookback)
+
+        self._feed_indicators_manually = bool(self._tick_indicators)
+
+        if self._tick_delay_enabled:
+            # Ticks are also released as new ones arrive; this covers quiet stretches, where the
+            # next tick may be further away than the delay itself.
+            self.clock.set_timer(
+                name="release_delayed_ticks",
+                interval=timedelta(milliseconds=self._DELAY_RELEASE_INTERVAL_MS),
+                callback=self._release_delayed_ticks,
+            )
 
         if max_tick_lookback > 0:
             # Set a long lookback to ensure we get at least `max_tick_lookback` ticks back
@@ -872,6 +1054,11 @@ class BaseStrategy(Strategy):
         # self.request_quote_ticks(self.config.instrument_id)
 
     def on_stop(self) -> None:
+        if self._delayed_ticks:
+            # These would have been acted on after the run ended, so they are simply dropped.
+            self.log.debug(f"Discarding {len(self._delayed_ticks)} tick(s) held in the delay buffer")
+            self._delayed_ticks.clear()
+
         if self.position_qty != 0:
             # Cancel entry orders, but use "close_position_limit_order" to modify the exit orders
             self.cancel_all_orders(self.config.instrument_id, order_side=self._entry_order_side)
