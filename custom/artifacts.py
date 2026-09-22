@@ -119,6 +119,11 @@ class ArtifactsIO:
 
         df = pd.DataFrame(as_dicts)
 
+        # Fill in columns that only appear if there is a modify command to an existing limit order.
+        for column in ("trigger_price", "last_px", "last_qty"):
+            if column not in df.columns:
+                df[column] = np.nan
+
         def _append_to_durations(durations, side, price, qty, start, end):
             if start == end:
                 end += 1
