@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import sys
 
+from custom.strategies.momo import DirectionStrategy
+from custom.strategies.momo import DirectionThreshold
 from custom.strategies.momo import MomoStrategy
 from custom.strategies.momo import MomoStrategyConfig
 from custom.utils.paths import run_artifacts_subdir, DT_STR
@@ -21,7 +23,7 @@ from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.identifiers import TraderId
 
 
-symbol = sys.argv[1].upper() if len(sys.argv) > 1 else "rxt".upper()
+symbol = sys.argv[1].upper() if len(sys.argv) > 1 else "amzn".upper()
 instrument_id = InstrumentId.from_str(f"{symbol}.{ALPACA}")
 paper = ENV.PAPER
 
@@ -93,29 +95,41 @@ node = TradingNode(config=config_node)
 strategy_config = MomoStrategyConfig(
     instrument_id=instrument_id,
     external_order_claims=[instrument_id],
-    trade_size=10,
-    max_position_multiplier=10,
-    stop_loss=0.05,
-    take_profit=None,
-    upper_scalar_multiplier=0.3,
-    lower_scalar_multiplier=1.7,
+    allow_trades=True,
+    max_position_multiplier=1,
+    trade_size=50,
+    stop_loss=3.0,
+    take_profit=0.5,
+    upper_scalar_multiplier=0.5,
+    lower_scalar_multiplier=0.5,
+    rolling_vwap_window=2000,
     vwap_window=150,
     variance_window=300,
-    outer_band_multiplier=3.0,
-    pressure_window=10,
-    trailing_entry_order=False,
-    trailing_take=True,
-    num_exit_tiers=3,
-    random_entry=True,
-    simple_take=False,
-    allow_trades=True,
-    print_update_every_secs=5,
+    outer_band_multiplier=2.5,
+    pressure_window=25,
     only_buy_if_macd_positive=False,
+    direction_strategy=DirectionStrategy.REVERSION,
+    direction_threshold=DirectionThreshold.OPEN,
+    simple_take=True,
+    trailing_take=False,
+    num_exit_tiers=2,
+    trailing_entry_order=False,
+    random_entry=False,
+    stop_entries_after="09:35",
+    entry_exclusion_band=0.75,
+    print_update_every_secs=5,
 )
 
 if not paper:
-    if strategy_config.trade_size > 3 or strategy_config.max_position_multiplier > 1 or strategy_config.random_entry:
-        raise ValueError("Can't run with these params live")
+    blocking = []
+    if strategy_config.trade_size > 3:
+        blocking.append(f"trade_size={strategy_config.trade_size} (max 3)")
+    if strategy_config.max_position_multiplier > 1:
+        blocking.append(f"max_position_multiplier={strategy_config.max_position_multiplier} (max 1)")
+    if strategy_config.random_entry:
+        blocking.append("random_entry=True")
+    if blocking:
+        raise ValueError(f"Can't run with these params live: {', '.join(blocking)}")
     print("\n⚠️  You are running LIVE with:")
     for key, value in strategy_config.dict().items():
         if key in ("instrument_id", "oms_type", "external_order_claims"):
