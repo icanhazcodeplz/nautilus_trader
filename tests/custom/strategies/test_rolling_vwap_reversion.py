@@ -368,7 +368,7 @@ def _tick_strategy(
     direction_strategy=DirectionStrategy.LONG_ONLY,
     threshold=None,
     entry_exclusion_band=None,
-    entry_strategy=EntryStrategy.CROSS_BAND,
+    entry_strategy=EntryStrategy.CROSS_VWAP_BAND,
 ):
     """A MomoStrategy mock wired for the real _on_trade_tick."""
     s = MagicMock(spec=MomoStrategy)

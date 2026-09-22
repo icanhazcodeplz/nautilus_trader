@@ -79,7 +79,7 @@ def optimize(trial):
         num_exit_tiers=3,
         allow_trades=True,
         pressure_window=10,
-        entry_strategy=EntryStrategy.CROSS_BAND,
+        entry_strategy=EntryStrategy.CROSS_VWAP_BAND,
         random_seed=None,
         # --- TOP GAINERS PARAMS ----------------
         price_min=1.0,
@@ -162,7 +162,7 @@ if __name__ == "__main__":
         outer_band_multiplier=linspace_float(low=1.0, high=3.0, step=1.0),
         pressure_window=linspace_int(low=5, high=15, step=10),
         # num_exit_tiers=linspace_int(1,4,step=1),
-        # entry_strategy=[EntryStrategy.CROSS_BAND, EntryStrategy.RANDOM],
+        # entry_strategy=[EntryStrategy.CROSS_VWAP_BAND, EntryStrategy.RANDOM],
         rank_max=linspace_int(low=3, high=3, step=1),
         vol_30min_min=linspace_int(low=100_000, high=100_000, step=1),
         perc_gain_min=linspace_int(low=30, high=30, step=1),

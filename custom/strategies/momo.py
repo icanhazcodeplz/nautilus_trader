@@ -30,7 +30,7 @@ class DirectionThreshold(StrEnum):
 
 class EntryStrategy(StrEnum):
     # Take the current price once it trades through the near VWAP band
-    CROSS_BAND = "cross_band"
+    CROSS_VWAP_BAND = "cross_vwap_band"
     # Rest on the near VWAP band and reprice with it, rather than crossing the spread
     FOLLOW_VWAP_BAND = "follow_vwap_band"
     # Enter at random intervals
@@ -56,7 +56,7 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     direction_threshold: DirectionThreshold = DirectionThreshold.OPEN
     flip_side_confirm_ticks: int = 50
     only_buy_if_macd_positive: bool = False
-    entry_strategy: EntryStrategy = EntryStrategy.CROSS_BAND
+    entry_strategy: EntryStrategy = EntryStrategy.CROSS_VWAP_BAND
     simple_take: bool = False
     trailing_take: bool = False
     num_exit_tiers: int = 1
@@ -320,7 +320,7 @@ class MomoStrategy(BaseStrategy):
                 if len(entry_orders) == 0:
                     self.enter(self.config.trade_size, trail_price, cancel_after_secs=None)
 
-            elif self.entry_strategy == EntryStrategy.CROSS_BAND and (
+            elif self.entry_strategy == EntryStrategy.CROSS_VWAP_BAND and (
                 (self.is_long and price < self.vwap.low) or (self.is_short and price > self.vwap.high)
             ):
                 self.enter(self.config.trade_size, price, cancel_after_secs=1)
