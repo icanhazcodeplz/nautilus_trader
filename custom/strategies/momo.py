@@ -35,8 +35,8 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     stop_loss: float
     take_profit: float
 
-    lower_scalar_multiplier: float = 1.0
     upper_scalar_multiplier: float = 1.0
+    lower_scalar_multiplier: float | None = None  # Defaults to upper_scalar_multiplier
     vwap_window: int = 150
     variance_window: int = 300
     outer_band_multiplier: float = 1.0
@@ -104,11 +104,16 @@ class MomoStrategy(BaseStrategy):
         self._entry_exclusion_band: float | None = self.config.entry_exclusion_band
 
         self.take_profit = self.config.take_profit if self.config.take_profit is not None else self.config.stop_loss
+        lower_scalar_multiplier = (
+            self.config.lower_scalar_multiplier
+            if self.config.lower_scalar_multiplier is not None
+            else self.config.upper_scalar_multiplier
+        )
         self.market_open_only = True
 
         # self.vwap = PressureVWAPBands(
         self.vwap = VWAPBands(
-            lower_scalar_multiplier=self.config.lower_scalar_multiplier,
+            lower_scalar_multiplier=lower_scalar_multiplier,
             upper_scalar_multiplier=self.config.upper_scalar_multiplier,
             rolling_window=self.config.vwap_window,
             variance_window=self.config.variance_window,
