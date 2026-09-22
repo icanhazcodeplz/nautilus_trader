@@ -22,8 +22,8 @@ CORS(app, resources={r"/*": {"origins": "*"}}, expose_headers=["Content-Range"])
 
 api = Api(app)
 artifacts_dir = data_subdir("runs", "20260313_144138")
-artifacts_dir = data_subdir("paper_runs", "20260317_143429")
-artifacts_dir = BACKTEST_RUNS_PATH
+artifacts_dir = data_subdir("paper_runs", "20260921_092739")
+# artifacts_dir = BACKTEST_RUNS_PATH
 
 artifacts_io = ArtifactsIO(artifacts_dir)
 
@@ -104,35 +104,34 @@ def create_horiz_lines_items(ticks):
         t["price"] for t in ticks if start_ns <= int(t["time"]) <= first_10s_end_ns and "price" in t
     ]
 
-    # Last price before the open, falling back to the first price of the session
-    pre_open_price = next(
-        (t["price"] for t in reversed(ticks) if int(t["time"]) < start_ns and "price" in t),
-        window_prices[0],
-    )
+    # First trade at/after the open. `ticks` is time-ascending and `window_prices` starts at
+    # start_ns, so its first entry is that trade -- the same anchor the strategy takes for
+    # DirectionThreshold.OPEN.
+    open_price = window_prices[0]
 
     return [
         {
             "start_time": str(start_ns),
             "end_time": str(end_ns),
-            "price": pre_open_price,
+            "price": open_price,
             "color": white,
-            "annotation": f"{pre_open_price:.2f}",
+            "annotation": f"{open_price:.2f}",
             "line_style": "dotted",
             "opacity": 0.8,
         },
         {
             "start_time": str(start_ns),
             "end_time": str(end_ns),
-            "price": pre_open_price+0.50,
+            "price": open_price+0.75,
             "color": highlight_green,
-            "annotation": "+.50",
+            "annotation": "+.75",
             "line_style": "dotted",
             "opacity": 0.8,
         },
         {
             "start_time": str(start_ns),
             "end_time": str(end_ns),
-            "price": pre_open_price+1.00,
+            "price": open_price+1.00,
             "color": highlight_green,
             "annotation": "+1",
             "line_style": "dotted",
@@ -141,16 +140,16 @@ def create_horiz_lines_items(ticks):
         {
             "start_time": str(start_ns),
             "end_time": str(end_ns),
-            "price": pre_open_price-0.50,
+            "price": open_price-0.75,
             "color": highlight_green,
-            "annotation": "-.50",
+            "annotation": "-.75",
             "line_style": "dotted",
             "opacity": 0.8,
         },
         {
             "start_time": str(start_ns),
             "end_time": str(end_ns),
-            "price": pre_open_price-1.00,
+            "price": open_price-1.00,
             "color": highlight_green,
             "annotation": "-1",
             "line_style": "dotted",
