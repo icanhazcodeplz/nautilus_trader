@@ -287,6 +287,12 @@ class ArtifactsIO:
         if alpaca_updates_df is None:
             return []
 
+        # An order whose last event is one of these was still live when the run ended: the run
+        # was stopped before the venue had anything more to say about it. There is no terminal
+        # event to close the bar with, so it runs to the end of the data instead.
+        still_open_events = ("new", "pending_new", "partial_fill", "pending_cancel", "pending_replace")
+        run_end_time = pd.to_datetime(alpaca_updates_df["timestamp"]).max()
+
         def order_duration(order_df: pd.DataFrame) -> pd.Series:
             order_df = order_df[order_df["event"] != "order_replace_rejected"]
             order_df = order_df[order_df["event"] != "order_cancel_rejected"]
@@ -311,20 +317,25 @@ class ArtifactsIO:
                         print(f"No start_time for order \n{order_df}\nSKIPPING")
                     return None
 
-            end_time = order_df["timestamp"].iloc[-1]
+            last_event = order_df.iloc[-1]
+            last_event_name = last_event["event"]
+            still_open = last_event_name in still_open_events
+            end_time = run_end_time if still_open else order_df["timestamp"].iloc[-1]
 
             # Alpaca uses the `qty` field different for different order events. Need to handle
             # each case differently
-            last_event = order_df.iloc[-1]
-            last_event_name = last_event["event"]
-            if last_event_name == "replaced":
-                order_qty = last_event["qty"]
-            elif last_event_name == "fill":
+            if last_event_name in ("fill", "partial_fill"):
+                # On a fill event `qty` is the size of that one execution, so take the order-level
+                # cumulative. For a trailing partial_fill that is what the order had executed by
+                # the time the run ended; the size still resting is not in the payload.
                 order_qty = last_event["filled_qty"]
-            elif last_event_name == "canceled":
+            elif last_event_name in ("replaced", "canceled", "new", "pending_new", "pending_cancel", "pending_replace"):
                 order_qty = last_event["qty"]
             else:
-                raise ValueError(f"Unknown last order event: {last_event_name}")
+                raise ValueError(
+                    f"Unknown last order event: {last_event_name} "
+                    f"(order {first_event_ser['client_order_id']})"
+                )
 
             return pd.Series(dict(side=side, price=price, qty=int(order_qty), start_time=start_time, end_time=end_time))
 
