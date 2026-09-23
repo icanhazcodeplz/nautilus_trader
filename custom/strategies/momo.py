@@ -56,7 +56,7 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
 
     direction_strategy: DirectionStrategy = DirectionStrategy.LONG_ONLY
     direction_threshold: DirectionThreshold = DirectionThreshold.OPEN
-    flip_side_confirm_ticks: int = 50
+    flip_side_confirm_ticks: int = 150
     only_buy_if_macd_positive: bool = False
     entry_strategy: EntryStrategy = EntryStrategy.CROSS_VWAP_BAND
     # Distance from the direction threshold that `sit_at_distance` rests its entry at. Required
@@ -103,6 +103,7 @@ class MomoStrategy(BaseStrategy):
     _ADJUST_EXITS_ONLY_EVERY_NS = 80e6  # e6 converts from ms to ns
     _ADJUST_ENTRIES_ONLY_EVERY_NS = 100e6
     _MAX_ALLOWED_EXIT_DIFF_SECS = 5
+    _LOG_FLIP_WAIT_EVERY_NS = 5e9  # Throttle for the "flip still waiting" line
 
     def __init__(self, config: MomoStrategyConfig) -> None:
         super().__init__(config)
@@ -162,7 +163,7 @@ class MomoStrategy(BaseStrategy):
             # pressure_window=self.config.pressure_window,
         )
         # self.vwap_day = VolumeWeightedAveragePrice()
-        self.rolling_vwap = RollingVWAP(rolling_window=self.config.rolling_vwap_window)
+        self.rolling_vwap = RollingVWAP(rolling_window=self.config.rolling_vwap_window, update_every_secs=5)
         self.macd = MACDHistogram(fast_period=12, slow_period=26, signal_period=9)
         self.metrics_to_save_on_tick = [
             Metric(
@@ -198,6 +199,7 @@ class MomoStrategy(BaseStrategy):
         self._pending_side_signal: Side | None = None
         self._side_signal_count: int = 0
         self._direction_threshold_value: float | None = None
+        self._last_flip_wait_log_ns: int = 0
 
     def _on_first_tick(self, tick: TradeTick):
         if self._completed_first_tick_logic:
@@ -258,12 +260,37 @@ class MomoStrategy(BaseStrategy):
         # Entries would deepen the position we are trying to close out of. Re-issued every tick
         # rather than once: cancel_open_order is a silent no-op until the venue id lands, and a
         # rejected cancel can put the order back (see on_order_event in base).
-        for order in self.open_entries:
+        for order in self.entries_to_cancel:
             self.cancel_open_order(order)
 
-        if self.position_qty == 0 and len(self.open_orders) == 0:
+        # The venue decides when the flip may complete, not the local books: `cancel_open_order`
+        # empties those as soon as it sends, and a cancel refused mid-modify leaves the order
+        # working. Completing here on the local view is what strands an old-side entry at the
+        # venue, where it fills against the new side.
+        live_orders = self.orders_live_at_venue
+        if self.position_qty == 0 and len(live_orders) == 0:
             self.set_side(self._pending_side_signal)
             self._flipping = False
+        else:
+            self._log_flip_wait(live_orders)
+
+    def _log_flip_wait(self, live_orders) -> None:
+        """
+        Say what a flip is still waiting on, at most once every `_LOG_FLIP_WAIT_EVERY_NS`.
+
+        A cancel the venue keeps refusing holds the flip open indefinitely, which is the safe
+        outcome but an invisible one -- without this the strategy simply looks stuck.
+        """
+        now_ns = self.clock.timestamp_ns()
+        if now_ns - self._last_flip_wait_log_ns < self._LOG_FLIP_WAIT_EVERY_NS:
+            return
+        self._last_flip_wait_log_ns = now_ns
+        waiting_on = [f"{order.client_order_id} ({order.status_string()})" for order in live_orders]
+        self.log.info(
+            f"Flip to '{self._pending_side_signal}' waiting on position {self.position_qty} "
+            f"and {len(live_orders)} order(s) live at the venue: {waiting_on}",
+            color=LogColor.YELLOW,
+        )
 
     def _signal_for(self, above_threshold: bool) -> Side:
         if self.direction_strategy == DirectionStrategy.REVERSION:

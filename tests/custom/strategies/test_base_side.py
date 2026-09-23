@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from custom.strategies._open_order import FLATTEN_TAG
 from custom.strategies.base import BaseStrategy, Side
 from nautilus_trader.model.enums import OrderSide
 
@@ -30,9 +31,13 @@ class _FakeStrategy(BaseStrategy):
         max_position=1000,
         open_buys=None,
         open_sells=None,
+        venue_orders=None,
+        side_changed_ns=0,
         stop_loss=0.05,
     ):
         self._side = Side(side)
+        # When set_side last switched. Orders initialized before this outlived that switch.
+        self._side_changed_ns = side_changed_ns
         self._position_qty = position_qty
         self._open_buy_qty = open_buy_qty
         self._open_sell_qty = open_sell_qty
@@ -60,7 +65,9 @@ class _FakeStrategy(BaseStrategy):
         self._clock_mock.timestamp_ns.return_value = 10_000_000_000
         self._config_mock = MagicMock(instrument_id="X.ALPACA", stop_loss=stop_loss)
         self._cache_mock = MagicMock()
-        self._cache_mock.orders_open.return_value = []
+        # What the venue still holds. Separate from _buy_orders/_sell_orders on purpose: a sent
+        # cancel empties those immediately, so they can be empty while an order is still working.
+        self._cache_mock.orders_open.return_value = list(venue_orders or ())
         self._cache_mock.orders_inflight.return_value = []
 
         self.instrument = MagicMock()
@@ -223,15 +230,61 @@ def test_set_side_raises_when_not_flat():
     assert s.side == "long"
 
 
-def test_set_side_raises_when_flat_but_orders_are_resting():
-    s = _FakeStrategy("long", position_qty=0, open_buys=[MagicMock()])
-    with pytest.raises(RuntimeError, match="open order"):
+def test_set_side_raises_when_flat_but_orders_are_live_at_the_venue():
+    order = MagicMock()
+    order.client_order_id = "O-1"
+    order.status_string.return_value = "PENDING_CANCEL"
+    s = _FakeStrategy("long", position_qty=0, open_buys=[order], venue_orders=[order])
+    with pytest.raises(RuntimeError, match="still live at the venue"):
         s.set_side("short")
     assert s.side == "long"
 
 
+def test_set_side_raises_on_a_venue_order_the_local_books_have_dropped():
+    """
+    The case that stranded a short entry on 2026-09-22.
+
+    `cancel_open_order` discards from the local books as soon as it sends, so they go empty
+    while the order is still working -- and the venue can refuse the cancel outright. Reading
+    the books here is what let the side flip out from under a live order.
+    """
+    order = MagicMock()
+    order.client_order_id = "O-2"
+    order.status_string.return_value = "ACCEPTED"
+    s = _FakeStrategy("long", position_qty=0, open_buys=[], venue_orders=[order])
+    assert len(s.open_orders) == 0, "precondition: the local books look clear"
+    with pytest.raises(RuntimeError, match="still live at the venue"):
+        s.set_side("short")
+    assert s.side == "long"
+
+
+def test_set_side_allows_a_stale_local_order_once_the_venue_is_clear():
+    """The mirror: the venue is the authority, so a leftover local entry does not block."""
+    s = _FakeStrategy("long", position_qty=0, open_buys=[MagicMock()], venue_orders=[])
+    s.set_side("short")
+    assert s.side == "short"
+
+
+def test_set_side_counts_in_flight_orders_as_live():
+    """An order still being submitted can reach the venue, so it blocks the switch too."""
+    order = MagicMock()
+    order.client_order_id = "O-3"
+    order.status_string.return_value = "SUBMITTED"
+    s = _FakeStrategy("long", position_qty=0)
+    s._cache_mock.orders_inflight.return_value = [order]
+    with pytest.raises(RuntimeError, match="still live at the venue"):
+        s.set_side("short")
+
+
+def test_set_side_asks_the_cache_for_this_instrument_only():
+    s = _FakeStrategy("long", position_qty=0)
+    s.set_side("short")
+    for call in (s._cache_mock.orders_open, s._cache_mock.orders_inflight):
+        assert call.call_args.kwargs["instrument_id"] == "X.ALPACA"
+
+
 def test_set_side_is_a_noop_when_unchanged_even_if_not_flat():
-    s = _FakeStrategy("long", position_qty=100, open_buys=[MagicMock()])
+    s = _FakeStrategy("long", position_qty=100, open_buys=[MagicMock()], venue_orders=[MagicMock()])
     s.set_side("long")  # must not raise
     assert s.side == "long"
 
@@ -410,7 +463,7 @@ def _with_real_cancel(s):
 
 
 def test_stop_out_cancels_every_entry_while_iterating_that_same_set():
-    orders = [MagicMock(is_open=True, venue_order_id=f"v{i}") for i in range(3)]
+    orders = [MagicMock(is_open=True, is_flatten=False, venue_order_id=f"v{i}") for i in range(3)]
     s = _with_real_cancel(_FakeStrategy("long", position_qty=500, open_buys=orders))
     s.stop_price = 9.95
 
@@ -421,10 +474,193 @@ def test_stop_out_cancels_every_entry_while_iterating_that_same_set():
 
 
 def test_wrong_way_flatten_cancels_every_deepening_order_while_iterating_that_same_set():
-    orders = [MagicMock(is_open=True, venue_order_id=f"v{i}") for i in range(3)]
+    orders = [MagicMock(is_open=True, is_flatten=False, venue_order_id=f"v{i}") for i in range(3)]
     s = _with_real_cancel(_FakeStrategy("long", position_qty=-250, open_sells=orders))
 
     s._reconcile()
 
     assert s.cancel_order.call_count == 3
     assert s._sell_orders == set()
+
+
+# ---------------------------------------------------------------------------
+# The flatten order is exempt from the entry sweeps, and cleaned up after
+# ---------------------------------------------------------------------------
+
+
+def _open_order(is_flatten=False, oid="v1"):
+    return MagicMock(is_open=True, is_flatten=is_flatten, venue_order_id=oid)
+
+
+def test_entries_to_cancel_drops_only_the_flatten_order():
+    entry, flatten = _open_order(oid="entry"), _open_order(is_flatten=True, oid="flatten")
+    s = _FakeStrategy("long", position_qty=0, open_buys=[entry, flatten])
+    assert s.open_entries == {entry, flatten}, "it stays an entry-side order"
+    assert s.entries_to_cancel == {entry}
+
+
+def test_stop_out_spares_the_flatten_order():
+    entry, flatten = _open_order(oid="entry"), _open_order(is_flatten=True, oid="flatten")
+    s = _with_real_cancel(_FakeStrategy("long", position_qty=500, open_buys=[entry, flatten]))
+    s.stop_price = 9.95
+
+    s._stop_out_if_needed(MagicMock(price=9.90))  # through the stop
+
+    assert s.cancel_order.call_count == 1, "only the real entry is cancelled"
+    assert s.cancel_order.call_args.kwargs["order"] is entry.order
+    assert s._buy_orders == {flatten}, "the flatten order must survive the stop-out sweep"
+
+
+def test_the_flatten_order_is_tagged_so_the_sweeps_can_see_it():
+    s = _FakeStrategy("long", position_qty=-250)
+    s._reconcile()
+    s._submit_limit_order.assert_called_once()
+    assert s._submit_limit_order.call_args.args[3] == FLATTEN_TAG
+
+
+def test_reconcile_reprices_the_existing_flatten_order_rather_than_another_entry():
+    entry, flatten = _open_order(oid="entry"), _open_order(is_flatten=True, oid="flatten")
+    s = _FakeStrategy("long", position_qty=-250, open_buys=[entry, flatten])
+
+    s._reconcile()
+
+    s._submit_limit_order.assert_not_called()
+    assert s.modify_open_order.call_args.args[0] is flatten
+
+
+def test_the_flatten_order_is_cancelled_once_the_position_is_no_longer_wrong_way():
+    flatten = _open_order(is_flatten=True, oid="flatten")
+    s = _FakeStrategy("long", position_qty=0, open_buys=[flatten])
+
+    s._reconcile()
+
+    s.cancel_open_order.assert_called_once_with(flatten)
+
+
+def test_a_normal_entry_is_left_alone_by_that_cleanup():
+    entry = _open_order(oid="entry")
+    s = _FakeStrategy("long", position_qty=0, open_buys=[entry])
+    s._reconcile()
+    s.cancel_open_order.assert_not_called()
+
+
+def test_the_flatten_order_survives_while_the_position_is_still_wrong_way():
+    flatten = _open_order(is_flatten=True, oid="flatten")
+    s = _FakeStrategy("long", position_qty=-250, open_buys=[flatten])
+    s._reconcile()
+    s.cancel_open_order.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Orders that outlived a side switch are neither entries nor exits
+# ---------------------------------------------------------------------------
+# The books are keyed by venue side, so after a flip a leftover short entry (a SELL) reads as a
+# long's exit. `_side_changed_ns` is when the switch happened; an order initialized before it
+# belongs to the side we no longer trade.
+
+
+def _cancel_rejected(client_order_id, reason):
+    from nautilus_trader.model.events import OrderCancelRejected
+
+    event = MagicMock(spec=OrderCancelRejected)
+    event.client_order_id = client_order_id
+    event.reason = reason
+    return event
+
+
+def _dated_order(ts_init, venue_side=OrderSide.SELL, oid="v1"):
+    order = MagicMock(is_open=True, is_flatten=False, venue_order_id=oid)
+    order.order = MagicMock(ts_init=ts_init, side=venue_side)
+    order.client_order_id = oid
+    order.leaves_qty = 50
+    return order
+
+
+SWITCH_NS = 1_000
+BEFORE, AFTER = SWITCH_NS - 1, SWITCH_NS + 1
+
+
+def test_a_sell_that_outlived_the_switch_is_not_counted_as_an_exit():
+    """The 2026-09-22 order: a short's entry, re-filed as a long's exit, never cancelled."""
+    stale = _dated_order(BEFORE)
+    s = _FakeStrategy("long", position_qty=0, open_sells=[stale], side_changed_ns=SWITCH_NS)
+    assert stale in s.open_orders, "still tracked, so it can be cancelled"
+    assert s.open_exits == set(), "must not read as position protection"
+    assert s.open_exits_qty == 0
+    assert s.orders_from_a_previous_side == {stale}
+
+
+def test_an_order_from_after_the_switch_is_a_normal_exit():
+    fresh = _dated_order(AFTER)
+    s = _FakeStrategy("long", position_qty=0, open_sells=[fresh], side_changed_ns=SWITCH_NS)
+    assert s.open_exits == {fresh}
+    assert s.orders_from_a_previous_side == set()
+
+
+def test_a_stale_order_on_the_entry_side_is_excluded_too():
+    stale, fresh = _dated_order(BEFORE, OrderSide.BUY, "stale"), _dated_order(AFTER, OrderSide.BUY, "fresh")
+    s = _FakeStrategy("long", position_qty=0, open_buys=[stale, fresh], side_changed_ns=SWITCH_NS)
+    assert s.open_entries == {fresh}
+
+
+def test_nothing_is_stale_before_the_first_switch():
+    """`_side_changed_ns` is 0 until a switch happens, so ordinary runs are untouched."""
+    order = _dated_order(BEFORE)
+    s = _FakeStrategy("long", position_qty=0, open_sells=[order], side_changed_ns=0)
+    assert s.orders_from_a_previous_side == set()
+    assert s.open_exits == {order}
+
+
+def test_reconcile_cancels_the_order_from_the_previous_side():
+    stale = _dated_order(BEFORE)
+    s = _FakeStrategy("long", position_qty=0, open_sells=[stale], side_changed_ns=SWITCH_NS)
+    s._reconcile()
+    s.cancel_open_order.assert_called_once_with(stale)
+
+
+def test_reconcile_leaves_current_side_orders_alone():
+    fresh = _dated_order(AFTER)
+    s = _FakeStrategy("long", position_qty=0, open_sells=[fresh], side_changed_ns=SWITCH_NS)
+    s._reconcile()
+    s.cancel_open_order.assert_not_called()
+
+
+def test_set_side_records_when_the_switch_happened():
+    s = _FakeStrategy("long", position_qty=0)
+    s._clock_mock.timestamp_ns.return_value = 12_345
+    s.set_side("short")
+    assert s._side_changed_ns == 12_345
+
+
+def test_a_refused_switch_does_not_record_a_time():
+    order = MagicMock()
+    order.client_order_id = "O-1"
+    order.status_string.return_value = "ACCEPTED"
+    s = _FakeStrategy("long", position_qty=0, venue_orders=[order])
+    with pytest.raises(RuntimeError):
+        s.set_side("short")
+    assert s._side_changed_ns == 0
+
+
+def test_the_full_path_a_refused_cancel_takes_after_a_switch():
+    """
+    End to end over the 2026-09-22 sequence, minus the flip that #1 now blocks.
+
+    The cancel is refused after the books had already dropped the order, so `on_order_event`
+    re-adds it by venue side -- a SELL, while long. It must come back as neither entry nor exit,
+    and the next reconcile pass must cancel it rather than leave it resting.
+    """
+    cache_order = MagicMock(is_open=True, side=OrderSide.SELL, status="ACCEPTED", ts_init=BEFORE)
+    cache_order.client_order_id = "O-stale"
+    s = _FakeStrategy("long", position_qty=0, side_changed_ns=SWITCH_NS)
+    s._cache_mock.order.return_value = cache_order
+
+    s.on_order_event(_cancel_rejected("O-stale", reason="original order pending replacement"))
+
+    assert len(s.open_orders) == 1, "it is tracked again, which is what lets it be cancelled"
+    assert s.open_exits == set(), "but never as an exit"
+    assert s.open_entries == set()
+
+    s._reconcile()
+    assert s.cancel_open_order.call_count == 1
+    assert s.cancel_open_order.call_args.args[0].client_order_id == "O-stale"

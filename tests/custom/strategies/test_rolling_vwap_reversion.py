@@ -13,6 +13,7 @@ import pandas as pd
 import pytest
 
 from custom.strategies._side import Side
+from custom.strategies.base import BaseStrategy
 from custom.strategies.momo import (
     DirectionStrategy,
     DirectionThreshold,
@@ -37,6 +38,7 @@ def _make_strategy(
     rolling_vwap=100.0,
     window_full=True,
     open_orders=(),
+    venue_orders=None,
     direction_strategy=DirectionStrategy.REVERSION,
     direction_threshold=DirectionThreshold.ROLLING_VWAP,
     now=POST_OPEN,
@@ -65,12 +67,27 @@ def _make_strategy(
     orders = list(open_orders)
     s.open_entries = list(orders)
     s.open_orders = list(orders)
+    # Run the real filter over the mock's books, so the flatten exemption is under test here
+    # rather than restated by the fixture.
+    s.entries_to_cancel = BaseStrategy.entries_to_cancel.fget(s)
+    # What the venue still holds, which is not always what the local books say: a sent cancel
+    # empties the books immediately. Defaults to agreeing with them.
+    s.orders_live_at_venue = list(orders) if venue_orders is None else list(venue_orders)
     s.cancel_open_order = MagicMock()
+    s._last_flip_wait_log_ns = 0
+    s._LOG_FLIP_WAIT_EVERY_NS = MomoStrategy._LOG_FLIP_WAIT_EVERY_NS
+    s.clock.timestamp_ns = MagicMock(return_value=0)
     s.set_side = MagicMock(side_effect=lambda new_side: setattr(s, "_side", Side(new_side)))
     s.log = MagicMock()
 
     # Bind the real methods under test to the mock
-    for name in ("_flip_side_if_needed", "_update_direction_threshold", "_signal_for", "_count_side_signal"):
+    for name in (
+        "_flip_side_if_needed",
+        "_update_direction_threshold",
+        "_signal_for",
+        "_count_side_signal",
+        "_log_flip_wait",
+    ):
         setattr(s, name, getattr(MomoStrategy, name).__get__(s, MomoStrategy))
     return s
 
@@ -211,7 +228,7 @@ def test_tie_tick_neither_advances_nor_resets_the_counter():
 
 
 def test_tie_tick_still_cancels_entries_and_completes_an_armed_flip():
-    resting = MagicMock(is_open=True, venue_order_id="v1")
+    resting = MagicMock(is_open=True, is_flatten=False, venue_order_id="v1")
     s = _make_strategy(side="long", position_qty=100, rolling_vwap=100.0, open_orders=[resting])
     _feed(s, 101.0, CONFIRM)
     assert s._flipping is True
@@ -220,6 +237,7 @@ def test_tie_tick_still_cancels_entries_and_completes_an_armed_flip():
 
     s.position_qty = 0
     s.open_orders = []
+    s.orders_live_at_venue = []  # The cancel has now confirmed at the venue
     s._flip_side_if_needed(_tick(100.0))
     s.set_side.assert_called_once_with(Side.SHORT)
 
@@ -310,7 +328,7 @@ def test_flip_completes_only_once_flat_with_nothing_resting():
 
 
 def test_flip_does_not_complete_while_an_order_still_rests():
-    resting = MagicMock(is_open=True, venue_order_id="v1")
+    resting = MagicMock(is_open=True, is_flatten=False, venue_order_id="v1")
     s = _make_strategy(side="long", position_qty=0, rolling_vwap=100.0, open_orders=[resting])
     _feed(s, 101.0, CONFIRM)
     assert s._flipping is True
@@ -341,7 +359,7 @@ def test_resting_entries_are_cancelled_and_recancelled_each_tick():
     cancel_open_order is a silent no-op until the venue id lands, and a rejected cancel can put
     the order back -- so the cancel must be re-issued rather than done once.
     """
-    resting = MagicMock(is_open=True, venue_order_id="v1")
+    resting = MagicMock(is_open=True, is_flatten=False, venue_order_id="v1")
     s = _make_strategy(side="long", position_qty=100, rolling_vwap=100.0, open_orders=[resting])
     _feed(s, 101.0, CONFIRM)
     assert s.cancel_open_order.call_count == 1
@@ -351,7 +369,7 @@ def test_resting_entries_are_cancelled_and_recancelled_each_tick():
 
 
 def test_no_cancels_are_issued_before_the_flip_arms():
-    resting = MagicMock(is_open=True, venue_order_id="v1")
+    resting = MagicMock(is_open=True, is_flatten=False, venue_order_id="v1")
     s = _make_strategy(side="long", position_qty=100, rolling_vwap=100.0, open_orders=[resting])
     _feed(s, 101.0, CONFIRM - 1)
     s.cancel_open_order.assert_not_called()
@@ -736,3 +754,98 @@ def test_either_bound_alone_is_accepted():
 def test_a_bad_start_string_is_rejected(bad):
     with pytest.raises(ValueError, match="Expected a time formatted"):
         MomoStrategy(config=_config(start_trading_at=bad))
+
+
+# ---------------------------------------------------------------------------
+# A flip waits on the venue, not on the local books
+# ---------------------------------------------------------------------------
+
+
+def _armed_flip(venue_orders):
+    """A long strategy with an armed flip to short, flat, holding `venue_orders` at the venue."""
+    s = _make_strategy(side="long", position_qty=100, rolling_vwap=100.0, open_orders=[])
+    _feed(s, 101.0, CONFIRM)
+    assert s._flipping is True
+    s.position_qty = 0
+    s.orders_live_at_venue = list(venue_orders)
+    return s
+
+
+def _venue_order(status="ACCEPTED"):
+    order = MagicMock(client_order_id="O-1")
+    order.status_string.return_value = status
+    return order
+
+
+def test_flip_waits_while_an_order_is_still_live_at_the_venue():
+    """
+    The 2026-09-22 failure: the local books were empty because the cancel had been *sent*, so
+    the flip completed while a SELL was still working. It then filled against the new long side.
+    """
+    s = _armed_flip([_venue_order("PENDING_CANCEL")])
+    s._flip_side_if_needed(_tick(100.0))
+    s.set_side.assert_not_called()
+    assert s._flipping is True, "the flip stays armed rather than being abandoned"
+    assert s._side == Side.LONG
+
+
+def test_flip_completes_once_the_venue_confirms():
+    s = _armed_flip([_venue_order()])
+    s._flip_side_if_needed(_tick(100.0))
+    s.set_side.assert_not_called()
+    s.orders_live_at_venue = []  # Cancel confirmed
+    s._flip_side_if_needed(_tick(100.0))
+    s.set_side.assert_called_once_with(Side.SHORT)
+    assert s._flipping is False
+
+
+def test_a_live_venue_order_blocks_the_flip_even_when_flat_and_locally_clear():
+    s = _armed_flip([_venue_order()])
+    assert s.position_qty == 0 and len(s.open_orders) == 0
+    for _ in range(5):
+        s._flip_side_if_needed(_tick(100.0))
+    s.set_side.assert_not_called()
+
+
+def test_the_wait_is_logged_but_throttled():
+    s = _armed_flip([_venue_order()])
+    for _ in range(4):
+        s._flip_side_if_needed(_tick(100.0))
+    assert s.log.info.call_count == 1, "one line per throttle window, not one per tick"
+    s.clock.timestamp_ns.return_value = int(MomoStrategy._LOG_FLIP_WAIT_EVERY_NS) + 1
+    s._flip_side_if_needed(_tick(100.0))
+    assert s.log.info.call_count == 2
+    assert "live at the venue" in s.log.info.call_args[0][0]
+
+
+# ---------------------------------------------------------------------------
+# An armed flip leaves the wrong-way flatten order alone
+# ---------------------------------------------------------------------------
+
+
+def _order(is_flatten=False, oid="v1"):
+    return MagicMock(is_open=True, is_flatten=is_flatten, venue_order_id=oid)
+
+
+def test_the_flip_sweep_spares_the_flatten_order():
+    """
+    The 2026-09-22 deadlock: `_reconcile` sends a flatten on the entry side every 3s, the armed
+    flip cancelled it as an entry within the second, and the account stayed wrongly short for
+    51 seconds across 17 such rounds.
+    """
+    entry, flatten = _order(oid="entry"), _order(is_flatten=True, oid="flatten")
+    s = _make_strategy(side="long", position_qty=100, rolling_vwap=100.0, open_orders=[entry, flatten])
+    _feed(s, 101.0, CONFIRM)
+    assert s._flipping is True
+    cancelled = [call.args[0] for call in s.cancel_open_order.call_args_list]
+    assert entry in cancelled
+    assert flatten not in cancelled, "the flatten order is what unwinds the position; sweeping it deadlocks"
+
+
+def test_the_flip_keeps_sparing_it_on_every_re_issue():
+    flatten = _order(is_flatten=True, oid="flatten")
+    s = _make_strategy(side="long", position_qty=100, rolling_vwap=100.0, open_orders=[flatten])
+    _feed(s, 101.0, CONFIRM)
+    for _ in range(5):
+        s._flip_side_if_needed(_tick(101.0))
+    s.cancel_open_order.assert_not_called()

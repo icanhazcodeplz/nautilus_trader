@@ -7,6 +7,10 @@ from nautilus_trader.model.orders import Order
 
 ONLY_MODIFY_EVERY_NS = 80e6  # e6 converts from ms to ns
 
+# Tag carried by the order `_reconcile` sends to unwind a wrong-way position. It sits on the
+# entry side, so without a way to tell it apart the entry sweeps cancel it on sight.
+FLATTEN_TAG = "flatten"
+
 CLOSED_STATUS_LIST = {
     OrderStatus.DENIED,
     OrderStatus.FILLED,
@@ -71,6 +75,11 @@ class OpenOrder:
     @property
     def client_order_id(self):
         return self.order.client_order_id
+
+    @property
+    def is_flatten(self) -> bool:
+        """Whether this is the order sent to unwind a wrong-way position, not a real entry."""
+        return FLATTEN_TAG in (self.order.tags or ())
 
     def _can_be_modified(self, now_ns):
         if (now_ns - self._last_modify_ns) < ONLY_MODIFY_EVERY_NS:

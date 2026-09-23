@@ -11,7 +11,7 @@ import pandas as pd
 from pandas import Timestamp
 
 from custom.artifacts import ArtifactsIO
-from custom.strategies._open_order import OpenOrder, CLOSED_STATUS_LIST
+from custom.strategies._open_order import OpenOrder, CLOSED_STATUS_LIST, FLATTEN_TAG
 from custom.strategies._side import Side  # noqa: F401  (re-exported: `from ...base import Side`)
 from custom.utils.alpaca_trader_http_client import AlpacaTraderHelper
 from custom.utils.precision_utils import make_Price
@@ -85,6 +85,7 @@ class BaseStrategy(Strategy):
         self.stop_loss: float | None = None
         self.last_entry_dt: Timestamp = pd.Timestamp("1990", tz="UTC")
         self._side: Side = Side.LONG  # Switch with self.set_side()
+        self._side_changed_ns: int = 0  # When set_side last switched; 0 while the side is original
         self._trading_enabled: bool = True
         self.allow_trading_times: Optional[set[pd.Timestamp]] = None
         self.internal_bars = False
@@ -200,10 +201,12 @@ class BaseStrategy(Strategy):
         Accepts the enum or its plain string value. This is the only supported way to change
         side: it is where the value is validated and the guards below are enforced.
 
-        Only allowed while flat with nothing resting. Open orders matter as much as the position:
-        on a netting venue, orders left over from the old side can fill alongside the new side's
-        and net to zero, stranding the exits. Since cancels are not instant, a caller that wants
-        to flip should cancel, wait for the cancels to confirm, then call this again.
+        Only allowed while flat with nothing live at the venue. Open orders matter as much as
+        the position: on a netting venue, orders left over from the old side can fill alongside
+        the new side's and net to zero, stranding the exits. Cancels are not instant and can be
+        rejected, so the check is against the cache (`orders_live_at_venue`) and not the local
+        books -- a caller that wants to flip should cancel, keep asking until the cancels
+        confirm, and only then call this.
         """
         try:
             new_side = Side(new_side)
@@ -214,10 +217,15 @@ class BaseStrategy(Strategy):
             return
         if self.position_qty != 0:
             raise RuntimeError(f"Cannot switch side to '{new_side}' while position is {self.position_qty}")
-        if len(self.open_orders) > 0:
-            raise RuntimeError(f"Cannot switch side to '{new_side}' with {len(self.open_orders)} open order(s)")
+        live_orders = self.orders_live_at_venue
+        if len(live_orders) > 0:
+            raise RuntimeError(
+                f"Cannot switch side to '{new_side}' with {len(live_orders)} order(s) still live at the venue: "
+                f"{[f'{order.client_order_id} ({order.status_string()})' for order in live_orders]}"
+            )
         self.log.info(f"Switching side from '{self._side}' to '{new_side}'", color=LogColor.YELLOW)
         self._side = new_side
+        self._side_changed_ns = self.clock.timestamp_ns()
 
     @property
     def position_qty(self):
@@ -251,16 +259,63 @@ class BaseStrategy(Strategy):
         return self._buy_orders | self._sell_orders
 
     @property
+    def orders_live_at_venue(self) -> list[Order]:
+        """
+        Orders the venue may still fill, read from the cache rather than the local books.
+
+        `cancel_open_order` drops an order from `_buy_orders`/`_sell_orders` the instant the
+        cancel is *sent*, so `open_orders` empties while the order is still working. The venue
+        can also refuse the cancel outright -- "original order pending replacement" is the
+        common one mid-modify -- which puts the order back. The cache keeps an order until the
+        venue confirms it is gone, so it is what to ask before doing anything that assumes
+        nothing can fill.
+        """
+        instrument_id = self.config.instrument_id
+        return self.cache.orders_open(instrument_id=instrument_id) + self.cache.orders_inflight(
+            instrument_id=instrument_id,
+        )
+
+    def _is_from_a_previous_side(self, open_order: OpenOrder) -> bool:
+        """Whether this order was submitted before the current side was adopted."""
+        return self._side_changed_ns > 0 and open_order.order.ts_init < self._side_changed_ns
+
+    @property
+    def orders_from_a_previous_side(self) -> set[OpenOrder]:
+        """
+        Orders that outlived a side switch, and so belong to neither entries nor exits.
+
+        A switch is only allowed once nothing is live at the venue, so these should not exist.
+        They appear when a cancel is refused after the books had already dropped the order --
+        `on_order_event` puts it back, and the books are keyed by venue side, so a leftover
+        short entry re-files itself as a long's exit. Read as an exit it looks like position
+        protection, is counted in `open_exits_qty`, and is never cancelled.
+        """
+        return {open_order for open_order in self.open_orders if self._is_from_a_previous_side(open_order)}
+
+    @property
     def open_entries(self) -> set[OpenOrder]:
         """Open orders that open/increase the position."""
         self._prune_closed()
-        return self._buy_orders if self.is_long else self._sell_orders
+        orders = self._buy_orders if self.is_long else self._sell_orders
+        return {open_order for open_order in orders if not self._is_from_a_previous_side(open_order)}
+
+    @property
+    def entries_to_cancel(self) -> set[OpenOrder]:
+        """
+        The entries a "cancel what would open a position" sweep should take.
+
+        `_reconcile` unwinds a wrong-way position with a marketable limit on the entry side, so
+        it lands in the same bucket as a real entry. Sweeping it away leaves the position
+        wrong-way and the sweep re-sends it moments later.
+        """
+        return {open_order for open_order in self.open_entries if not open_order.is_flatten}
 
     @property
     def open_exits(self) -> set[OpenOrder]:
         """Open orders that close/reduce the position."""
         self._prune_closed()
-        return self._sell_orders if self.is_long else self._buy_orders
+        orders = self._sell_orders if self.is_long else self._buy_orders
+        return {open_order for open_order in orders if not self._is_from_a_previous_side(open_order)}
 
     @property
     def open_entries_qty(self) -> int:
@@ -349,7 +404,7 @@ class BaseStrategy(Strategy):
         if self.stop_price is not None:
             if (float(tick.price) - float(self.stop_price)) * sign <= 0:
                 self._stopping_out = True
-                for order in self.open_entries:
+                for order in self.entries_to_cancel:
                     self.cancel_open_order(order)
 
                 self._last_stop_out_attempt = self.clock.timestamp_ns()
@@ -778,7 +833,9 @@ class BaseStrategy(Strategy):
                     elif cache_order.side == OrderSide.SELL:
                         self._sell_orders.add(open_order)
                     self.log.error(
-                        f"Re-added {cache_order.client_order_id} to open_orders (side={cache_order.side}, status={cache_order.status})"
+                        f"Re-added {cache_order.client_order_id} to open_orders (side={cache_order.side}, "
+                        f"status={cache_order.status}). Tracking is by venue side, so if it predates a side "
+                        f"switch it counts as neither entry nor exit and _reconcile will cancel it."
                     )
 
     def close_position_limit_order(self):
@@ -839,11 +896,24 @@ class BaseStrategy(Strategy):
             for open_order in orders_to_cancel:
                 self.cancel_open_order(open_order)
             if len(orders_to_modify) > 0:
-                open_order_to_modify = list(orders_to_modify)[0]
+                # Prefer the flatten order already working over some unrelated order on that
+                # side, so repeated passes reprice the one order instead of conscripting a
+                # different one each time.
+                open_order_to_modify = next(
+                    (open_order for open_order in orders_to_modify if open_order.is_flatten),
+                    next(iter(orders_to_modify)),
+                )
                 self.modify_open_order(open_order_to_modify, quantity=abs(position_at_broker), price=price)
             else:
-                self._submit_limit_order(flatten_side, abs(position_at_broker), price, "flatten")
+                self._submit_limit_order(flatten_side, abs(position_at_broker), price, FLATTEN_TAG)
             return  # Return from here to allow orders time to cancel and flatten
+
+        self._cancel_orders_from_a_previous_side()
+
+        # The position is no longer wrong-way, so any flatten order still working has outlived
+        # its job. Nothing else cancels it -- the entry sweeps skip it by design -- and left
+        # resting it would open the very position it was sent to close.
+        self._cancel_stale_flatten_orders()
 
         # CHECK POSITION DISCREPANCY BETWEEN LOCAL AND BROKER
         if self.position_qty != position_at_broker:
@@ -902,6 +972,23 @@ class BaseStrategy(Strategy):
                     # FIXME: Test this
                     self.log.error(f"Failed to remove open order {order} from self.open_orders. Exception: {e}")
                     # check if self_order was just recently opened
+
+    def _cancel_orders_from_a_previous_side(self) -> None:
+        for open_order in self.orders_from_a_previous_side:
+            self.log.error(
+                f"Canceling {open_order.client_order_id}: submitted under a previous side, so it can only "
+                f"trade against the current '{self._side}' one."
+            )
+            self.cancel_open_order(open_order)
+
+    def _cancel_stale_flatten_orders(self) -> None:
+        for open_order in self.open_orders:
+            if open_order.is_flatten:
+                self.log.info(
+                    f"Canceling flatten order {open_order.client_order_id}: the wrong-way position it was "
+                    "sent for is gone."
+                )
+                self.cancel_open_order(open_order)
 
     def _cancel_partial_fills_and_orders_past_timeout(self, event: TimeEvent):
         for open_order in self.open_orders:
