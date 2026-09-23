@@ -394,12 +394,26 @@ class RollingTimeVWAP(Indicator):
 class RollingVWAP(Indicator):
     """
     VWAP over the last `rolling_window` trades.
+
+    Parameters
+    ----------
+    rolling_window : int
+        How many trades the VWAP covers.
+    update_every_secs : int or float, optional
+        Recompute `value` at most this often, by tick `ts_init`. Every trade still enters the
+        window -- this throttles how often the average is recalculated from it, which is what
+        holds `value` still between updates rather than letting it drift with each print.
+        None recomputes on every tick.
+
     """
 
-    def __init__(self, rolling_window: int):
-        super().__init__(params=[rolling_window])
+    def __init__(self, rolling_window: int, update_every_secs: float | None = None):
+        super().__init__(params=[rolling_window, update_every_secs])
 
         self.rolling_window = rolling_window
+        self.update_every_secs = update_every_secs
+        self._update_every_ns = None if update_every_secs is None else update_every_secs * 1e9
+        self._last_value_ns = None
         # Read by Metric.tick_lookback to size the historical warmup request, so the window is
         # already full by the first live tick.
         self.tick_lookback = rolling_window
@@ -419,9 +433,18 @@ class RollingVWAP(Indicator):
         return len(self._trade_values) == self._trade_values.maxlen
 
     def handle_trade_tick(self, tick: TradeTick):
-        self.update_raw(price=float(tick.price), volume=float(tick.size))
+        self.update_raw(price=float(tick.price), volume=float(tick.size), ts_init=tick.ts_init)
 
-    def update_raw(self, price, volume):
+    def _value_is_due(self, ts_init) -> bool:
+        """Whether `value` should be recomputed for a tick arriving at `ts_init`."""
+        if self._update_every_ns is None:
+            return True
+        if self._last_value_ns is not None and ts_init - self._last_value_ns < self._update_every_ns:
+            return False
+        self._last_value_ns = ts_init
+        return True
+
+    def update_raw(self, price, volume, ts_init=None):
         # No weighting for this price (also avoiding divide by zero)
         if volume == 0:
             return
@@ -433,7 +456,8 @@ class RollingVWAP(Indicator):
         self._trade_values.append(price * volume)
         self._volumes.append(volume)
 
-        self.value = sum(self._trade_values) / sum(self._volumes)
+        if self._value_is_due(ts_init):
+            self.value = sum(self._trade_values) / sum(self._volumes)
 
     def _reset(self):
         raise Exception("Not supported")
