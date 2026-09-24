@@ -1038,25 +1038,36 @@ class BaseStrategy(Strategy):
         realized_pnl = self.portfolio.realized_pnl(self.config.instrument_id)
 
         open_entries_str = "\n".join(str(o) for o in self.open_entries) if len(self.open_entries) > 0 else ""
+        open_exits_str = "\n".join(str(o) for o in self.open_exits) if len(self.open_exits) > 0 else ""
         OpenEntryQty = self.open_entries_qty
+        OpenExitQty = self.open_exits_qty
+
+        # Neither an entry nor an exit, so they appear in no other line here. They should not
+        # exist at all, which is why they are worth calling out when they do.
+        stale_orders = self.orders_from_a_previous_side
+        stale_str = ""
+        if stale_orders:
+            stale_str = f"FROM A PREVIOUS SIDE ({len(stale_orders)}): " + "\n".join(str(o) for o in stale_orders) + "\n"
 
         position_str = ""
         if self.exposure != 0:
             avg_px = self.position_avg_px
             gain = (self._last_tick.price - avg_px) * self._side_sign
             unrealized = self.exposure * gain
-            OpenExitQty = self.open_exits_qty
             diff = self.exposure - OpenExitQty
             if diff > 0:
                 self.log.warning(f"Diff: {diff}")
-            position_str = f"Position {self.position_qty} ({self._side}) @ {round(avg_px, 2)} | PerShare {round(gain, 2)} | PnL ${round(unrealized, 2)} | {OpenExitQty=} | Diff={diff}\n"
+            position_str = f"Position {self.position_qty} @ {round(avg_px, 2)} | PerShare {round(gain, 2)} | PnL ${round(unrealized, 2)} | Diff={diff}\n"
         metrics_data = {}
         for metric in self.metrics_to_save_on_tick + self.metrics_to_save_on_1min:
             vals = {k: str(round(v, 3)) if v is not None else "None" for k, v in metric.get_vals().items()}
             metrics_data = {**metrics_data, **vals}
         self.log.info(
-            f"UPDATE: {self.config.instrument_id}\n{tick_str}\n"
-            f"Total Entered {self._total_entry_qty} ({self._side}) | Realized: {realized_pnl} | {OpenEntryQty=} Orders: {open_entries_str}\n"
+            f"UPDATE: {self.config.instrument_id} | Side: {self._side}\n{tick_str}\n"
+            f"Total Entered {self._total_entry_qty} | Realized: {realized_pnl}\n"
+            f"{OpenEntryQty=} Orders: {open_entries_str}\n"
+            f"{OpenExitQty=} Orders: {open_exits_str}\n"
+            f"{stale_str}"
             f"{position_str}"
             f"{self._print_update()}"
             f"{metrics_data}",
