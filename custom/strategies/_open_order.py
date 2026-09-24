@@ -7,6 +7,13 @@ from nautilus_trader.model.orders import Order
 
 ONLY_MODIFY_EVERY_NS = 80e6  # e6 converts from ms to ns
 
+# Alpaca implements modify as cancel-and-replace: a replacement order starts with its own fresh
+# filled_qty. If a fill lands on the venue right as we send a modify, our modify request still
+# carries the pre-fill quantity, so the replacement order can stack a full new fill on top of the
+# one that just landed. Refuse to modify for a short window after any fill so the fill has time to
+# reach us and reduce the quantity we ask for (see OpenOrder.leaves_qty).
+BLOCK_MODIFY_AFTER_FILL_NS = 250e6  # e6 converts from ms to ns
+
 # Tag carried by the order `_reconcile` sends to unwind a wrong-way position. It sits on the
 # entry side, so without a way to tell it apart the entry sweeps cancel it on sight.
 FLATTEN_TAG = "flatten"
@@ -58,6 +65,11 @@ class OpenOrder:
         return self._first_partial_fill_ns
 
     @property
+    def last_fill_ns(self):
+        fills = [fill.ts_event for fill in self.order.events if isinstance(fill, OrderFilled)]
+        return max(fills) if fills else None
+
+    @property
     def leaves_qty(self):
         # Clamp to 0: fills can exceed pending modify qty due to race between modify and fill
         if int(self.filled_qty) >= int(self.quantity):
@@ -83,6 +95,9 @@ class OpenOrder:
 
     def _can_be_modified(self, now_ns):
         if (now_ns - self._last_modify_ns) < ONLY_MODIFY_EVERY_NS:
+            return False
+        last_fill_ns = self.last_fill_ns
+        if last_fill_ns is not None and (now_ns - last_fill_ns) < BLOCK_MODIFY_AFTER_FILL_NS:
             return False
         return self.order.status not in [
             OrderStatus.SUBMITTED,
