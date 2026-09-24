@@ -89,6 +89,16 @@ def flatten_dict(d: dict, parent_key: str = "", sep: str = "_") -> dict:
     return dict(items)
 
 
+# Alpaca refuses to replace an order until it has left pending_new, and around the open orders can
+# sit in pending_new for 10+ seconds. A modify sent during that window is held rather than sent and
+# then rejected with this reason once Alpaca confirms the order (see `_release_pending_new`).
+MODIFY_HELD_PENDING_NEW_REASON = "modify not sent: order was still pending_new at alpaca"
+
+# Release a held modify after this long even if the WS "new" never arrives, so a dropped WS message
+# can't strand the order in PENDING_UPDATE.
+PENDING_NEW_HOLD_TIMEOUT_SECS = 30.0
+
+
 class AlpacaExecClientConfig(LiveExecClientConfig, frozen=True):
     """
     Configuration for ``AlpacaExecutionClient`` instances.
@@ -223,6 +233,14 @@ class AlpacaExecutionClient(LiveExecutionClient):
         # and failed with a terminal-state error (rejected/filled/canceled).
         # Prevents infinite retry loops when Alpaca returns these in open orders queries.
         self._handled_ghost_ids: set[str] = set()
+
+        # Venue order IDs the submit response reported as pending_new, until the WS says otherwise.
+        # Modifies for these are held in `_held_modifies` instead of being sent (Alpaca would 422).
+        self._pending_new_venue_ids: set[str] = set()
+        # Venue order IDs whose WS "new" has arrived. The WS "new" can beat the submit response,
+        # which then still says pending_new; this keeps that order from being marked pending again.
+        self._ws_new_venue_ids: set[str] = set()
+        self._held_modifies: dict[str, ModifyOrder] = {}
 
         # Capture start time for querying fills during reconciliation
         self._start_ns: int = self._clock.timestamp_ns()
@@ -921,6 +939,8 @@ class AlpacaExecutionClient(LiveExecutionClient):
             alpaca_order = await self._http_client.submit_order(order_request)
             # Register venue_id mapping so reconciliation fill reports can resolve it
             self._venue_id__client_id_map[alpaca_order["id"]] = str(order.client_order_id)
+            if alpaca_order.get("status") == "pending_new" and alpaca_order["id"] not in self._ws_new_venue_ids:
+                self._pending_new_venue_ids.add(alpaca_order["id"])
             self.generate_order_accepted(
                 strategy_id=order.strategy_id,
                 instrument_id=order.instrument_id,
@@ -1030,6 +1050,18 @@ class AlpacaExecutionClient(LiveExecutionClient):
                     venue_order_id=None,
                     reason="No venue_order_id found",
                     ts_event=self._clock.timestamp_ns(),
+                )
+                return
+
+            if venue_order_id.value in self._pending_new_venue_ids:
+                self._log.info(
+                    f"Holding modify for {command.client_order_id}: {venue_order_id} is still pending_new at Alpaca",
+                )
+                self._held_modifies[venue_order_id.value] = command
+                self._loop.call_later(
+                    PENDING_NEW_HOLD_TIMEOUT_SECS,
+                    self._release_pending_new,
+                    venue_order_id.value,
                 )
                 return
 
@@ -1272,6 +1304,29 @@ class AlpacaExecutionClient(LiveExecutionClient):
         already_matched = self._matched_inferred_qty.get(str(order.client_order_id), 0)
         return total_inferred - already_matched
 
+    def _release_pending_new(self, venue_order_id: str) -> None:
+        """
+        Mark `venue_order_id` as past pending_new, and bounce any modify held while it wasn't.
+
+        The held modify is rejected rather than sent: its price is as old as the pending_new wait
+        was long, and the strategy re-modifies at its current price once it sees the rejection.
+        """
+        self._pending_new_venue_ids.discard(venue_order_id)
+        command = self._held_modifies.pop(venue_order_id, None)
+        if command is None:
+            return
+        order = self._cache.order(command.client_order_id)
+        if order is None or order.is_closed:
+            return
+        self.generate_order_modify_rejected(
+            strategy_id=command.strategy_id,
+            instrument_id=command.instrument_id,
+            client_order_id=command.client_order_id,
+            venue_order_id=VenueOrderId(venue_order_id),
+            reason=MODIFY_HELD_PENDING_NEW_REASON,
+            ts_event=self._clock.timestamp_ns(),
+        )
+
     # -- WEBSOCKET HANDLERS -------------------------------------------------------------------
 
     def _handle_ws_message(self, msg: dict) -> None:
@@ -1302,6 +1357,13 @@ class AlpacaExecutionClient(LiveExecutionClient):
             # Extract order identifiers
             venue_order_id_str = order_data.get("id")
             client_order_id_str = order_data.get("client_order_id")
+
+            # Any event past pending_new ("new", or a terminal one) means Alpaca now accepts replaces
+            if event not in ("pending_new", "accepted") and venue_order_id_str:
+                if event == "new":
+                    self._ws_new_venue_ids.add(venue_order_id_str)
+                if venue_order_id_str in self._pending_new_venue_ids:
+                    self._release_pending_new(venue_order_id_str)
 
             venue_order_id = VenueOrderId(venue_order_id_str)
             client_order_id = ClientOrderId(client_order_id_str) if client_order_id_str else None

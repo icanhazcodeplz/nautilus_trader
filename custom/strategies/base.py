@@ -15,6 +15,7 @@ from custom.strategies._open_order import OpenOrder, CLOSED_STATUS_LIST, FLATTEN
 from custom.strategies._side import Side  # noqa: F401  (re-exported: `from ...base import Side`)
 from custom.utils.alpaca_trader_http_client import AlpacaTraderHelper
 from custom.utils.precision_utils import make_Price
+from nautilus_trader.adapters.alpaca.execution import MODIFY_HELD_PENDING_NEW_REASON
 from nautilus_trader.common.component import TimeEvent
 
 from nautilus_trader.common.enums import LogColor
@@ -773,6 +774,11 @@ class BaseStrategy(Strategy):
                     self._reconcile()
         elif isinstance(order_event, OrderModifyRejected):
             self.clear_open_order_modify_params(order_event)
+            if order_event.reason == MODIFY_HELD_PENDING_NEW_REASON:
+                # The exec client never sent this modify; it held it until Alpaca confirmed the order,
+                # so nothing is out of sync and the next tick should re-modify at the current price.
+                self.log.debug(f"Modify for {order_event.client_order_id} was held while pending_new; retrying")
+                return
 
             # Only apply cooldown for errors where retrying quickly won't help
             _COOLDOWN_REASONS = (
