@@ -59,9 +59,9 @@ class AlpacaEnumParser:
     def parse_alpaca_order_side(side: str) -> OrderSide:
         if side == "buy":
             return OrderSide.BUY
-        elif side == "sell":
+        # The account activities (FILL) endpoint reports a sale that opens a short as "sell_short"
+        elif side in ("sell", "sell_short"):
             return OrderSide.SELL
-
         else:
             raise ValueError(f"Unknown Alpaca order side: {side}")
 
