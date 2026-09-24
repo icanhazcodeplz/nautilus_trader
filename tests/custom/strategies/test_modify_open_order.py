@@ -1,12 +1,12 @@
 """
-Tests for BaseStrategy.modify_open_order's venue-quantity clamp.
+Tests for BaseStrategy.modify_open_order's quantity handling.
 
-Alpaca implements modify as cancel-and-replace, and the replacement order starts with its own
-fresh filled_qty. Resending the full target quantity on every reprice let a replacement stack a
-fresh fill on top of whatever had already filled against the logical order -- the root cause of
-the 2026-09-23 AMZN overfill (53 filled, then another 100 filled on the replacement, for 153
-against a 100-share cap). These tests pin that only the leftover quantity (target - filled) is
-ever sent to the venue.
+Alpaca implements modify as cancel-and-replace, and the replacement carries the chain's cumulative
+filled_qty: `qty` is the order's total size. An earlier version sent only the leftover
+(target - filled), which shrank orders -- an exit for 100 with 41 filled was replaced as qty=59 and
+then counted FILLED at 59 -- and, near the end of an order, sent a qty at or below filled_qty that
+Alpaca rejects with "qty must be > filled_qty" (109 times in the 2026-09-24 10:22 run). These tests
+pin that the full target is sent, and that the modify is skipped once the target is reached.
 """
 
 from unittest.mock import MagicMock
@@ -59,7 +59,7 @@ class _ModifyHarness(BaseStrategy):
         pass
 
 
-def test_sends_only_the_leftover_quantity_after_a_partial_fill():
+def test_sends_the_full_target_after_a_partial_fill():
     open_order = OpenOrder(_order(quantity=100, filled_qty=53))
     s = _ModifyHarness()
 
@@ -67,7 +67,7 @@ def test_sends_only_the_leftover_quantity_after_a_partial_fill():
 
     assert result is True
     sent_qty = s.modify_order.call_args.kwargs["quantity"]
-    assert int(sent_qty) == 47, "must not re-request the 53 shares already filled"
+    assert int(sent_qty) == 100, "Alpaca's qty is the total size; sending 47 would shrink the order"
 
 
 def test_sends_the_full_quantity_when_nothing_has_filled():
@@ -101,7 +101,7 @@ def test_skips_the_modify_when_fills_have_already_exceeded_the_target():
     s.modify_order.assert_not_called()
 
 
-def test_a_resize_is_clamped_against_the_new_target_not_the_stale_leaves_qty():
+def test_a_resize_sends_the_new_target():
     """Exit-tier resizing passes a new target quantity that differs from the order's current one."""
     open_order = OpenOrder(_order(quantity=10, filled_qty=4))
     s = _ModifyHarness()
@@ -109,14 +109,10 @@ def test_a_resize_is_clamped_against_the_new_target_not_the_stale_leaves_qty():
     s.modify_open_order(open_order, quantity=20, price=10.01)  # resized up to 20
 
     sent_qty = s.modify_order.call_args.kwargs["quantity"]
-    assert int(sent_qty) == 16  # 20 - 4 already filled
+    assert int(sent_qty) == 20
 
 
-def test_the_open_orders_own_target_bookkeeping_is_not_shrunk_to_the_venue_qty():
-    """
-    Regression guard: OpenOrder.quantity/leaves_qty must keep tracking the full target, not the
-    leftover amount sent to the venue -- otherwise the next reprice double-subtracts filled_qty.
-    """
+def test_the_open_orders_target_bookkeeping_tracks_the_full_target():
     open_order = OpenOrder(_order(quantity=100, filled_qty=53))
     s = _ModifyHarness()
 

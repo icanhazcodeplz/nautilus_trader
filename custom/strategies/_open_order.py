@@ -7,11 +7,11 @@ from nautilus_trader.model.orders import Order
 
 ONLY_MODIFY_EVERY_NS = 80e6  # e6 converts from ms to ns
 
-# Alpaca implements modify as cancel-and-replace: a replacement order starts with its own fresh
-# filled_qty. If a fill lands on the venue right as we send a modify, our modify request still
-# carries the pre-fill quantity, so the replacement order can stack a full new fill on top of the
-# one that just landed. Refuse to modify for a short window after any fill so the fill has time to
-# reach us and reduce the quantity we ask for (see OpenOrder.leaves_qty).
+# Alpaca implements modify as cancel-and-replace. Normally the replacement carries the chain's
+# cumulative filled_qty, but if a fill lands on the old order while the replace is in flight, the
+# replacement can be built without it and then fill its full qty on top (2 of 65 replacements with
+# fills in the 2026-09-24 10:22 run). Refuse to modify for a short window after any fill, so we
+# don't reprice into the middle of a burst of fills.
 BLOCK_MODIFY_AFTER_FILL_NS = 250e6  # e6 converts from ms to ns
 
 # Tag carried by the order `_reconcile` sends to unwind a wrong-way position. It sits on the

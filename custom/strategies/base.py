@@ -361,24 +361,18 @@ class BaseStrategy(Strategy):
         qty_obj = self.instrument.make_qty(quantity)
         price_obj = make_Price(price)
         if open_order.update_last_modify_if_allowed(qty_obj, price_obj, now_ns):
-            # Alpaca implements modify as cancel-and-replace, and the replacement order starts
-            # with its own fresh filled_qty. Sending the full target quantity here would let the
-            # replacement stack a whole new fill on top of whatever has already filled against
-            # this logical order, so only ask the venue for what's still needed to reach the
-            # target (`_can_be_modified` also blocks modifying too soon after a fill, since a
-            # just-landed fill may not be reflected in filled_qty yet).
+            # Alpaca implements modify as cancel-and-replace, and the replacement carries the
+            # chain's cumulative filled_qty, so `qty` is the order's total size and must exceed what
+            # has already filled -- send the full target, and skip once it's been reached (Alpaca
+            # would reject it with "qty must be > filled_qty").
             if int(open_order.filled_qty) >= int(qty_obj):
                 self.log.debug(
                     f"Skipping modify for {open_order.client_order_id}: already filled "
                     f"{open_order.filled_qty} >= target {qty_obj}."
                 )
                 return False
-            venue_qty = self.instrument.make_qty(qty_obj - open_order.filled_qty)
-            self.log.debug(
-                f"Modifying order {open_order.client_order_id} with values {qty_obj} @ {price_obj} "
-                f"(sending venue qty {venue_qty} after {open_order.filled_qty} already filled)."
-            )
-            self.modify_order(open_order.order, quantity=venue_qty, price=price_obj)
+            self.log.debug(f"Modifying order {open_order.client_order_id} with values {qty_obj} @ {price_obj}.")
+            self.modify_order(open_order.order, quantity=qty_obj, price=price_obj)
             return True
         return False
 

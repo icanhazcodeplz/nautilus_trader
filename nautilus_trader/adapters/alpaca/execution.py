@@ -222,8 +222,6 @@ class AlpacaExecutionClient(LiveExecutionClient):
         # Used to correct REST API eventual consistency lag in order status reports.
         self._ws_filled_qty: dict[str, str] = {}
 
-        # Track accumulated fills from previous venue orders per client_order_id.
-        # Alpaca's replacement model creates a NEW venue order with fresh fill history,
         # Track qty of inferred fills that have been matched by real WS fills.
         # Used to avoid double-counting when reconciliation infers a fill and
         # the real WS fill arrives shortly after with a different trade_id.
@@ -365,12 +363,12 @@ class AlpacaExecutionClient(LiveExecutionClient):
         else:
             filled_qty_int = int(rest_filled_str)
 
-        # NOTE: Alpaca's REST API only reports fills for the CURRENT venue order,
-        # but NT's cache accumulates fills across all venue orders in a replacement
-        # chain. This means report.filled_qty < cache.filled_qty for replaced orders.
-        # We intentionally do NOT inflate the report here because during the transient
-        # window after a replace, REST can be ahead of WS for the new venue order's
-        # fills, causing spurious inferred fills that corrupt the position.
+        # NOTE: A replacement venue order normally carries the chain's cumulative filled_qty, so
+        # this matches NT's cache. The exception is a fill that lands on the old venue order while
+        # the replace is in flight: the replacement can be built without it, leaving
+        # report.filled_qty < cache.filled_qty. We intentionally do NOT inflate the report here
+        # because during the transient window after a replace, REST can be ahead of WS for the new
+        # venue order's fills, causing spurious inferred fills that corrupt the position.
         # The reconciliation engine handles the mismatch: on first encounter it
         # force-closes the order (if venue says FILLED), and on subsequent cycles
         # it silently accepts the mismatch for already-closed orders.
@@ -1421,9 +1419,8 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
                 # Dedup: skip fill if this execution_id was already processed.
                 # NOTE: We rely solely on execution_id for dedup, NOT on filled_qty comparison.
-                # Alpaca's replacement model creates fresh fill histories on the new order,
-                # so the new order's filled_qty starts from 0 even though the cache already
-                # has fills from the old (replaced) order.
+                # A replacement's filled_qty is normally cumulative across the chain, but not when a
+                # fill landed on the old order mid-replace, so it can't be compared to the cache's.
                 if alpaca_execution_id in self._processed_execution_ids:
                     self._log.warning(f"Skipping duplicate execution_id: {alpaca_execution_id}")
                 else:
