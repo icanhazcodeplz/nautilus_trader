@@ -65,11 +65,11 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     simple_take: bool = False
     trailing_take: bool = False
     num_exit_tiers: int = 1
-    # "HH:MM" in US/Eastern. Nothing trades until the clock reaches this time -- no entries, no
+    # "HH:MM" or "HH:MM:SS" in US/Eastern. Nothing trades until the clock reaches this time -- no entries, no
     # exits, no ticks acted on at all. None trades from the first tick received, which for a feed
     # that carries pre-market prints means trading before the open.
     start_trading_at: str | None = None
-    # "HH:MM" in US/Eastern. Once the clock reaches this time no new entries are placed for the
+    # "HH:MM" or "HH:MM:SS" in US/Eastern. Once the clock reaches this time no new entries are placed for the
     # rest of the day; exits keep running. None disables the cutoff.
     stop_entries_after: str | None = None
     # Price distance from the direction threshold. With `reversion`, entries are blocked while the
@@ -82,14 +82,18 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
 
 
 def parse_est_time(value: str | None) -> time | None:
-    """Parse an "HH:MM" wall-clock string into a `time`, or None when no value is given."""
+    """Parse an "HH:MM" or "HH:MM:SS" wall-clock string into a `time`, or None when no value is given."""
     if value is None:
         return None
     try:
-        hour, minute = (int(part) for part in value.split(":"))
-        return time(hour=hour, minute=minute)
+        parts = [int(part) for part in value.split(":")]
+        if len(parts) not in (2, 3):
+            raise ValueError
+        return time(*parts)
     except (ValueError, TypeError):
-        raise ValueError(f"Expected a time formatted as 'HH:MM' (e.g. '09:31'), got {value!r}") from None
+        raise ValueError(
+            f"Expected a time formatted as 'HH:MM' or 'HH:MM:SS' (e.g. '09:31' or '09:31:15'), got {value!r}",
+        ) from None
 
 
 def is_market_open(now_utc: pd.Timestamp) -> bool:
