@@ -52,6 +52,7 @@ class _FakeStrategy(BaseStrategy):
         self._stopping_out = False
         self._flipping = False
         self._last_stop_out_attempt = 0
+        self._entries_blocked_until_ns = 0
         self._last_wrong_way_flatten_ns = 0
         self._trader_helper = None
         self._total_entry_qty = 0
@@ -197,6 +198,44 @@ def test_exit_is_never_blocked_by_stopping_out_but_entry_is():
 
         s.exit(100, 10.0, tag="t")
         assert s._submit_limit_order.call_count == 1, f"{side}: exit should go through"
+
+
+def test_a_stop_out_pauses_entries_for_ten_seconds_but_not_exits():
+    s = _FakeStrategy("long", position_qty=500)
+    s.stop_price = 9.95
+    s._stop_out_if_needed(MagicMock(price=9.94))  # stop triggers at t=10s
+    s._stopping_out = False  # e.g. price recovered before the exit filled
+
+    s._clock_mock.timestamp_ns.return_value = 19_900_000_000  # 9.9s later
+    s.enter(100, 10.0)
+    assert s._submit_limit_order.call_count == 0, "entry should still be paused"
+    s.exit(100, 10.0)
+    assert s._submit_limit_order.call_count == 1, "exits are never paused"
+
+    s._clock_mock.timestamp_ns.return_value = 20_000_000_000  # 10s later
+    s.enter(100, 10.0)
+    assert s._submit_limit_order.call_count == 2, "entry allowed once the pause is over"
+
+
+def test_the_pause_restarts_when_the_stop_out_reaches_flat():
+    s = _FakeStrategy("long", position_qty=500)
+    s.stop_price = 9.95
+    s._stop_out_if_needed(MagicMock(price=9.94))  # triggers at t=10s
+
+    s._clock_mock.timestamp_ns.return_value = 13_000_000_000  # exit fills 3s later
+    s._position_qty = 0
+    s._stop_out_if_needed(MagicMock(price=9.90))
+
+    s._clock_mock.timestamp_ns.return_value = 22_000_000_000  # 12s after trigger, 9s after flat
+    assert s._in_stop_out_cooldown
+    s._clock_mock.timestamp_ns.return_value = 23_000_000_000  # 10s after flat
+    assert not s._in_stop_out_cooldown
+
+
+def test_going_flat_without_a_stop_out_does_not_pause_entries():
+    s = _FakeStrategy("long", position_qty=0)
+    s._stop_out_if_needed(MagicMock(price=10.0))
+    assert not s._in_stop_out_cooldown
 
 
 def test_exit_is_never_blocked_by_flipping_but_entry_is():

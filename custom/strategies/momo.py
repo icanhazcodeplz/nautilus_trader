@@ -337,7 +337,7 @@ class MomoStrategy(BaseStrategy):
         exposure = self.exposure
 
         allow_entries = True
-        if self._stopping_out:
+        if self._stopping_out or self._in_stop_out_cooldown:
             allow_entries = False
         if self._flipping:
             allow_entries = False

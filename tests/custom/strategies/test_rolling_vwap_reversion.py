@@ -395,6 +395,7 @@ def _tick_strategy(
     """A MomoStrategy mock wired for the real _on_trade_tick."""
     s = MagicMock(spec=MomoStrategy)
     s._stopping_out = False
+    s._in_stop_out_cooldown = False
     s._flipping = flipping
     s._start_trading_at = parse_est_time(start_trading_at)
     s._stop_entries_after = parse_est_time(stop_entries_after)

@@ -74,6 +74,7 @@ class BaseStrategy(Strategy):
     _MODIFY_REJECT_COOLDOWN_SECS = 1  # Seconds to block retries after a ModifyRejected
     _RECONCILE_COOLDOWN_SECS = 3  # Minimum seconds between reconciliation attempts
     _ATTEMPT_STOP_OUT_EVERY_MS = 60
+    _BLOCK_ENTRIES_AFTER_STOP_OUT_SECS = 10
     _DELAY_RELEASE_INTERVAL_MS = 100  # How often the delay buffer is checked for ticks now due
 
     def __init__(self, config: BaseStrategyConfig) -> None:
@@ -115,6 +116,7 @@ class BaseStrategy(Strategy):
         self._stopping_out = False
         self._flipping = False  # Waiting to go flat so set_side() can switch.
         self._last_stop_out_attempt = 0
+        self._entries_blocked_until_ns = 0  # Set by _stop_out_if_needed; see _in_stop_out_cooldown
         self._exec_engine = None  # Set by run_utils after node.build()
         self._force_reconcile_count = 0
         self._last_force_reconcile_ns = 0
@@ -397,8 +399,20 @@ class BaseStrategy(Strategy):
         if remaining_qty_to_exit > 0:
             self.exit(quantity=remaining_qty_to_exit, limit_price=new_limit_price, tag="s")
 
+    @property
+    def _in_stop_out_cooldown(self) -> bool:
+        """True while entries are paused after a stop-out (see _BLOCK_ENTRIES_AFTER_STOP_OUT_SECS)."""
+        return self.clock.timestamp_ns() < self._entries_blocked_until_ns
+
+    def _block_entries_after_stop_out(self):
+        self._entries_blocked_until_ns = self.clock.timestamp_ns() + int(self._BLOCK_ENTRIES_AFTER_STOP_OUT_SECS * 1e9)
+
     def _stop_out_if_needed(self, tick: TradeTick):
         if self.position_qty == 0:
+            if self._stopping_out:
+                # The stop-out just finished; the entry pause runs its full length from here
+                self._block_entries_after_stop_out()
+                self.log.info(f"Stopped out. Pausing entries for {self._BLOCK_ENTRIES_AFTER_STOP_OUT_SECS}s")
             self.stop_price = None
             self._stopping_out = False
             return
@@ -415,6 +429,9 @@ class BaseStrategy(Strategy):
         if self.stop_price is not None:
             if (float(tick.price) - float(self.stop_price)) * sign <= 0:
                 self._stopping_out = True
+                # Also set here, so a stop-out that never reaches flat (price recovers and
+                # _stopping_out clears) still pauses entries
+                self._block_entries_after_stop_out()
                 for order in self.entries_to_cancel:
                     self.cancel_open_order(order)
 
@@ -692,8 +709,8 @@ class BaseStrategy(Strategy):
         """
         Shared body of _buy/_sell.
 
-        The trading_enabled, _stopping_out and _flipping guards apply only when this order would
-        OPEN the position. Exits must always be allowed through, which is the whole point of
+        The trading_enabled, _stopping_out, post-stop-out pause and _flipping guards apply only when
+        this order would OPEN the position. Exits must always be allowed through, which is the whole point of
         stopping out -- and of flipping, which gets flat by letting the existing exits fill.
         """
         is_entry = side == self._entry_order_side
@@ -703,6 +720,9 @@ class BaseStrategy(Strategy):
                 return
             if self._stopping_out:
                 self.log.info("Ignoring entry request because self._stopping_out is True")
+                return
+            if self._in_stop_out_cooldown:
+                self.log.debug("Ignoring entry request during the post-stop-out pause")
                 return
             if self._flipping:
                 self.log.info("Ignoring entry request because self._flipping is True")
