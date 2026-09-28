@@ -407,6 +407,10 @@ class BaseStrategy(Strategy):
     def _block_entries_after_stop_out(self):
         self._entries_blocked_until_ns = self.clock.timestamp_ns() + int(self._BLOCK_ENTRIES_AFTER_STOP_OUT_SECS * 1e9)
 
+    def _force_exit_due(self) -> bool:
+        """Whether to stop out now regardless of price. Subclasses override; never by default."""
+        return False
+
     def _stop_out_if_needed(self, tick: TradeTick):
         if self.position_qty == 0:
             if self._stopping_out:
@@ -421,13 +425,14 @@ class BaseStrategy(Strategy):
             return
 
         sign = self._side_sign
+        force_exit = self._force_exit_due()
         if self.exposure > 0 and self.stop_price is None:
             # Below the market when long, above it when short
             self.stop_price = tick.price - sign * self.stop_loss
             self.log.info(f"Setting stop price to {self.stop_price}")
 
-        if self.stop_price is not None:
-            if (float(tick.price) - float(self.stop_price)) * sign <= 0:
+        if self.stop_price is not None or force_exit:
+            if force_exit or (float(tick.price) - float(self.stop_price)) * sign <= 0:
                 self._stopping_out = True
                 # Also set here, so a stop-out that never reaches flat (price recovers and
                 # _stopping_out clears) still pauses entries
@@ -441,9 +446,8 @@ class BaseStrategy(Strategy):
                 else:
                     new_price = min(float(tick.price) * 1.10, float(tick.price) + 0.20)
                 new_limit_price = self.instrument.make_price(new_price)
-                self.log.info(
-                    f"Stop price {self.stop_price} reached, exiting at {new_limit_price}", color=LogColor.YELLOW
-                )
+                reason = "Force-exit time reached" if force_exit else f"Stop price {self.stop_price} reached"
+                self.log.info(f"{reason}, exiting at {new_limit_price}", color=LogColor.YELLOW)
                 self.exit_position_at_price(new_limit_price)
             else:
                 self._stopping_out = False

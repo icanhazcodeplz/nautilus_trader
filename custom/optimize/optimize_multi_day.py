@@ -37,7 +37,7 @@ OPTUNA_DB_DIR = "optuna_dbs"
 # Backtest window applied to every day, as the runner's `__main__` does. The offset is EDT, which
 # holds for every day in SAMPLE_DAYS.
 START_TIME = "09:20-04:00"
-END_TIME = "09:40-04:00"
+END_TIME = "09:46-04:00"
 
 # Days backtested concurrently within one trial.
 N_DAY_WORKERS = 7
@@ -58,6 +58,26 @@ def pickle_path_for(study_name):
 
 
 SAMPLE_DAYS = [
+    "2026-05-01_AMZN",
+    "2026-05-04_AMZN",
+    "2026-05-05_AMZN",
+    "2026-05-06_AMZN",
+    "2026-05-07_AMZN",
+    "2026-05-08_AMZN",
+    "2026-05-11_AMZN",
+    "2026-05-12_AMZN",
+    "2026-05-13_AMZN",
+    "2026-05-14_AMZN",
+    "2026-05-15_AMZN",
+    "2026-05-18_AMZN",
+    "2026-05-19_AMZN",
+    "2026-05-20_AMZN",
+    "2026-05-21_AMZN",
+    "2026-05-22_AMZN",
+    "2026-05-26_AMZN",
+    "2026-05-27_AMZN",
+    "2026-05-28_AMZN",
+    "2026-05-29_AMZN",
     "2026-06-01_AMZN",
     "2026-06-02_AMZN",
     "2026-06-03_AMZN",
@@ -134,6 +154,11 @@ SAMPLE_DAYS = [
     "2026-09-15_AMZN",
     "2026-09-16_AMZN",
     "2026-09-17_AMZN",
+    "2026-09-18_AMZN",
+    "2026-09-21_AMZN",
+    "2026-09-22_AMZN",
+    "2026-09-23_AMZN",
+    "2026-09-24_AMZN",
 ]
 
 
@@ -193,11 +218,13 @@ def optimize(trial):
         simple_take=True,
         trailing_take=False,
         num_exit_tiers=2,
-        entry_strategy=EntryStrategy.CROSS_VWAP_BAND,
-        random_seed=1,
-        start_trading_at="09:30",
+        entry_strategy=EntryStrategy.SIT_AT_DISTANCE,
+        entry_distance=0.5,
+        start_trading_at="09:29:45",
         stop_entries_after="09:31",
-        entry_exclusion_band=0.5,
+        force_exit_at="09:45",
+        entry_exclusion_band=None,
+        random_seed=1,
     )
     for param_name, space in trial.study.sampler._search_space.items():
         param_type = {type(val) for val in space}
@@ -279,18 +306,18 @@ def per_day_table(per_day_json):
 if __name__ == "__main__":
     delete_existing = False
     run_trials = False
-    MAKE_RESULTS_PICKLE = True
+    MAKE_RESULTS_PICKLE = False
 
     study_name = "test"
     # Every value in a list must share one type, and `None` cannot be a grid value: a sweep that
     # wants to "turn off" `entry_exclusion_band` or `take_profit` needs a numeric sentinel instead.
     search_space = dict(
         # direction_strategy=[DirectionStrategy.REVERSION, DirectionStrategy.MOMENTUM],
-        entry_exclusion_band=linspace_float(low=0.6, high=0.8, step=0.1),
+        entry_distance=linspace_float(low=0.8, high=1.0, step=0.1),
         stop_entries_after=["09:31"],
         # direction_threshold=[DirectionThreshold.OPEN, DirectionThreshold.ROLLING_VWAP],
-        take_profit=linspace_float(low=0.7, high=0.9, step=0.1),
-        stop_loss=linspace_float(low=2.6, high=3.6, step=0.25),
+        take_profit=linspace_float(low=0.6, high=0.8, step=0.05),
+        stop_loss=linspace_float(low=2.4, high=3.0, step=0.20),
         # num_exit_tiers=linspace_int(1, 3, step=1),
         # rolling_vwap_window=linspace_int(low=1000, high=3000, step=1000),
     )

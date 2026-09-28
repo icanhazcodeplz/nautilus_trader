@@ -65,13 +65,11 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     simple_take: bool = False
     trailing_take: bool = False
     num_exit_tiers: int = 1
-    # "HH:MM" or "HH:MM:SS" in US/Eastern. Nothing trades until the clock reaches this time -- no entries, no
-    # exits, no ticks acted on at all. None trades from the first tick received, which for a feed
-    # that carries pre-market prints means trading before the open.
+    # "HH:MM" or "HH:MM:SS" in US/Eastern
     start_trading_at: str | None = None
-    # "HH:MM" or "HH:MM:SS" in US/Eastern. Once the clock reaches this time no new entries are placed for the
-    # rest of the day; exits keep running. None disables the cutoff.
     stop_entries_after: str | None = None
+    force_exit_at: str | None = None
+
     # Price distance from the direction threshold. With `reversion`, entries are blocked while the
     # price is within this band of the threshold. With `momentum`, entries are only allowed while
     # the price is within it. None disables the band; long_only/short_only ignore it.
@@ -128,6 +126,16 @@ class MomoStrategy(BaseStrategy):
             raise ValueError(
                 f"start_trading_at {self.config.start_trading_at!r} is not before "
                 f"stop_entries_after {self.config.stop_entries_after!r}, so no entry could ever be placed"
+            )
+        self._force_exit_at: time | None = parse_est_time(self.config.force_exit_at)
+        if (
+            self._start_trading_at is not None
+            and self._force_exit_at is not None
+            and self._start_trading_at >= self._force_exit_at
+        ):
+            raise ValueError(
+                f"start_trading_at {self.config.start_trading_at!r} is not before "
+                f"force_exit_at {self.config.force_exit_at!r}, so every position would be forced out at once"
             )
         if self.config.entry_exclusion_band is not None and self.config.entry_exclusion_band < 0:
             raise ValueError(f"entry_exclusion_band must be >= 0 or None, got {self.config.entry_exclusion_band!r}")
@@ -322,6 +330,7 @@ class MomoStrategy(BaseStrategy):
                 self.log.info(f"Flipping from '{self._side}' to '{signal}'", color=LogColor.YELLOW)
 
     def _on_trade_tick(self, tick: TradeTick) -> None:
+        # TODO: Refactor: move "allow_entries" to base.
         self._on_first_tick(tick)
         # self.log.info(f"Trade tick: {tick}")
         # NOTE: Need to be subscribed to order book deltas to get best bid/ask prices
@@ -435,11 +444,21 @@ class MomoStrategy(BaseStrategy):
         return now_est.time() >= self._start_trading_at
 
     def _entries_stopped_for_the_day(self) -> bool:
-        """True once the Eastern wall clock has reached `stop_entries_after`."""
+        """True once the Eastern wall clock has reached `stop_entries_after` or `force_exit_at`."""
+        if self._force_exit_due():
+            return True
         if self._stop_entries_after is None:
             return False
         now_est = self.clock.utc_now().tz_convert("US/Eastern")
         return now_est.time() >= self._stop_entries_after
+
+    def _force_exit_due(self) -> bool:
+        """True once the Eastern wall clock has reached `force_exit_at`."""
+        # TODO: Refactor, move to base
+        if self._force_exit_at is None:
+            return False
+        now_est = self.clock.utc_now().tz_convert("US/Eastern")
+        return now_est.time() >= self._force_exit_at
 
     def _entry_blocked_by_exclusion_band(self, price: float) -> bool:
         """Apply `entry_exclusion_band` around the direction threshold."""

@@ -143,9 +143,9 @@ if __name__ == "__main__":
         params = dict(
             allow_trades=True,
             max_position_multiplier=1,
-            trade_size=50,
-            stop_loss=3.0,
-            take_profit=0.5,
+            trade_size=100,
+            stop_loss=3.6,
+            take_profit=0.9,
             upper_scalar_multiplier=0.5,
             lower_scalar_multiplier=0.5,
             rolling_vwap_window=2000,
@@ -160,10 +160,11 @@ if __name__ == "__main__":
             trailing_take=False,
             num_exit_tiers=2,
             entry_strategy=EntryStrategy.SIT_AT_DISTANCE,
-            entry_distance=0.75,
+            entry_distance=0.8,
             random_seed=1,
-            start_trading_at="09:30",
+            start_trading_at="09:29:45",
             stop_entries_after="09:31",
+            force_exit_at="09:35",
             entry_exclusion_band=None,
             # --- TOP GAINERS PARAMS ----------------
             # price_min=0.8,
@@ -180,9 +181,9 @@ if __name__ == "__main__":
     # )
 
     symbol = "AMZN"
-    day_str = "2026-08-13"
-    start_str = day_str + " " + "09:20-04:00"
-    end_str__ = day_str + " " + "09:36-04:00"
+    day_str = "2026-05-05"
+    start_str = day_str + " " + "09:29-04:00"
+    end_str__ = day_str + " " + "09:59-04:00"
     run_single_backtest(
         symbol,
         start_str,

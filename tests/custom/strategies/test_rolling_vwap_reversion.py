@@ -7,6 +7,7 @@ entries and cancels the resting ones, then the side switches once the exits have
 position flat.
 """
 
+from datetime import time
 from unittest.mock import MagicMock
 
 import pandas as pd
@@ -385,6 +386,7 @@ def _tick_strategy(
     now=POST_OPEN,
     start_trading_at=None,
     stop_entries_after=None,
+    force_exit_at=None,
     direction_strategy=DirectionStrategy.LONG_ONLY,
     threshold=None,
     entry_exclusion_band=None,
@@ -399,6 +401,7 @@ def _tick_strategy(
     s._flipping = flipping
     s._start_trading_at = parse_est_time(start_trading_at)
     s._stop_entries_after = parse_est_time(stop_entries_after)
+    s._force_exit_at = parse_est_time(force_exit_at)
     s.direction_strategy = direction_strategy
     s.entry_strategy = entry_strategy
     s._direction_threshold_value = threshold
@@ -431,6 +434,7 @@ def _tick_strategy(
     s._on_first_tick = MagicMock()
     s._trading_has_started = MomoStrategy._trading_has_started.__get__(s, MomoStrategy)
     s._entries_stopped_for_the_day = MomoStrategy._entries_stopped_for_the_day.__get__(s, MomoStrategy)
+    s._force_exit_due = MomoStrategy._force_exit_due.__get__(s, MomoStrategy)
     s._entry_blocked_by_exclusion_band = MomoStrategy._entry_blocked_by_exclusion_band.__get__(s, MomoStrategy)
     s._flip_side_if_needed = MagicMock()  # exercised on its own above
     s._rolling_tiered_take = MagicMock()
@@ -544,7 +548,7 @@ def test_no_cutoff_when_unset():
     s.enter.assert_called_once()
 
 
-@pytest.mark.parametrize("bad", ["9", "09:31:00", "nine", "25:00"])
+@pytest.mark.parametrize("bad", ["9", "09:31:00:00", "nine", "25:00", "09:31:60"])
 def test_bad_cutoff_string_is_rejected(bad):
     with pytest.raises(ValueError):
         parse_est_time(bad)
@@ -751,7 +755,13 @@ def test_either_bound_alone_is_accepted():
     assert MomoStrategy(config=_config(stop_entries_after="09:31"))._start_trading_at is None
 
 
-@pytest.mark.parametrize("bad", ["9", "09:30:00", "nine"])
+def test_seconds_are_accepted():
+    strategy = MomoStrategy(config=_config(start_trading_at="09:30:15", stop_entries_after="09:30:45"))
+    assert strategy._start_trading_at == time(9, 30, 15)
+    assert strategy._stop_entries_after == time(9, 30, 45)
+
+
+@pytest.mark.parametrize("bad", ["9", "09:30:00:00", "nine", "09:60"])
 def test_a_bad_start_string_is_rejected(bad):
     with pytest.raises(ValueError, match="Expected a time formatted"):
         MomoStrategy(config=_config(start_trading_at=bad))
