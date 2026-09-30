@@ -355,6 +355,11 @@ class MomoStrategy(BaseStrategy):
                 allow_entries = False
         if self._entries_stopped_for_the_day():
             allow_entries = False
+            # Entries resting from before the cutoff would otherwise sit unrepriced and could
+            # still fill. Re-issued every tick, as a cancel can be a no-op or be refused.
+            for order in self.entries_to_cancel:
+                self.log.info(f"Canceling entry {order.client_order_id}: entries are stopped for the day")
+                self.cancel_open_order(order)
         if self._entry_blocked_by_exclusion_band(float(price)):
             allow_entries = False
 
