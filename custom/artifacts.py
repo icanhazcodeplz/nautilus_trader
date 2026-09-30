@@ -346,7 +346,8 @@ class ArtifactsIO:
         if time_as_ns_int:
             # Convert "start_time" and "end_time" columns into ns since epoch
             for col in ["start_time", "end_time"]:
-                order_duration_df[col] = pd.to_datetime(order_duration_df[col]).astype("int64")
+                # pandas infers the unit from the strings' precision (ms strings → us), so pin ns
+                order_duration_df[col] = pd.to_datetime(order_duration_df[col]).dt.as_unit("ns").astype("int64")
 
             # If end_time equals start_time, add one nanosecond to end_time so that the plotting
             # tools don't break

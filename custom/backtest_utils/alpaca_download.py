@@ -10,6 +10,7 @@ from custom.backtest_utils.load_catalog_data import BACKTESTING_CATALOG
 from custom.catalog_options import write_json_single_line_entries
 from custom.utils.paths import repo_path
 from nautilus_trader.adapters.alpaca import ALPACA
+from nautilus_trader.adapters.alpaca.constants import has_excluded_condition
 from nautilus_trader.adapters.alpaca.utils import get_alpaca_key_and_secret
 from nautilus_trader.core.datetime import dt_to_unix_nanos
 from nautilus_trader.model import TradeTick
@@ -110,7 +111,9 @@ def get_trades_and_save_to_catalog_if_needed(symbol, day_in_question: pd.Timesta
             ts_init=ts,
         )
         for i, trade in enumerate(trades)
-        if trade.exchange != "D" and trade.size != 0
+        if trade.exchange != "D"
+        and trade.size != 0
+        and not has_excluded_condition(trade.conditions)
     ]
 
     BACKTESTING_CATALOG.write_data(trade_ticks)

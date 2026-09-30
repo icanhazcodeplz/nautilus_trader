@@ -21,6 +21,7 @@ import asyncio
 from typing import TYPE_CHECKING, Any
 
 from nautilus_trader.adapters.alpaca.constants import ALPACA_VENUE
+from nautilus_trader.adapters.alpaca.constants import has_excluded_condition
 from nautilus_trader.adapters.alpaca.http import AlpacaHttpClient
 from nautilus_trader.adapters.alpaca.providers import AlpacaInstrumentProvider
 from nautilus_trader.adapters.alpaca.utils import alpaca_date_str_to_nanos
@@ -247,6 +248,10 @@ class AlpacaDataClient(LiveMarketDataClient):
         """Convert an Alpaca trade message to a TradeTick."""
         # Skip FINRA market data messages
         if msg["x"] == "D":
+            return
+
+        # Skip official open/close re-reports, auction prints and out-of-hours trades
+        if has_excluded_condition(msg.get("c")):
             return
 
         # Skip zero qty trades
