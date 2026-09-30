@@ -71,6 +71,7 @@ from nautilus_trader.model.functions cimport price_type_to_str
 from nautilus_trader.model.identifiers cimport AccountId
 from nautilus_trader.model.identifiers cimport InstrumentId
 from nautilus_trader.model.identifiers cimport PositionId
+from nautilus_trader.model.identifiers cimport TradeId
 from nautilus_trader.model.identifiers cimport Venue
 from nautilus_trader.model.instruments.base cimport Instrument
 from nautilus_trader.model.instruments.betting cimport BettingInstrument
@@ -157,6 +158,7 @@ cdef class Portfolio(PortfolioFacade):
         self._realized_pnls: dict[InstrumentId, dict[AccountId, Money]] = {}
         self._snapshot_sum_per_position: dict[PositionId, Money] = {}
         self._snapshot_last_per_position: dict[PositionId, Money] = {}
+        self._snapshot_last_trade_id_per_position: dict[PositionId, TradeId] = {}
         self._snapshot_processed_counts: dict[PositionId, int] = {}
         self._snapshot_account_ids: dict[PositionId, AccountId] = {}
         self._net_positions: dict[InstrumentId, dict[AccountId, Decimal]] = {}
@@ -630,13 +632,10 @@ cdef class Portfolio(PortfolioFacade):
             # Check if this position_id has snapshots
             snapshot_ids = self._cache.position_snapshot_ids(event.instrument_id)
             if event.position_id in snapshot_ids:
-                # Compare with last snapshot PnL - if different, it's a new cycle
+                # Compare with last snapshot - if different, it's a new cycle
                 last_snapshot_pnl = self._snapshot_last_per_position.get(event.position_id)
                 if last_snapshot_pnl is not None and updated_position.realized_pnl is not None:
-                    if (
-                        updated_position.realized_pnl.currency != last_snapshot_pnl.currency
-                        or updated_position.realized_pnl != last_snapshot_pnl
-                    ):
+                    if not self._is_same_cycle_as_last_snapshot(updated_position, last_snapshot_pnl):
                         # New cycle detected - invalidate all accounts for this instrument
                         invalidate_all_accounts = True
                 else:
@@ -782,6 +781,7 @@ cdef class Portfolio(PortfolioFacade):
         self._pending_calcs.clear()
         self._snapshot_sum_per_position.clear()
         self._snapshot_last_per_position.clear()
+        self._snapshot_last_trade_id_per_position.clear()
         self._snapshot_processed_counts.clear()
         self._snapshot_account_ids.clear()
         self._venues_missing_price.clear()
@@ -2343,6 +2343,7 @@ cdef class Portfolio(PortfolioFacade):
                 last_pnl = None
                 position_id_snapshots = snapshot_data[position_id]
                 curr_count = len(position_id_snapshots)
+                self._snapshot_last_trade_id_per_position.pop(position_id, None)
 
                 if curr_count:
                     for s in position_id_snapshots:
@@ -2351,6 +2352,9 @@ cdef class Portfolio(PortfolioFacade):
                         # Track account_id for this position snapshot
                         if snapshot.account_id is not None:
                             self._snapshot_account_ids[position_id] = snapshot.account_id
+
+                        # Identifies which cycle the most recent snapshot captured
+                        self._snapshot_last_trade_id_per_position[position_id] = snapshot.last_trade_id_c()
 
                         if snapshot.realized_pnl is not None:
                             if sum_pnl is None:
@@ -2397,6 +2401,9 @@ cdef class Portfolio(PortfolioFacade):
                     if snapshot.account_id is not None:
                         self._snapshot_account_ids[position_id] = snapshot.account_id
 
+                    # Identifies which cycle the most recent snapshot captured
+                    self._snapshot_last_trade_id_per_position[position_id] = snapshot.last_trade_id_c()
+
                     if snapshot.realized_pnl is not None:
                         if sum_pnl is None:
                             sum_pnl = snapshot.realized_pnl
@@ -2435,6 +2442,7 @@ cdef class Portfolio(PortfolioFacade):
             self._snapshot_processed_counts.pop(stale_position_id, None)
             self._snapshot_sum_per_position.pop(stale_position_id, None)
             self._snapshot_last_per_position.pop(stale_position_id, None)
+            self._snapshot_last_trade_id_per_position.pop(stale_position_id, None)
             self._snapshot_account_ids.pop(stale_position_id, None)
 
         # Invalidate PnL cache when snapshots change (new snapshots or purges)
@@ -2556,17 +2564,12 @@ cdef class Portfolio(PortfolioFacade):
                 # Do NOT mark as processed - we still need to add current PnL
             else:
                 # Case 3: Position CLOSED
-                # If last snapshot equals current position realized PnL, subtract it here;
+                # If the last snapshot captured this same closed cycle, subtract it here;
                 # when we add the position realized below, net effect is `sum`.
-                # If not equal (new closed cycle not snapshotted), include full `sum` here
+                # Otherwise (new closed cycle not snapshotted), include full `sum` here
                 # and add the position realized below (net `sum + realized`).
                 last_pnl = self._snapshot_last_per_position.get(position_id)
-                if (
-                    last_pnl is not None
-                    and position.realized_pnl is not None
-                    and last_pnl.currency == position.realized_pnl.currency
-                    and last_pnl == position.realized_pnl
-                ):
+                if last_pnl is not None and self._is_same_cycle_as_last_snapshot(position, last_pnl):
                     contribution = sum_pnl.as_double() - last_pnl.as_double()
                 else:
                     contribution = sum_pnl.as_double()
@@ -2575,6 +2578,16 @@ cdef class Portfolio(PortfolioFacade):
                 # Do NOT mark as processed - we still need to add current PnL
 
         return contribution
+
+    cdef bint _is_same_cycle_as_last_snapshot(self, Position position, Money last_pnl):
+        # PnL alone is not enough: consecutive NETTING cycles can realize identical PnL
+        # (same size, same move), so the final trade ID must match too
+        return (
+            position.realized_pnl is not None
+            and last_pnl.currency == position.realized_pnl.currency
+            and last_pnl == position.realized_pnl
+            and self._snapshot_last_trade_id_per_position.get(position.id) == position.last_trade_id_c()
+        )
 
     cdef object _process_active_position_realized_pnl(
         self,

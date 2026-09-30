@@ -411,6 +411,8 @@ def _tick_strategy(
     s.exposure = 100
     s.max_position_allowed = 1000
     s.open_entries = set()
+    s.entries_to_cancel = set()
+    s.cancel_open_order = MagicMock()
     s.open_exits_qty = 0
     s.last_entry_price = 10.0
     s.take_profit = 0.10
@@ -546,6 +548,30 @@ def test_no_cutoff_when_unset():
     s = _tick_strategy(flipping=False, now=_et("15:59:00"), stop_entries_after=None)
     s._on_trade_tick(MagicMock(price=8.0))
     s.enter.assert_called_once()
+
+
+def test_an_entry_resting_from_before_the_cutoff_is_canceled_at_it():
+    entry = MagicMock()
+    s = _tick_strategy(flipping=False, now=_et("09:31:00"), stop_entries_after="09:31")
+    s.entries_to_cancel = {entry}
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.cancel_open_order.assert_called_once_with(entry)
+
+
+def test_an_entry_resting_when_force_exit_is_due_is_canceled():
+    # Flat, so the stop-out path (which cancels entries itself) never runs
+    entry = MagicMock()
+    s = _tick_strategy(flipping=False, now=_et("09:36:00"), force_exit_at="09:36")
+    s.entries_to_cancel = {entry}
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.cancel_open_order.assert_called_once_with(entry)
+
+
+def test_resting_entries_are_left_alone_before_the_cutoff():
+    s = _tick_strategy(flipping=False, now=_et("09:30:59"), stop_entries_after="09:31")
+    s.entries_to_cancel = {MagicMock()}
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.cancel_open_order.assert_not_called()
 
 
 @pytest.mark.parametrize("bad", ["9", "09:31:00:00", "nine", "25:00", "09:31:60"])

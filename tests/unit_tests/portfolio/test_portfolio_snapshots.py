@@ -26,6 +26,7 @@ from nautilus_trader.model.enums import OmsType
 from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.events.account import AccountState
 from nautilus_trader.model.identifiers import PositionId
+from nautilus_trader.model.identifiers import TradeId
 from nautilus_trader.model.objects import AccountBalance
 from nautilus_trader.model.objects import Money
 from nautilus_trader.model.objects import Price
@@ -2359,3 +2360,85 @@ def test_snapshot_conversion_with_mark_xrates(
     assert total_pnl_regular is not None
     assert total_pnl_regular.currency == USD
     assert total_pnl_regular == Money(15.00, USD)  # Same result with MID rate
+
+
+def test_closed_position_new_cycle_with_identical_pnl_to_last_snapshot_is_counted(
+    portfolio,
+    cache,
+    exec_engine,
+    clock,
+    account_id,
+):
+    """
+    Test that a new closed cycle is counted even when its PnL equals the last snapshot.
+
+    Consecutive NETTING cycles can realize identical PnL (e.g. same size, same move), so
+    cycles must be matched by identity rather than by PnL value.
+
+    """
+    # Arrange
+    exec_engine.start()
+
+    account_state = AccountState(
+        account_id=account_id,
+        account_type=AccountType.CASH,
+        base_currency=USD,
+        reported=True,
+        balances=[AccountBalance(Money(1_000_000, USD), Money(0, USD), Money(1_000_000, USD))],
+        margins=[],
+        info={},
+        event_id=UUID4(),
+        ts_event=clock.timestamp_ns(),
+        ts_init=clock.timestamp_ns(),
+    )
+    account = TestExecStubs.cash_account()
+    cache.add_account(account)
+    portfolio.update_account(account_state)
+
+    position_id = PositionId("IDENTICAL-PNL-001")
+
+    # Real venues assign each fill a unique trade ID (stub fills would otherwise share one)
+    def close_cycle(cycle: int) -> Position:
+        order_open = TestExecStubs.market_order(
+            instrument=AUDUSD_SIM,
+            order_side=OrderSide.BUY,
+            quantity=Quantity.from_int(100_000),
+        )
+        fill_open = TestEventStubs.order_filled(
+            order=order_open,
+            instrument=AUDUSD_SIM,
+            position_id=position_id,
+            last_px=Price.from_str("0.80000"),
+            trade_id=TradeId(f"E-OPEN-{cycle}"),
+        )
+        position = Position(instrument=AUDUSD_SIM, fill=fill_open)
+        cache.add_position(position, OmsType.NETTING)
+
+        order_close = TestExecStubs.market_order(
+            instrument=AUDUSD_SIM,
+            order_side=OrderSide.SELL,
+            quantity=Quantity.from_int(100_000),
+        )
+        fill_close = TestEventStubs.order_filled(
+            order=order_close,
+            instrument=AUDUSD_SIM,
+            position_id=position_id,
+            last_px=Price.from_str("0.80010"),
+            trade_id=TradeId(f"E-CLOSE-{cycle}"),
+        )
+        position.apply(fill_close)
+        return position
+
+    # Cycles 1 and 2 are snapshotted (as happens when a NETTING position reopens)
+    cache.snapshot_position(close_cycle(1))
+    cache.snapshot_position(close_cycle(2))
+
+    # Cycle 3 is closed but not snapshotted, with the same PnL as cycles 1 and 2
+    cycle3 = close_cycle(3)
+
+    # Act
+    total_pnl = portfolio.realized_pnl(AUDUSD_SIM.id)
+
+    # Assert
+    assert cycle3.realized_pnl == Money(6.80, USD)
+    assert total_pnl == Money(20.40, USD)  # 3 x 6.80

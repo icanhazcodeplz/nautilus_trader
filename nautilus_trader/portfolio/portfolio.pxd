@@ -31,6 +31,7 @@ from nautilus_trader.model.events.position cimport PositionEvent
 from nautilus_trader.model.identifiers cimport AccountId
 from nautilus_trader.model.identifiers cimport InstrumentId
 from nautilus_trader.model.identifiers cimport PositionId
+from nautilus_trader.model.identifiers cimport TradeId
 from nautilus_trader.model.identifiers cimport Venue
 from nautilus_trader.model.instruments.base cimport Instrument
 from nautilus_trader.model.objects cimport Currency
@@ -59,6 +60,7 @@ cdef class Portfolio(PortfolioFacade):
     cdef dict[InstrumentId, dict[AccountId, Money]] _realized_pnls
     cdef dict[PositionId, Money] _snapshot_sum_per_position
     cdef dict[PositionId, Money] _snapshot_last_per_position
+    cdef dict[PositionId, TradeId] _snapshot_last_trade_id_per_position
     cdef dict[PositionId, int] _snapshot_processed_counts
     cdef dict[PositionId, AccountId] _snapshot_account_ids
     cdef dict[InstrumentId, dict[AccountId, Decimal]] _net_positions
@@ -112,6 +114,7 @@ cdef class Portfolio(PortfolioFacade):
     cdef dict _aggregate_pnls_by_instrument(self, list positions, bint is_realized, AccountId account_id, Currency target_currency)
     cdef tuple _process_snapshot_pnl_contributions(self, InstrumentId instrument_id, AccountId account_id, list positions, Currency currency, Account account)
     cdef object _calculate_snapshot_contribution(self, PositionId position_id, set active_position_ids, list positions, Money sum_pnl, set processed_ids)
+    cdef bint _is_same_cycle_as_last_snapshot(self, Position position, Money last_pnl)
     cdef object _process_active_position_realized_pnl(self, list positions, InstrumentId instrument_id, Instrument instrument, Account account, Currency currency, set processed_ids)
     cdef Money _calculate_unrealized_pnl(self, InstrumentId instrument_id, Price price=*, AccountId account_id=*)
     cdef object _calculate_total_unrealized_pnl(self, list positions_open, InstrumentId instrument_id, Instrument instrument, Account account, Currency currency, Price price)
