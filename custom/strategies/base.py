@@ -44,19 +44,15 @@ NS_PER_SEC = 1_000_000_000
 
 
 def parse_et_time(value: time | str) -> time:
-    """Parse an "HH:MM" or "HH:MM:SS" US/Eastern wall-clock string into a `time`."""
+    """Parse an "HH:MM", "HH:MM:SS" or "HH:MM:SS.ffffff" US/Eastern wall-clock string into a `time`."""
     if isinstance(value, time):
         return value
     try:
-        parts = [int(part) for part in value.split(":")]
-    except (AttributeError, ValueError):
-        raise ValueError(f"Expected a time formatted as 'HH:MM' or 'HH:MM:SS', got {value!r}") from None
-    if len(parts) == 2:
-        parts.append(0)
-    if len(parts) != 3:
-        raise ValueError(f"Expected a time formatted as 'HH:MM' or 'HH:MM:SS', got {value!r}")
-    hour, minute, second = parts
-    return time(hour=hour, minute=minute, second=second)
+        return time.fromisoformat(value)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"Expected a time formatted as 'HH:MM', 'HH:MM:SS' or 'HH:MM:SS.ffffff', got {value!r}",
+        ) from None
 
 
 class BaseStrategyConfig(StrategyConfig, frozen=True):
@@ -576,14 +572,11 @@ class BaseStrategy(Strategy):
         # 26h clears the next midnight whether the day is 23, 24 or 25 hours long (DST).
         next_day = (day + pd.Timedelta(hours=26)).normalize()
         self._window_bounds_day = (day.value, next_day.value)
-        self._window_bounds = [
-            (
-                (day + pd.Timedelta(hours=start.hour, minutes=start.minute, seconds=start.second)).value,
-                (day + pd.Timedelta(hours=stop.hour, minutes=stop.minute, seconds=stop.second)).value,
-                delay_ns,
-            )
-            for start, stop, delay_ns in self._tick_delay_windows
-        ]
+        def at(t: time) -> int:
+            offset = pd.Timedelta(hours=t.hour, minutes=t.minute, seconds=t.second, microseconds=t.microsecond)
+            return (day + offset).value
+
+        self._window_bounds = [(at(start), at(stop), delay_ns) for start, stop, delay_ns in self._tick_delay_windows]
 
     def _release_delayed_ticks(self, event: TimeEvent = None) -> None:
         """Process every buffered tick whose delay has now elapsed, oldest first."""
