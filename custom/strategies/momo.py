@@ -94,6 +94,10 @@ def parse_est_time(value: str | None) -> time | None:
         ) from None
 
 
+def _opposite(side: Side) -> Side:
+    return Side.SHORT if side == Side.LONG else Side.LONG
+
+
 def is_market_open(now_utc: pd.Timestamp) -> bool:
     now_est = now_utc.tz_convert("US/Eastern")
     market_open = now_est.replace(hour=9, minute=30, second=0, microsecond=0)
@@ -281,7 +285,9 @@ class MomoStrategy(BaseStrategy):
         # venue, where it fills against the new side.
         live_orders = self.orders_live_at_venue
         if self.position_qty == 0 and len(live_orders) == 0:
-            self.set_side(self._pending_side_signal)
+            # Not `_pending_side_signal`: that is the latest raw signal, which may already be
+            # counting back toward the current side, and set_side() to it would silently drop the flip.
+            self.set_side(_opposite(self._side))
             self._flipping = False
         else:
             self._log_flip_wait(live_orders)
@@ -299,7 +305,7 @@ class MomoStrategy(BaseStrategy):
         self._last_flip_wait_log_ns = now_ns
         waiting_on = [f"{order.client_order_id} ({order.status_string()})" for order in live_orders]
         self.log.info(
-            f"Flip to '{self._pending_side_signal}' waiting on position {self.position_qty} "
+            f"Flip to '{_opposite(self._side)}' waiting on position {self.position_qty} "
             f"and {len(live_orders)} order(s) live at the venue: {waiting_on}",
             color=LogColor.YELLOW,
         )
