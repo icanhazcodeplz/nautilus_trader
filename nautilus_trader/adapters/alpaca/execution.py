@@ -232,6 +232,11 @@ class AlpacaExecutionClient(LiveExecutionClient):
         # Prevents infinite retry loops when Alpaca returns these in open orders queries.
         self._handled_ghost_ids: set[str] = set()
 
+        # Venue order IDs we know Alpaca replaced (from the PATCH response or the WS "replaced" event).
+        # Alpaca's order list can keep returning these as open for several seconds after the replace;
+        # they are not ghosts and must not be canceled.
+        self._replaced_venue_ids: set[str] = set()
+
         # Venue order IDs the submit response reported as pending_new, until the WS says otherwise.
         # Modifies for these are held in `_held_modifies` instead of being sent (Alpaca would 422).
         self._pending_new_venue_ids: set[str] = set()
@@ -564,6 +569,11 @@ class AlpacaExecutionClient(LiveExecutionClient):
                     if cached_order and cached_order.is_closed:
                         cached_venue_id = cached_order.venue_order_id.value if cached_order.venue_order_id else None
                         if cached_venue_id and cached_venue_id != alpaca_order_id:
+                            if alpaca_order_id in self._replaced_venue_ids:
+                                self._log.debug(
+                                    f"Skipping {alpaca_order_id}: already replaced, Alpaca's order list is stale",
+                                )
+                                continue
                             if alpaca_order_id in self._handled_ghost_ids:
                                 self._log.debug(f"Skipping already-handled ghost {alpaca_order_id}")
                                 continue
@@ -1086,6 +1096,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 # "replaced" event may arrive later than REST fill queries)
                 new_venue_order_id = response["id"]
                 self._venue_id__client_id_map[new_venue_order_id] = str(command.client_order_id)
+                self._replaced_venue_ids.add(venue_order_id.value)
 
                 # Also update the cache index immediately. Without this, any
                 # reconciliation that runs before the WS "replaced" event arrives
@@ -1122,6 +1133,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
                     # Register the replacement's venue order ID if available
                     replaced_by_id = new_order.get("replaced_by")
                     if replaced_by_id:
+                        self._replaced_venue_ids.add(venue_order_id.value)
                         self._venue_id__client_id_map[replaced_by_id] = str(command.client_order_id)
                         self._cache.add_venue_order_id(
                             command.client_order_id, VenueOrderId(replaced_by_id), overwrite=True
@@ -1492,6 +1504,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 self._log.debug(f"Order {client_order_id} replaced")
 
                 replaced_by = msg_data["order"]["replaced_by"]
+                self._replaced_venue_ids.add(msg_data["order"]["id"])
 
                 # Register the new replacement venue order ID in the mapping so that fill lookups during reconciliation
                 # can resolve it
