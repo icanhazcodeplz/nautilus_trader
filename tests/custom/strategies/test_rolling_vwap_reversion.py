@@ -166,6 +166,28 @@ def test_abort_takes_the_same_n_ticks_as_arming():
     s.set_side.assert_not_called()  # aborted, not completed
 
 
+def test_flip_completes_to_its_target_after_contrary_ticks():
+    # The raw signal is counting back toward LONG when the position goes flat; the flip still
+    # armed for SHORT must complete to SHORT, not to the latest signal (a no-op that drops it).
+    s = _make_strategy(side="long", position_qty=100, rolling_vwap=100.0)
+    _feed(s, 101.0, CONFIRM)
+    _feed(s, 99.0, CONFIRM - 2)
+    assert s._flipping is True
+    s.position_qty = 0
+    s._flip_side_if_needed(_tick(99.0))  # still one short of calling the flip off
+    s.set_side.assert_called_once_with(Side.SHORT)
+    assert s._flipping is False
+
+
+def test_flip_wait_log_names_the_target_not_the_latest_signal():
+    s = _make_strategy(side="long", position_qty=100, rolling_vwap=100.0)
+    _feed(s, 101.0, CONFIRM)
+    s.clock.timestamp_ns.return_value = 10**18  # past the log throttle
+    s._flip_side_if_needed(_tick(99.0))  # latest signal is LONG
+    msg = s.log.info.call_args.args[0]
+    assert msg.startswith("Flip to 'short' waiting"), msg
+
+
 # ---------------------------------------------------------------------------
 # Gating
 # ---------------------------------------------------------------------------
