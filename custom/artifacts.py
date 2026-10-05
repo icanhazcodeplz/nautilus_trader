@@ -291,7 +291,7 @@ class ArtifactsIO:
         # was stopped before the venue had anything more to say about it. There is no terminal
         # event to close the bar with, so it runs to the end of the data instead.
         still_open_events = ("new", "pending_new", "partial_fill", "pending_cancel", "pending_replace")
-        run_end_time = pd.to_datetime(alpaca_updates_df["timestamp"]).max()
+        run_end_time = pd.to_datetime(alpaca_updates_df["timestamp"], format="ISO8601").max()
 
         def order_duration(order_df: pd.DataFrame) -> pd.Series:
             order_df = order_df[order_df["event"] != "order_replace_rejected"]
@@ -347,7 +347,7 @@ class ArtifactsIO:
             # Convert "start_time" and "end_time" columns into ns since epoch
             for col in ["start_time", "end_time"]:
                 # pandas infers the unit from the strings' precision (ms strings → us), so pin ns
-                order_duration_df[col] = pd.to_datetime(order_duration_df[col]).dt.as_unit("ns").astype("int64")
+                order_duration_df[col] = pd.to_datetime(order_duration_df[col], format="ISO8601").dt.as_unit("ns").astype("int64")
 
             # If end_time equals start_time, add one nanosecond to end_time so that the plotting
             # tools don't break
