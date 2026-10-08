@@ -16,8 +16,9 @@ from custom.backtest_utils.load_catalog_data import CATALOG_TIME_STR_FMT
 from custom.backtest_utils.load_catalog_data import load_catalog_data_to_engine
 from custom.backtest_utils.prepare_top_gainers import get_allow_trading_times_for_candidate
 from custom.backtest_utils.prepare_top_gainers import parse_candidate_str
-from custom.strategies.momo import MomoStrategy, DirectionStrategy, DirectionThreshold, EntryStrategy
+from custom.strategies.momo import MomoStrategy, DirectionStrategy, DirectionThreshold, EntryStrategy, ExitStrategy
 from custom.strategies.momo import MomoStrategyConfig
+from custom.utils.paths import data_subdir
 from custom.utils.run_utils import run_strategy
 from nautilus_trader.adapters.alpaca.utils import ns_to_iso_8601
 
@@ -93,7 +94,7 @@ def run_single_backtest_from_top_gainers_candidate(
         symbol,
         start_str,
         end_str,
-        strategy_name,
+    strategy_name,
         params,
         allow_trading_times=allow_trading_times,
         artifacts_location=artifacts_location,
@@ -113,10 +114,12 @@ def run_multiple_backtests(dataset_names, strategy_name, params, log_level="ERRO
     return stats_df
 
 
-def replay_live_run(live_run_artifacts_dir, log_level="ERROR"):
+def replay_live_run(live_run_artifacts_dir, log_level="ERROR", random_seed=1):
     """Run a backtest with the same parameters as a live run."""
     artifacts_io = ArtifactsIO(live_run_artifacts_dir)
     config = artifacts_io.load_config()
+    # Live configs carry no seed; without one the simulated venue's fills differ run to run
+    config["random_seed"] = random_seed
 
     # Derive dataset name from run date and symbol
     ticks = artifacts_io.load_ticks_and_metrics_file()
@@ -125,12 +128,21 @@ def replay_live_run(live_run_artifacts_dir, log_level="ERROR"):
 
     symbol = config.pop("instrument_id").split(".")[0]
 
-    return run_single_backtest(symbol, start_str, end_str, "momo", config, log_level=log_level, analyze=True)
+    return run_single_backtest(
+        symbol,
+        start_str,
+        end_str,
+        "momo",
+        config,
+        artifacts_location=BACKTEST_RUNS_PATH,
+        log_level=log_level,
+        analyze=True,
+    )
 
 
 if __name__ == "__main__":
-    # live_run_artifacts_dir = data_subdir("runs", "20260313_144138")
-    # replay_live_run(live_run_artifacts_dir)
+    # live_run_artifacts_dir = data_subdir("runs", "20261002_092645")
+    # replay_live_run(live_run_artifacts_dir, log_level="INFO")
 
     log_level = "INFO"
     # log_level = "DEBUG"
@@ -144,11 +156,11 @@ if __name__ == "__main__":
             allow_trades=True,
             max_position_multiplier=1,
             trade_size=100,
-            stop_loss=3.6,
-            take_profit=0.9,
+            stop_loss=2.0,
+            take_profit=0.6,
             upper_scalar_multiplier=0.5,
             lower_scalar_multiplier=0.5,
-            rolling_vwap_window=2000,
+            rolling_vwap_window=3000,
             vwap_window=150,
             variance_window=300,
             outer_band_multiplier=2.5,
@@ -156,16 +168,15 @@ if __name__ == "__main__":
             only_buy_if_macd_positive=False,
             direction_strategy=DirectionStrategy.REVERSION,
             direction_threshold=DirectionThreshold.ROLLING_VWAP,
-            simple_take=True,
-            trailing_take=False,
+            exit_strategy=ExitStrategy.SIT_ON_ROLLING_VWAP,
             num_exit_tiers=2,
-            entry_strategy=EntryStrategy.SIT_AT_DISTANCE,
-            entry_distance=0.8,
+            entry_strategy=EntryStrategy.CROSS_VWAP_BAND,
+            entry_distance=0.6,
             random_seed=1,
             start_trading_at="09:29:45",
-            stop_entries_after="09:31",
-            force_exit_at="09:35",
-            entry_exclusion_band=None,
+            stop_entries_after="09:35",
+            force_exit_at="09:45",
+            entry_exclusion_band=0.5,
             # --- TOP GAINERS PARAMS ----------------
             # price_min=0.8,
             # price_max=20.0,
@@ -181,9 +192,9 @@ if __name__ == "__main__":
     # )
 
     symbol = "AMZN"
-    day_str = "2026-05-05"
+    day_str = "2026-05-01"
     start_str = day_str + " " + "09:29-04:00"
-    end_str__ = day_str + " " + "09:59-04:00"
+    end_str__ = day_str + " " + "09:35-04:00"
     run_single_backtest(
         symbol,
         start_str,

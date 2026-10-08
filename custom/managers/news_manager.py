@@ -10,6 +10,7 @@ import pandas as pd
 
 from custom.artifacts import BACKTEST_RUNS_PATH
 from custom.strategies.momo import EntryStrategy
+from custom.strategies.momo import ExitStrategy
 from custom.strategies.news import NewsStrategyConfig, NewsStrategy
 from custom.utils.alpaca_trader_http_client import AlpacaTraderHelper
 from nautilus_trader.common.config import ActorConfig
@@ -28,7 +29,7 @@ _DEFAULT_KWARGS: dict = dict(
     stop_loss=0.05,
     take_profit=None,
     entry_strategy=EntryStrategy.RANDOM,
-    simple_take=True,
+    exit_strategy=ExitStrategy.SIMPLE_TAKE,
     allow_trades=True,
     print_update_every_secs=None,
 )

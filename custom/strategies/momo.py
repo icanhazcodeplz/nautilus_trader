@@ -39,6 +39,15 @@ class EntryStrategy(StrEnum):
     SIT_AT_DISTANCE = "sit_at_distance"
 
 
+class ExitStrategy(StrEnum):
+    # One take-profit at last_entry_price +/- take_profit
+    SIMPLE_TAKE = "simple_take"
+    # Tiered takes that trail the VWAP bands (_rolling_tiered_take)
+    SIT_ON_VWAP_BANDS = "sit_on_vwap_bands"
+    # Same tiers as SIT_ON_VWAP_BANDS, but laddered from rolling_vwap.value instead of a band
+    SIT_ON_ROLLING_VWAP = "sit_on_rolling_vwap"
+
+
 class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     instrument_id: InstrumentId
     trade_size: int
@@ -62,8 +71,7 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     # Distance from the direction threshold that `sit_at_distance` rests its entry at. Required
     # by that strategy, ignored by the others.
     entry_distance: float | None = None
-    simple_take: bool = False
-    trailing_take: bool = False
+    exit_strategy: ExitStrategy
     num_exit_tiers: int = 1
     # "HH:MM" or "HH:MM:SS" in US/Eastern
     start_trading_at: str | None = None
@@ -113,10 +121,8 @@ class MomoStrategy(BaseStrategy):
 
     def __init__(self, config: MomoStrategyConfig) -> None:
         super().__init__(config)
-        if sum([self.config.trailing_take, self.config.simple_take]) > 1:
-            raise ValueError("Cannot use more than one of simple_take, trailing_take")
-
         self.entry_strategy = EntryStrategy(self.config.entry_strategy)
+        self.exit_strategy = ExitStrategy(self.config.exit_strategy)
         self.direction_strategy = DirectionStrategy(self.config.direction_strategy)
         self.direction_threshold = DirectionThreshold(self.config.direction_threshold)
 
@@ -431,9 +437,9 @@ class MomoStrategy(BaseStrategy):
         ):
             self._last_exit_adjustment_ns = self.clock.timestamp_ns()
 
-            if self.config.trailing_take:
+            if self.exit_strategy in (ExitStrategy.SIT_ON_VWAP_BANDS, ExitStrategy.SIT_ON_ROLLING_VWAP):
                 self._rolling_tiered_take()
-            elif self.config.simple_take:
+            elif self.exit_strategy == ExitStrategy.SIMPLE_TAKE:
                 if self.open_exits_qty < exposure:
                     if self.is_long:
                         take_price = self.last_entry_price + self.take_profit
@@ -495,12 +501,19 @@ class MomoStrategy(BaseStrategy):
             self.log.info(f"Exposure {exposure_qty} is negative (wrong-way). Running reconciliation.")
             self._reconcile()
             return
+        if self.exit_strategy == ExitStrategy.SIT_ON_ROLLING_VWAP:
+            # No trade has reached the rolling VWAP yet, so there is nothing to ladder from
+            if self.rolling_vwap.value is None:
+                return
+            starting_price = self.rolling_vwap.value
+        else:
+            # Ladder away from the band the position is exiting into: up from the upper band when
+            # long, down from the lower band when short.
+            starting_price = self.vwap.high if self.is_long else self.vwap.low
         tiers = ExitTiers(
             direction=self.side,
             quantity=exposure_qty,
-            # Ladder away from the band the position is exiting into: up from the upper band when
-            # long, down from the lower band when short.
-            starting_price=self.vwap.high if self.is_long else self.vwap.low,
+            starting_price=starting_price,
             mean_variance=self.vwap.mean_variance,
             num_tiers=self.config.num_exit_tiers,
         )
@@ -604,7 +617,7 @@ class MomoStrategy(BaseStrategy):
         def open_for_secs(open_order):
             return round((self.clock.timestamp_ns() - open_order.order.last_event.ts_event) / 1e9, 1)
 
-        if self.config.trailing_take:
+        if self.exit_strategy in (ExitStrategy.SIT_ON_VWAP_BANDS, ExitStrategy.SIT_ON_ROLLING_VWAP):
             if len(self.open_exits) > 0:
                 ordered_exits = sorted(self.open_exits, key=lambda x: x.price)
                 exits_str = "\n".join(

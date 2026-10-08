@@ -4,6 +4,7 @@ import sys
 from custom.strategies.momo import DirectionStrategy
 from custom.strategies.momo import DirectionThreshold
 from custom.strategies.momo import EntryStrategy
+from custom.strategies.momo import ExitStrategy
 from custom.strategies.momo import MomoStrategy
 from custom.strategies.momo import MomoStrategyConfig
 from custom.utils.paths import run_artifacts_subdir, DT_STR
@@ -99,7 +100,7 @@ strategy_config = MomoStrategyConfig(
     allow_trades=True,
     max_position_multiplier=1,
     trade_size=1,
-    stop_loss=0.75,
+    stop_loss=2.0,
     take_profit=0.50,
     upper_scalar_multiplier=0.5,
     lower_scalar_multiplier=0.5,
@@ -111,14 +112,13 @@ strategy_config = MomoStrategyConfig(
     only_buy_if_macd_positive=False,
     direction_strategy=DirectionStrategy.REVERSION,
     direction_threshold=DirectionThreshold.ROLLING_VWAP,
-    simple_take=True,
-    trailing_take=False,
+    exit_strategy=ExitStrategy.SIMPLE_TAKE,
     num_exit_tiers=2,
     entry_strategy=EntryStrategy.SIT_AT_DISTANCE,
     entry_distance=0.50,
-    start_trading_at="09:29:30",
-    # start_trading_at="09:29:30",
-    stop_entries_after="23:35",
+    start_trading_at="09:29:58",
+    stop_entries_after="09:32",
+    force_exit_at="09:40",
     entry_exclusion_band=None,
     print_update_every_secs=5,
 )

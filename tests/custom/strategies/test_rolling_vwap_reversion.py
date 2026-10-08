@@ -19,6 +19,7 @@ from custom.strategies.momo import (
     DirectionStrategy,
     DirectionThreshold,
     EntryStrategy,
+    ExitStrategy,
     MomoStrategy,
     MomoStrategyConfig,
     parse_est_time,
@@ -426,6 +427,7 @@ def _tick_strategy(
     s._force_exit_at = parse_est_time(force_exit_at)
     s.direction_strategy = direction_strategy
     s.entry_strategy = entry_strategy
+    s.exit_strategy = ExitStrategy.SIT_ON_VWAP_BANDS
     s._direction_threshold_value = threshold
     s._entry_exclusion_band = entry_exclusion_band
     s.is_long = is_long
@@ -441,8 +443,6 @@ def _tick_strategy(
     s.vwap = MagicMock(low=9.0, high=11.0)
     s.config = MagicMock(
         only_buy_if_macd_positive=False,
-        trailing_take=True,
-        simple_take=False,
         trade_size=50,
         entry_distance=entry_distance,
     )
@@ -753,6 +753,7 @@ def _config(**overrides):
         take_profit=0.5,
         entry_strategy=EntryStrategy.SIT_AT_DISTANCE,
         entry_distance=0.5,
+        exit_strategy=ExitStrategy.SIT_ON_VWAP_BANDS,
     )
     return MomoStrategyConfig(**{**params, **overrides})
 

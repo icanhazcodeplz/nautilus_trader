@@ -26,18 +26,21 @@ import optuna
 import pandas as pd
 
 from custom.backtest_scripts.strategy_backtest_runner import run_single_backtest
+from custom.backtest_utils.load_catalog_data import CATALOG_TIME_STR_FMT
 from custom.backtest_utils.prepare_top_gainers import parse_candidate_str
+from custom.strategies.base import ET_TZ
 from custom.strategies.momo import DirectionStrategy
 from custom.strategies.momo import DirectionThreshold
 from custom.strategies.momo import EntryStrategy
+from custom.strategies.momo import ExitStrategy
 
 
 OPTUNA_DB_DIR = "optuna_dbs"
 
-# Backtest window applied to every day, as the runner's `__main__` does. The offset is EDT, which
-# holds for every day in SAMPLE_DAYS.
-START_TIME = "09:20-04:00"
-END_TIME = "09:46-04:00"
+# Backtest window applied to every day, as New York wall-clock "HH:MM:SS". Each day's UTC offset
+# (EST or EDT) is worked out in `et_time_str`.
+START_TIME = "09:29:00"
+END_TIME = "09:41:00"
 
 # Days backtested concurrently within one trial.
 N_DAY_WORKERS = 7
@@ -159,7 +162,18 @@ SAMPLE_DAYS = [
     "2026-09-22_AMZN",
     "2026-09-23_AMZN",
     "2026-09-24_AMZN",
+    "2026-09-25_AMZN",
+    "2026-09-28_AMZN",
+    "2026-09-29_AMZN",
+    "2026-09-30_AMZN",
+    "2026-10-01_AMZN",
+    "2026-10-02_AMZN",
 ]
+
+
+def et_time_str(day_str, time_str):
+    """Return "YYYY-MM-DD HH:MM:SS+zzzz" for New York wall-clock `time_str` on `day_str`, with that day's offset."""
+    return pd.Timestamp(f"{day_str} {time_str}").tz_localize(ET_TZ).strftime(CATALOG_TIME_STR_FMT)
 
 
 def run_day(args):
@@ -174,8 +188,8 @@ def run_day(args):
     symbol, day_str = parse_candidate_str(candidate)
     stats = run_single_backtest(
         symbol,
-        f"{day_str} {START_TIME}",
-        f"{day_str} {END_TIME}",
+        et_time_str(day_str, START_TIME),
+        et_time_str(day_str, END_TIME),
         "momo",
         params,
         artifacts_location=None,
@@ -207,7 +221,7 @@ def optimize(trial):
         stop_loss=3.0,
         take_profit=0.5,
         upper_scalar_multiplier=0.5,
-        rolling_vwap_window=2000,
+        rolling_vwap_window=3000,
         vwap_window=150,
         variance_window=300,
         outer_band_multiplier=2.5,
@@ -215,14 +229,13 @@ def optimize(trial):
         only_buy_if_macd_positive=False,
         direction_strategy=DirectionStrategy.REVERSION,
         direction_threshold=DirectionThreshold.ROLLING_VWAP,
-        simple_take=True,
-        trailing_take=False,
+        exit_strategy=ExitStrategy.SIT_ON_ROLLING_VWAP,
         num_exit_tiers=2,
         entry_strategy=EntryStrategy.SIT_AT_DISTANCE,
         entry_distance=0.5,
-        start_trading_at="09:29:45",
+        start_trading_at="09:29:58",
         stop_entries_after="09:31",
-        force_exit_at="09:45",
+        force_exit_at="09:40",
         entry_exclusion_band=None,
         random_seed=1,
     )
@@ -304,9 +317,9 @@ def per_day_table(per_day_json):
 
 
 if __name__ == "__main__":
-    delete_existing = False
-    run_trials = False
-    MAKE_RESULTS_PICKLE = False
+    delete_existing = True
+    run_trials = True
+    MAKE_RESULTS_PICKLE = True
 
     study_name = "test"
     # Every value in a list must share one type, and `None` cannot be a grid value: a sweep that

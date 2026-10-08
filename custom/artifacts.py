@@ -72,6 +72,11 @@ class ArtifactsIO:
         ]:
             if drop_key in config:
                 config.pop(drop_key)
+        # Runs saved before exit_strategy replaced these two flags
+        simple_take = config.pop("simple_take", False)
+        trailing_take = config.pop("trailing_take", False)
+        if "exit_strategy" not in config and (simple_take or trailing_take):
+            config["exit_strategy"] = "sit_on_vwap_bands" if trailing_take else "simple_take"
         return config
 
     @staticmethod

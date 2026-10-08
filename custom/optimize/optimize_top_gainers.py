@@ -20,6 +20,7 @@ from custom.backtest_utils.prepare_top_gainers import (
 from custom.utils.process_manager import ProcessManager
 from custom.backtest_scripts.strategy_backtest_runner import run_single_backtest_from_top_gainers_candidate
 from custom.strategies.momo import EntryStrategy
+from custom.strategies.momo import ExitStrategy
 
 OPTUNA_DB_DIR = "optuna_dbs"
 optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
@@ -74,8 +75,7 @@ def optimize(trial):
         upper_scalar_multiplier=0.6,
         outer_band_multiplier=3.0,
         only_buy_if_macd_positive=True,
-        simple_take=False,
-        trailing_take=True,
+        exit_strategy=ExitStrategy.SIT_ON_VWAP_BANDS,
         num_exit_tiers=3,
         allow_trades=True,
         pressure_window=10,
