@@ -26,6 +26,8 @@ pd.set_option("display.max_columns", None)
 pd.set_option("display.width", None)
 pd.set_option("display.max_colwidth", None)
 
+NY_TZ = "America/New_York"
+
 
 ALPACA_EXCHANGE_CODES = {
     "A": "NYSE American (AMEX)",
@@ -62,6 +64,21 @@ def _price_precision(price):
     return 2
 
 
+def _download_range(day_in_question: pd.Timestamp, start_time=None, end_time=None):
+    """
+    Return the (start, end) ISO strings to download for `day_in_question`.
+
+    `start_time` and `end_time` are New York wall-clock "HH:MM[:SS]" strings, so the window follows
+    EST/EDT. Either one left as `None` falls back to that day's New York midnight.
+    """
+    date_str = day_in_question.strftime("%Y-%m-%d")
+    day_start = pd.Timestamp(date_str, tz=NY_TZ)
+    start = day_start if start_time is None else pd.Timestamp(f"{date_str} {start_time}", tz=NY_TZ)
+    end = day_start + pd.Timedelta(days=1) if end_time is None else pd.Timestamp(f"{date_str} {end_time}", tz=NY_TZ)
+    assert start < end, f"start_time {start_time} must be before end_time {end_time}"
+    return start.isoformat(), end.isoformat()
+
+
 def _data_exists(instrument_id, day_in_question, data_type):
     intervals = BACKTESTING_CATALOG.get_intervals(data_type, str(instrument_id))
     intervals_days = {pd.Timestamp(tp[0]).date() for tp in intervals}
@@ -78,10 +95,11 @@ def _delete_range(instrument_id, start_dt_str, end_dt_str, data_type):
     )
 
 
-def get_trades_and_save_to_catalog_if_needed(symbol, day_in_question: pd.Timestamp, force=False):
-    """Download trades from Alpaca and save to catalog."""
-    start_dt_str = day_in_question.isoformat()
-    end_dt_str = (day_in_question + pd.Timedelta(days=1)).isoformat()
+def get_trades_and_save_to_catalog_if_needed(
+    symbol, day_in_question: pd.Timestamp, force=False, start_time=None, end_time=None
+):
+    """Download trades from Alpaca between New York `start_time` and `end_time` and save to catalog."""
+    start_dt_str, end_dt_str = _download_range(day_in_question, start_time, end_time)
     instrument_id = TestInstrumentProvider.equity(symbol=symbol, venue=ALPACA).id
 
     # Check if trades exist for the range in BACKTESTING_CATALOG (reads filenames only, no data loaded)
@@ -119,10 +137,11 @@ def get_trades_and_save_to_catalog_if_needed(symbol, day_in_question: pd.Timesta
     BACKTESTING_CATALOG.write_data(trade_ticks)
 
 
-def get_quotes_and_save_to_catalog_if_needed(symbol, day_in_question: pd.Timestamp, force=False):
-    """Download quote data from Alpaca and save as QuoteTicks to catalog."""
-    start_dt_str = day_in_question.isoformat()
-    end_dt_str = (day_in_question + pd.Timedelta(days=1)).isoformat()
+def get_quotes_and_save_to_catalog_if_needed(
+    symbol, day_in_question: pd.Timestamp, force=False, start_time=None, end_time=None
+):
+    """Download quotes from Alpaca between New York `start_time` and `end_time` and save as QuoteTicks."""
+    start_dt_str, end_dt_str = _download_range(day_in_question, start_time, end_time)
     instrument_id = TestInstrumentProvider.equity(symbol=symbol, venue=ALPACA).id
 
     # Check if trades exist for the range in BACKTESTING_CATALOG (reads filenames only, no data loaded)
@@ -156,10 +175,15 @@ def get_quotes_and_save_to_catalog_if_needed(symbol, day_in_question: pd.Timesta
     BACKTESTING_CATALOG.write_data(quote_ticks)
 
 
-def prepare_alpaca_data(symbol, day_in_question: pd.Timestamp, force=False):
-    print(f"\nGetting data for {symbol} on {day_in_question.date()}, force={force}")
-    get_trades_and_save_to_catalog_if_needed(symbol, day_in_question, force=force)
-    get_quotes_and_save_to_catalog_if_needed(symbol, day_in_question, force=force)
+def prepare_alpaca_data(symbol, day_in_question: pd.Timestamp, force=False, start_time=None, end_time=None):
+    """
+    Download one day's trades and quotes. `start_time`/`end_time` are New York wall-clock "HH:MM"
+    strings (EST or EDT, whichever applies that day); `None` means the whole day.
+    """
+    window = f"{start_time or '00:00'}-{end_time or '24:00'} ET"
+    print(f"\nGetting data for {symbol} on {day_in_question.date()} {window}, force={force}")
+    get_trades_and_save_to_catalog_if_needed(symbol, day_in_question, force, start_time, end_time)
+    get_quotes_and_save_to_catalog_if_needed(symbol, day_in_question, force, start_time, end_time)
 
 
 def add_entry_to_catalog_options(key, symbol, data_start_dt, data_end_dt, notes=None):
@@ -258,11 +282,14 @@ if __name__ == "__main__":
         pd.Timestamp("2026-11-26"),  # Thanksgiving
         pd.Timestamp("2026-12-25"),  # Christmas
     ]
-    trading_days = pd.bdate_range("2026-05-01", "2026-09-24", freq="C", holidays=nasdaq_holidays_2026)
+    trading_days = pd.bdate_range("2026-05-01", "2026-10-08", freq="C", holidays=nasdaq_holidays_2026)
 
-    symbol = "AMZN"
+    symbol = "GOOG"
+    # New York wall-clock window to download each day. `None` for either end means midnight.
+    start_time = "00:00"
+    end_time = "10:00"
     for day in trading_days:
-        prepare_alpaca_data(symbol, day)
+        prepare_alpaca_data(symbol, day, force=True, start_time=start_time, end_time=end_time)
 
     if False:
         end_dt_str = pd.Timestamp(start_dt_str) + pd.Timedelta(days=1)

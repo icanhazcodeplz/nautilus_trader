@@ -54,6 +54,23 @@ def check_catalog_data_available(symbol, day, venue="ALPACA"):
     return True
 
 
+def catalog_days_available(symbol, venue="ALPACA"):
+    """
+    Return sorted "YYYY-MM-DD" New York dates that have both trade and quote tick files for `symbol`.
+
+    Each catalog file holds one day, so a file's start timestamp names its day.
+    """
+    identifier = f"{symbol.upper()}.{venue}"
+    days_per_cls = [
+        {
+            pd.Timestamp(start, tz="UTC").tz_convert("America/New_York").strftime("%Y-%m-%d")
+            for start, _ in BACKTESTING_CATALOG.get_intervals(data_cls, identifier)
+        }
+        for data_cls in [TradeTick, QuoteTick]
+    ]
+    return sorted(set.intersection(*days_per_cls))
+
+
 # def _get_L3_order_book_delta():
 #     # DEprecated
 #     return BACKTESTING_CATALOG.query(
