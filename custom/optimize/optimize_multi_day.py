@@ -106,33 +106,9 @@ def linspace_float(low, high, step):
     return [round(val, 4) for val in np.arange(low, high + step * 0.90, step)]
 
 
-def optimize(trial):
-    # Mirrors the momo params at the end of `strategy_backtest_runner.py`; `search_space` overrides.
-    params = dict(
-        allow_trades=True,
-        max_position_multiplier=1,
-        trade_size=100,
-        stop_loss=3.0,
-        take_profit=0.5,
-        upper_scalar_multiplier=0.5,
-        rolling_vwap_window=3000,
-        vwap_window=150,
-        variance_window=300,
-        outer_band_multiplier=2.5,
-        pressure_window=25,
-        only_buy_if_macd_positive=False,
-        direction_strategy=DirectionStrategy.REVERSION,
-        direction_threshold=DirectionThreshold.ROLLING_VWAP,
-        exit_strategy=ExitStrategy.SIT_ON_ROLLING_VWAP,
-        num_exit_tiers=2,
-        entry_strategy=EntryStrategy.SIT_AT_DISTANCE,
-        entry_distance=0.5,
-        start_trading_at="09:29:58",
-        stop_entries_after="09:31",
-        force_exit_at="09:40",
-        entry_exclusion_band=None,
-        random_seed=1,
-    )
+def optimize(trial, fixed_params):
+    """Backtest `fixed_params` plus this trial's grid values on every day in SAMPLE_DAYS."""
+    params = dict(fixed_params)
     for param_name, space in trial.study.sampler._search_space.items():
         param_type = {type(val) for val in space}
         assert len(param_type) == 1, f"{param_name}: grid values must share one type, got {param_type}"
@@ -176,7 +152,7 @@ def optimize(trial):
     return round(total_pnl / total_entered * 100, 3)
 
 
-def target(study_name, sampler):
+def target(study_name, sampler, fixed_params):
     os.makedirs(OPTUNA_DB_DIR, exist_ok=True)
     study = optuna.create_study(
         study_name=study_name,
@@ -187,7 +163,7 @@ def target(study_name, sampler):
         load_if_exists=True,
     )
     # NOTE: setting n_jobs above 1 creates more threads, not processes. It is not any faster than n_jobs=1.
-    study.optimize(optimize, n_trials=sampler._n_min_trials, n_jobs=1)
+    study.optimize(lambda trial: optimize(trial, fixed_params), n_trials=sampler._n_min_trials, n_jobs=1)
 
 
 def load_results(study_name, param_names):
@@ -215,19 +191,51 @@ if __name__ == "__main__":
     run_trials = True
     MAKE_RESULTS_PICKLE = True
 
-    study_name = "test"
-    # Every value in a list must share one type, and `None` cannot be a grid value: a sweep that
-    # wants to "turn off" `entry_exclusion_band` or `take_profit` needs a numeric sentinel instead.
-    search_space = dict(
+    study_name = "test" # Simple take
+    study_name = "trailing_take"
+    study_name = "rolling_vwap_take"
+    study_name = "vwap_and_simple_take"
+    study_name = "vwap"
+    study_name = "aapl"
+    study_name = "msft"
+    study_name = "goog"
+    # Momo params for every trial. A list is swept by the grid; anything else is fixed. Every value
+    # in a list must share one type, and `None` cannot be a grid value: a sweep that wants to
+    # "turn off" `entry_exclusion_band` or `take_profit` needs a numeric sentinel instead.
+    params = dict(
+        allow_trades=True,
+        max_position_multiplier=1,
+        trade_size=50,
+        stop_loss=linspace_float(low=3, high=4.5, step=0.5),
+        take_profit=0.5,
+        # take_profit=linspace_float(low=0.6, high=0.8, step=0.1),
+        upper_scalar_multiplier=0.5,
+        rolling_vwap_window=3000,
+        # rolling_vwap_window=linspace_int(low=1000, high=4000, step=1000),
+        vwap_window=150,
+        variance_window=300,
+        outer_band_multiplier=2.5,
+        flip_side_confirm_ticks=150,
+        pressure_window=25,
+        only_buy_if_macd_positive=False,
+        direction_strategy=DirectionStrategy.REVERSION,
         # direction_strategy=[DirectionStrategy.REVERSION, DirectionStrategy.MOMENTUM],
-        entry_distance=linspace_float(low=0.8, high=1.0, step=0.1),
-        stop_entries_after=["09:31"],
+        direction_threshold=DirectionThreshold.ROLLING_VWAP,
         # direction_threshold=[DirectionThreshold.OPEN, DirectionThreshold.ROLLING_VWAP],
-        take_profit=linspace_float(low=0.6, high=0.8, step=0.05),
-        stop_loss=linspace_float(low=2.4, high=3.0, step=0.20),
+        exit_strategy=ExitStrategy.SIT_ON_ROLLING_VWAP,
+        # exit_strategy=[ExitStrategy.SIT_ON_ROLLING_VWAP, ExitStrategy.SIMPLE_TAKE],
+        num_exit_tiers=2,
         # num_exit_tiers=linspace_int(1, 3, step=1),
-        # rolling_vwap_window=linspace_int(low=1000, high=3000, step=1000),
+        entry_strategy=EntryStrategy.SIT_AT_DISTANCE,
+        entry_distance=linspace_float(low=0.8, high=1.6, step=0.2),
+        start_trading_at="09:29:58",
+        stop_entries_after=["09:31"],
+        force_exit_at="09:40",
+        entry_exclusion_band=None,
+        random_seed=1,
     )
+    search_space = {name: val for name, val in params.items() if isinstance(val, list)}
+    fixed_params = {name: val for name, val in params.items() if name not in search_space}
 
     sampler = optuna.samplers.GridSampler(search_space)
     n_trials = sampler._n_min_trials
@@ -241,7 +249,7 @@ if __name__ == "__main__":
 
     if run_trials:
         start = datetime.now()
-        target(study_name, sampler)
+        target(study_name, sampler, fixed_params)
         print(f"TOTAL RUN TIME: {datetime.now() - start}")
 
     param_names = list(search_space.keys())
