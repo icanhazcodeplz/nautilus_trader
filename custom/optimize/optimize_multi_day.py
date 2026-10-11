@@ -1,34 +1,40 @@
 #!/usr/bin/env python3
 """
-Grid-search MomoStrategy params over every day in SAMPLE_DAYS.
+Grid-search MomoStrategy params for one symbol over every day in the catalog.
 
-One optuna trial = one param set backtested on every day. The trial's value is Pnl Per100 over
-the whole set: sum of each day's realized PnL divided by the sum of each day's shares entered,
-times 100. That is the same definition `custom.statistics.trade_avg_scaled.PnlPer100` applies
-within a day, so a single day and the full set are scored on one scale.
+A study is identified by the hash of its spec (symbol, time window and the `params` dict with its
+swept lists), not by a name; see `custom/optimize/study_store.py`. Results are stored per
+`(param set, day)` and shared between studies, so `MODE = "run"` only ever backtests pairs that
+have no result yet: a new grid, days added to the catalog since the last run, or whatever an
+interrupted run left over.
+
+A param set's score is Pnl Per100 over the days: sum of each day's realized PnL divided by the
+sum of each day's shares entered, times 100. That is the same definition
+`custom.statistics.trade_avg_scaled.PnlPer100` applies within a day, so a single day and the full
+set are scored on one scale.
 
 Each day's backtest runs in its own one-shot spawned process. Nautilus initializes the Rust
 logger once per interpreter and panics on the second `engine.run()` in the same one ("attempted
 to set a logger after the logging system was already initialized").
 """
+
 import os
 import sys
 
 
 sys.path.append(os.getcwd())
 import json
-import logging
 import multiprocessing
 from datetime import datetime
 
 import numpy as np
-import optuna
 import pandas as pd
 
 from custom.backtest_scripts.strategy_backtest_runner import run_single_backtest
 from custom.backtest_utils.load_catalog_data import CATALOG_TIME_STR_FMT
 from custom.backtest_utils.load_catalog_data import catalog_days_available
-from custom.backtest_utils.prepare_top_gainers import parse_candidate_str
+from custom.optimize import study_store
+from custom.optimize.study_store import HASH_DISPLAY_LEN
 from custom.strategies.base import ET_TZ
 from custom.strategies.momo import DirectionStrategy
 from custom.strategies.momo import DirectionThreshold
@@ -36,33 +42,9 @@ from custom.strategies.momo import EntryStrategy
 from custom.strategies.momo import ExitStrategy
 
 
-OPTUNA_DB_DIR = "optuna_dbs"
-
-# Backtest window applied to every day, as New York wall-clock "HH:MM:SS". Each day's UTC offset
-# (EST or EDT) is worked out in `et_time_str`.
-START_TIME = "09:29:00"
-END_TIME = "09:41:00"
-
-# Days backtested concurrently within one trial.
-N_DAY_WORKERS = 7
-
-optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
-# optuna.logging.set_verbosity(optuna.logging.WARNING)
-
-# Per-trial aggregates stored as optuna user attrs, in the order the results table shows them.
-AGG_ATTRS = ["pnl", "total_entered", "days_traded"]
-
-
-def database_str_for(study_name):
-    return f"sqlite:///{OPTUNA_DB_DIR}/{study_name}.db"
-
-
-def pickle_path_for(study_name):
-    return f"{OPTUNA_DB_DIR}/{study_name}.pkl"
-
-
-SYMBOL = "GOOG"
-SAMPLE_DAYS = [f"{day}_{SYMBOL}" for day in catalog_days_available(SYMBOL)]
+# Backtests run concurrently.
+N_WORKERS = 7
+N_BOOTSTRAP = 2000
 
 
 def et_time_str(day_str, time_str):
@@ -70,32 +52,35 @@ def et_time_str(day_str, time_str):
     return pd.Timestamp(f"{day_str} {time_str}").tz_localize(ET_TZ).strftime(CATALOG_TIME_STR_FMT)
 
 
-def run_day(args):
+def run_day(task):
     """
-    Backtest one day and return `(candidate, stats)`. Top-level so a spawned worker can import it.
+    Backtest one param set on one day. Top-level so a spawned worker can import it.
 
     The analyzer omits any statistic that returns `None`, so a day with no positions has no
     "Total Entered" or "Average Entry Price" key at all. Default `pnl` and `entered` to zero so the
-    day drops out of the trial's sums.
+    day drops out of the sums.
     """
-    candidate, params = args
-    symbol, day_str = parse_candidate_str(candidate)
+    p_hash, symbol, day_str, start_time, end_time, params = task
     stats = run_single_backtest(
         symbol,
-        et_time_str(day_str, START_TIME),
-        et_time_str(day_str, END_TIME),
+        et_time_str(day_str, start_time),
+        et_time_str(day_str, end_time),
         "momo",
         params,
         artifacts_location=None,
         allow_trading_times=None,
         log_level="ERROR",
     )
-    return candidate, {
-        "pnl": float(stats.get("PnL (total)") or 0.0),
-        "entered": int(stats.get("Total Entered") or 0),
-        "avg_entry_price": stats.get("Average Entry Price"),
-        "max_loser": stats.get("Max Loser"),
-    }
+    return (
+        p_hash,
+        day_str,
+        {
+            "pnl": float(stats.get("PnL (total)") or 0.0),
+            "entered": int(stats.get("Total Entered") or 0),
+            "avg_entry_price": stats.get("Average Entry Price"),
+            "max_loser": stats.get("Max Loser"),
+        },
+    )
 
 
 def linspace_int(low, high, step):
@@ -106,107 +91,220 @@ def linspace_float(low, high, step):
     return [round(val, 4) for val in np.arange(low, high + step * 0.90, step)]
 
 
-def optimize(trial, fixed_params):
-    """Backtest `fixed_params` plus this trial's grid values on every day in SAMPLE_DAYS."""
-    params = dict(fixed_params)
-    for param_name, space in trial.study.sampler._search_space.items():
-        param_type = {type(val) for val in space}
-        assert len(param_type) == 1, f"{param_name}: grid values must share one type, got {param_type}"
-        param_type = param_type.pop()
-        if param_type is bool:
-            params[param_name] = trial.suggest_categorical(param_name, space)
-        elif param_type is int:
-            params[param_name] = trial.suggest_int(param_name, low=min(space), high=max(space), step=1)
-        elif param_type in [float, np.float64]:
-            params[param_name] = trial.suggest_float(param_name, low=min(space), high=max(space), step=0.01)
-        elif issubclass(param_type, str):
-            # Plain strings ("09:31") and StrEnums (DirectionStrategy) alike.
-            params[param_name] = trial.suggest_categorical(param_name, space)
-        else:
-            raise ValueError(f"Unknown param type {param_type}")
-
-    # `maxtasksperchild=1` gives every backtest a fresh interpreter (see module docstring), but it
-    # counts *tasks*, and `map` batches items into chunks of several days per task by default.
-    # `chunksize=1` makes one day one task. A day that raises propagates out of `map` and fails
-    # the trial, so a bug is not hidden as a score.
-    ctx = multiprocessing.get_context("spawn")
-    with ctx.Pool(processes=N_DAY_WORKERS, maxtasksperchild=1) as pool:
-        per_day = dict(pool.map(run_day, [(day, params) for day in SAMPLE_DAYS], chunksize=1))
-
-    total_pnl = sum(d["pnl"] for d in per_day.values())
-    total_entered = sum(d["entered"] for d in per_day.values())
-    if total_entered == 0:
-        raise optuna.TrialPruned("No entry fills on any day, Pnl Per100 is undefined")
-
-    traded = [d for d in per_day.values() if d["entered"] > 0]
-    trial.set_user_attr("pnl", round(total_pnl, 2))
-    trial.set_user_attr("total_entered", total_entered)
-    trial.set_user_attr("days_traded", len(traded))
-    # trial.set_user_attr(
-    #     "avg_entry_price", round(sum(d["avg_entry_price"] * d["entered"] for d in traded) / total_entered, 4)
-    # )
-    # A string, so the whole breakdown survives `trials_dataframe()` as one column.
-    breakdown = {day: {"pnl": d["pnl"], "entered": d["entered"]} for day, d in per_day.items()}
-    trial.set_user_attr("per_day", json.dumps(breakdown))
-
-    return round(total_pnl / total_entered * 100, 3)
+# RUN ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 
-def target(study_name, sampler, fixed_params):
-    os.makedirs(OPTUNA_DB_DIR, exist_ok=True)
-    study = optuna.create_study(
-        study_name=study_name,
-        storage=database_str_for(study_name),
-        direction="maximize",
-        sampler=sampler,
-        pruner=optuna.pruners.NopPruner(),
-        load_if_exists=True,
+def run_study(conn, symbol, start_time, end_time, params, restart=False) -> str:
+    """Create or resume the study for this spec and backtest every (param set, day) it is missing."""
+    study_hash = study_store.upsert_study(conn, symbol, start_time, end_time, params)
+    if restart:
+        deleted = study_store.delete_study_results(conn, study_hash)
+        print(f"Restart: deleted {deleted} day results")
+
+    days = catalog_days_available(symbol)
+    if not days:
+        raise ValueError(f"No catalog days for {symbol}")
+    grid = {
+        study_store.params_hash(symbol, start_time, end_time, param_set): param_set
+        for param_set in study_store.expand_grid(params)
+    }
+    missing = study_store.missing_pairs(conn, study_hash, days)
+    print(
+        f"Study {study_hash[:HASH_DISPLAY_LEN]} | {symbol} {start_time}-{end_time} | {len(grid)} param sets x "
+        f"{len(days)} days | {len(grid) * len(days) - len(missing)} done, {len(missing)} to run\n"
     )
-    # NOTE: setting n_jobs above 1 creates more threads, not processes. It is not any faster than n_jobs=1.
-    study.optimize(lambda trial: optimize(trial, fixed_params), n_trials=sampler._n_min_trials, n_jobs=1)
+    if not missing:
+        return study_hash
+
+    tasks = [(p_hash, symbol, day, start_time, end_time, grid[p_hash]) for p_hash, day in missing]
+    started = datetime.now()
+    # `maxtasksperchild=1` gives every backtest a fresh interpreter (see module docstring), but it
+    # counts *tasks*, and the pool batches items into chunks by default. `chunksize=1` makes one
+    # backtest one task. Each result is stored as it lands, so an interrupted run loses nothing;
+    # a backtest that raises stops the run rather than being stored as a score.
+    ctx = multiprocessing.get_context("spawn")
+    with ctx.Pool(processes=N_WORKERS, maxtasksperchild=1) as pool:
+        for i, (p_hash, day, result) in enumerate(pool.imap_unordered(run_day, tasks, chunksize=1), start=1):
+            study_store.insert_result(conn, p_hash, day, result)
+            if i % 25 == 0 or i == len(tasks):
+                elapsed = datetime.now() - started
+                eta = elapsed / i * (len(tasks) - i)
+                print(f"  {i}/{len(tasks)} backtests | elapsed {elapsed} | eta {eta}")
+    study_store.touch_study(conn, study_hash)
+    print(f"TOTAL RUN TIME: {datetime.now() - started}\n")
+    return study_hash
 
 
-def load_results(study_name, param_names):
-    study = optuna.load_study(study_name=study_name, storage=database_str_for(study_name))
-    df = study.trials_dataframe()
-    df = df[df["state"] == "COMPLETE"]
-    rename_map = {f"params_{p}": p for p in param_names}
-    rename_map |= {f"user_attrs_{u}": u for u in [*AGG_ATTRS, "per_day"]}
-    df = df.rename(columns=rename_map)
-    return df[["number", "value", *param_names, *AGG_ATTRS, "per_day"]].reset_index(drop=True)
+# SHOW ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 
-def per_day_table(per_day_json):
-    """Expand one trial's `per_day` attr into a day-by-day frame with a totals row."""
-    rows = [{"day": day, **vals} for day, vals in json.loads(per_day_json).items()]
-    df = pd.DataFrame(rows)
+def _max_drawdown(daily_pnl):
+    cum = np.cumsum(daily_pnl)
+    return float((np.maximum.accumulate(np.maximum(cum, 0)) - cum).max())
+
+
+def score_param_sets(results: pd.DataFrame, days: list[str]) -> pd.DataFrame:
+    """Pnl Per100 and risk stats per param set, over `days` only."""
+    results = results[results["day"].isin(days)]
+    pnl = results.pivot(index="params_hash", columns="day", values="pnl")[days]
+    entered = results.pivot(index="params_hash", columns="day", values="entered")[days]
+    months = pd.Index(days).str[:7]
+    # The same resample indices for every param set, so their P(total < 0) compare like for like.
+    boot_idx = np.random.default_rng(0).integers(0, len(days), size=(N_BOOTSTRAP, len(days)))
+
+    rows = []
+    for p_hash in pnl.index:
+        day_pnl = pnl.loc[p_hash].to_numpy()
+        day_entered = entered.loc[p_hash].to_numpy()
+        traded = day_entered > 0
+        total_entered = int(day_entered.sum())
+        rows.append(
+            {
+                "params_hash": p_hash,
+                "value": round(day_pnl.sum() / total_entered * 100, 3) if total_entered else np.nan,
+                "pnl": round(day_pnl.sum(), 2),
+                "entered": total_entered,
+                "days_traded": int(traded.sum()),
+                "win_rate": round((day_pnl[traded] > 0).mean(), 3) if traded.any() else np.nan,
+                "worst_day": round(day_pnl.min(), 2),
+                "worst_month": round(pd.Series(day_pnl).groupby(months).sum().min(), 2),
+                "max_dd": round(_max_drawdown(day_pnl), 2),
+                "p_neg": round((day_pnl[boot_idx].sum(axis=1) < 0).mean(), 3),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _comparable_days(results: pd.DataFrame, hashes) -> list[str]:
+    """Days that every one of `hashes` has a result for, so all of them are scored on the same days."""
+    days_by_hash = results.groupby("params_hash")["day"].apply(set)
+    common = set.intersection(*(days_by_hash.get(h, set()) for h in hashes)) if len(hashes) else set()
+    return sorted(common)
+
+
+def per_day_table(results: pd.DataFrame, p_hash: str, days: list[str]) -> pd.DataFrame:
+    """One param set's day-by-day results with a totals row."""
+    df = results[(results["params_hash"] == p_hash) & results["day"].isin(days)][["day", "pnl", "entered"]]
+    df = df.sort_values("day")
     totals = pd.DataFrame([{"day": "TOTAL", "pnl": df["pnl"].sum(), "entered": df["entered"].sum()}])
     df = pd.concat([df, totals], ignore_index=True)
     df["pnl_per100"] = (df["pnl"] / df["entered"].replace(0, np.nan) * 100).round(3)
     return df
 
 
-if __name__ == "__main__":
-    delete_existing = True
-    run_trials = True
-    MAKE_RESULTS_PICKLE = True
+def show_study(conn, study_hash_prefix):
+    study = study_store.find_study(conn, study_hash_prefix)
+    study_hash = study["study_hash"]
+    spec = study["spec"]
+    param_sets = study_store.study_param_sets(conn, study_hash)
+    results = study_store.load_study_results(conn, study_hash)
 
-    study_name = "test" # Simple take
-    study_name = "trailing_take"
-    study_name = "rolling_vwap_take"
-    study_name = "vwap_and_simple_take"
-    study_name = "vwap"
-    study_name = "aapl"
-    study_name = "msft"
-    study_name = "goog"
-    # Momo params for every trial. A list is swept by the grid; anything else is fixed. Every value
-    # in a list must share one type, and `None` cannot be a grid value: a sweep that wants to
-    # "turn off" `entry_exclusion_band` or `take_profit` needs a numeric sentinel instead.
+    swept = [p for p in study_store.swept_names(spec) if param_sets[p].astype(str).nunique() > 1]
+    fixed = {name: val for name, val in spec.items() if not isinstance(val, list)}
+    print(
+        f"=== Study {study_hash[:HASH_DISPLAY_LEN]} | {study['symbol']} {study['start_time']}-{study['end_time']} ==="
+    )
+    print(f"created {study['created_at']} | last run {study['last_run_at']}")
+    print(f"swept: { {p: spec[p] for p in study_store.swept_names(spec)} }")
+    print(f"fixed: {fixed}\n")
+
+    days = _comparable_days(results, param_sets["params_hash"])
+    n_missing = len(set(catalog_days_available(study["symbol"])) - set(days))
+    if n_missing:
+        print(f"NOTE: {n_missing} catalog day(s) not run for every param set; MODE='run' backfills them.\n")
+    if not days:
+        print("No day has a result for every param set yet.")
+        return
+
+    scores = score_param_sets(results, days).merge(param_sets[["params_hash", *swept]], on="params_hash")
+    scores.insert(0, "hash", scores.pop("params_hash").str[:HASH_DISPLAY_LEN])
+    ranked = scores.sort_values("value", ascending=False)
+    print(f"=== {len(ranked)} param sets over {len(days)} days ({days[0]} to {days[-1]}), best first ===")
+    with pd.option_context("display.width", 250, "display.max_columns", None, "display.max_rows", 500):
+        print(ranked.to_string(index=False))
+    print()
+
+    if swept:
+        print("=== Value by param ===")
+        for col in swept:
+            print(f"\n--- {col} ---")
+            print(scores.groupby(col)["value"].agg(["mean", "max", "count"]).round(2).to_string())
+        print()
+
+    if len(swept) > 1:
+        print("=== Value by full param combination ===")
+        print(scores.groupby(swept)["value"].mean().round(2).sort_values(ascending=False).to_string())
+        print()
+
+    best = ranked.iloc[0]
+    best_hash = param_sets.loc[param_sets["params_hash"].str.startswith(best["hash"]), "params_hash"].iloc[0]
+    print(f"=== Best param set {best['hash']}: value={best['value']} ===")
+    print({p: best[p].item() if isinstance(best[p], np.generic) else best[p] for p in swept})
+    print(per_day_table(results, best_hash, days).to_string(index=False))
+
+
+def list_studies(conn, symbol=None):
+    """Every study (for `symbol`, or all symbols), oldest first, with its best score."""
+    studies = study_store.list_studies(conn, symbol)
+    if studies.empty:
+        print(f"No studies{f' for {symbol}' if symbol else ''}")
+        return
+
+    catalog_days = {}
+    rows = []
+    for study in studies.itertuples():
+        param_sets = study_store.study_param_sets(conn, study.study_hash)
+        results = study_store.load_study_results(conn, study.study_hash)
+        days = _comparable_days(results, param_sets["params_hash"])
+        best = score_param_sets(results, days)["value"].max() if days else np.nan
+        if study.symbol not in catalog_days:
+            catalog_days[study.symbol] = len(catalog_days_available(study.symbol))
+        total_days = catalog_days[study.symbol]
+        swept = {name: val for name, val in study.spec.items() if isinstance(val, list)}
+        rows.append(
+            {
+                "hash": study.study_hash[:HASH_DISPLAY_LEN],
+                "symbol": study.symbol,
+                "window": f"{study.start_time}-{study.end_time}",
+                "created": study.created_at,
+                "last_run": study.last_run_at,
+                "param_sets": len(param_sets),
+                "days": f"{len(days)}/{total_days}",
+                "best_value": best,
+                "swept": "; ".join(f"{name}={_summarize(vals)}" for name, vals in swept.items()),
+            }
+        )
+    with pd.option_context("display.width", 300, "display.max_columns", None, "display.max_colwidth", 120):
+        print(pd.DataFrame(rows).to_string(index=False))
+
+
+def _summarize(values):
+    if len(values) > 3 and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in values):
+        return f"[{min(values)}..{max(values)}]x{len(values)}"
+    return json.dumps(values)
+
+
+if __name__ == "__main__":
+    # "run": create or resume the study below (or STUDY_HASH) and backtest whatever it is missing.
+    # "restart": delete the study's results, then run. "show": print a study's results.
+    # "list": every study for SYMBOL (None = all symbols).
+    MODE = "run"
+    # A past study's hash prefix (see "list"). None = the study defined by the spec below.
+    STUDY_HASH = None
+
+    SYMBOL = "MSFT"
+    # Backtest window applied to every day, as New York wall-clock "HH:MM:SS". Each day's UTC
+    # offset (EST or EDT) is worked out in `et_time_str`.
+    START_TIME = "09:29:00"
+    END_TIME = "09:41:00"
+    # Momo params. A list is swept by the grid; anything else is fixed. A study's hash covers all
+    # of it, so any edit here starts a new study -- one that reuses every result it shares with
+    # earlier studies.
     params = dict(
         allow_trades=True,
         max_position_multiplier=1,
         trade_size=50,
-        stop_loss=linspace_float(low=3, high=4.5, step=0.5),
+        stop_loss=linspace_float(low=3.5, high=4.5, step=0.5),
         take_profit=0.5,
         # take_profit=linspace_float(low=0.6, high=0.8, step=0.1),
         upper_scalar_multiplier=0.5,
@@ -227,62 +325,35 @@ if __name__ == "__main__":
         num_exit_tiers=2,
         # num_exit_tiers=linspace_int(1, 3, step=1),
         entry_strategy=EntryStrategy.SIT_AT_DISTANCE,
-        entry_distance=linspace_float(low=0.8, high=1.6, step=0.2),
+        entry_distance=linspace_float(low=1.4, high=2.4, step=0.25),
         start_trading_at="09:29:58",
         stop_entries_after=["09:31"],
         force_exit_at="09:40",
         entry_exclusion_band=None,
         random_seed=1,
     )
-    search_space = {name: val for name, val in params.items() if isinstance(val, list)}
-    fixed_params = {name: val for name, val in params.items() if name not in search_space}
-
-    sampler = optuna.samplers.GridSampler(search_space)
-    n_trials = sampler._n_min_trials
-
-    if delete_existing:
-        for path in (database_str_for(study_name).replace("sqlite:///", ""), pickle_path_for(study_name)):
-            if os.path.exists(path):
-                os.remove(path)
-
-    print(f"Trials: {n_trials} | Days per trial: {len(SAMPLE_DAYS)} | Backtests: {n_trials * len(SAMPLE_DAYS)}\n")
-
-    if run_trials:
-        start = datetime.now()
-        target(study_name, sampler, fixed_params)
-        print(f"TOTAL RUN TIME: {datetime.now() - start}")
-
-    param_names = list(search_space.keys())
-
-    if MAKE_RESULTS_PICKLE:
-        df = load_results(study_name, param_names)
-        df.to_pickle(pickle_path_for(study_name))
+    conn = study_store.open_store()
+    if MODE in ("run", "restart"):
+        if STUDY_HASH is not None:
+            study = study_store.find_study(conn, STUDY_HASH)
+            SYMBOL, START_TIME, END_TIME, params = (
+                study["symbol"],
+                study["start_time"],
+                study["end_time"],
+                study["spec"],
+            )
+        study_hash = run_study(conn, SYMBOL, START_TIME, END_TIME, params, restart=MODE == "restart")
+        show_study(conn, study_hash)
+    elif MODE == "show":
+        if STUDY_HASH is None:
+            STUDY_HASH = study_store.spec_hash(SYMBOL, START_TIME, END_TIME, params)
+            if not study_store.study_exists(conn, STUDY_HASH):
+                raise SystemExit(
+                    f"The spec in this file ({STUDY_HASH[:HASH_DISPLAY_LEN]}) has not been run. "
+                    "Set MODE = 'run', or set STUDY_HASH to a study from MODE = 'list'."
+                )
+        show_study(conn, STUDY_HASH)
+    elif MODE == "list":
+        list_studies(conn, SYMBOL)
     else:
-        df = pd.read_pickle(pickle_path_for(study_name))
-
-    # A swept param that only ever took one value has nothing to compare.
-    param_names = [p for p in param_names if df[p].nunique() > 1]
-
-    print("=== Trials, best first ===")
-    ranked = df.drop(columns=["per_day"]).sort_values("value", ascending=False)
-    with pd.option_context("display.width", 250, "display.max_columns", None, "display.max_rows", 500):
-        print(ranked.to_string(index=False))
-    print()
-
-    print("=== Value by param ===")
-    for col in param_names:
-        print(f"\n--- {col} ---")
-        print(df.groupby(col)["value"].agg(["mean", "max", "count"]).round(2).to_string())
-    print()
-
-    if len(param_names) > 1:
-        print("=== Value by full param combination ===")
-        combo = df.groupby(param_names)["value"].mean().round(2).sort_values(ascending=False)
-        print(combo.to_string())
-        print()
-
-    best = ranked.iloc[0]
-    print(f"=== Best trial #{int(best['number'])}: value={best['value']} ===")
-    print({p: best[p] for p in param_names})
-    per_day_df = per_day_table(df.loc[df["number"] == best["number"], "per_day"].iloc[0])
-    print(per_day_df.to_string(index=False))
+        raise ValueError(f"Unknown MODE {MODE!r}")
