@@ -13,9 +13,13 @@ sum of each day's shares entered, times 100. That is the same definition
 `custom.statistics.trade_avg_scaled.PnlPer100` applies within a day, so a single day and the full
 set are scored on one scale.
 
-Each day's backtest runs in its own one-shot spawned process. Nautilus initializes the Rust
-logger once per interpreter and panics on the second `engine.run()` in the same one ("attempted
-to set a logger after the logging system was already initialized").
+Backtests run in a pool of long-lived worker processes, which take them in chunks of one day's
+param sets. A worker therefore loads a day's ticks from the catalog once and reuses them for every
+param set of that day, rather than paying for a fresh interpreter and a fresh load per backtest.
+That needs the Rust logger bypassed: it can only be initialized once per interpreter, and the
+second engine would panic ("attempted to set a logger after the logging system was already
+initialized"). Workers also share one string hash seed, so a result does not depend on which worker
+ran it.
 """
 
 import os
@@ -23,6 +27,7 @@ import sys
 
 
 sys.path.append(os.getcwd())
+import itertools
 import json
 import multiprocessing
 from datetime import datetime
@@ -31,8 +36,10 @@ import numpy as np
 import pandas as pd
 
 from custom.backtest_scripts.strategy_backtest_runner import run_single_backtest
+from custom.backtest_utils.load_catalog_data import BACKTESTING_CATALOG
 from custom.backtest_utils.load_catalog_data import CATALOG_TIME_STR_FMT
 from custom.backtest_utils.load_catalog_data import catalog_days_available
+from custom.backtest_utils.load_catalog_data import get_catalog_data
 from custom.optimize import study_store
 from custom.optimize.study_store import HASH_DISPLAY_LEN
 from custom.strategies.base import ET_TZ
@@ -43,7 +50,17 @@ from custom.strategies.momo import ExitStrategy
 
 
 # Backtests run concurrently.
-N_WORKERS = 7
+N_WORKERS = 8
+# Param sets of one day handed to a worker at once. Results are stored a chunk at a time, so an
+# interrupted run loses at most one chunk per worker.
+CHUNK_SIZE = 25
+# Workers are replaced after this many chunks, so anything a long-lived interpreter accumulates
+# across engines is bounded.
+MAX_CHUNKS_PER_WORKER = 20
+# String hash seed of every worker. Set iteration order follows string hashes, and a backtest's
+# fills can depend on it (~0.1% of results differed by cents between workers with different seeds),
+# so a fixed seed keeps results the same whichever worker runs them.
+WORKER_HASH_SEED = "0"
 N_BOOTSTRAP = 2000
 
 
@@ -70,6 +87,8 @@ def run_day(task):
         artifacts_location=None,
         allow_trading_times=None,
         log_level="ERROR",
+        bypass_logging=True,
+        raise_errors=True,
     )
     return (
         p_hash,
@@ -81,6 +100,62 @@ def run_day(task):
             "max_loser": stats.get("Max Loser"),
         },
     )
+
+
+# Catalog query results of the day a worker is on, keyed by the query's arguments.
+_query_memo = {}
+_query_memo_day = None
+
+
+def _init_worker():
+    """
+    Memoize catalog queries for the worker's lifetime.
+
+    Every backtest of a day makes the same queries: that day's quote and trade ticks, plus the
+    historical trade ticks the strategy requests in `on_start` (two days of them, ~800k ticks for
+    AAPL). The data engine queries the same catalog object, so patching the instance covers both.
+    """
+    query = BACKTESTING_CATALOG.query
+
+    def memoized_query(*args, **kwargs):
+        key = repr((args, sorted(kwargs.items())))
+        if key not in _query_memo:
+            _query_memo[key] = query(*args, **kwargs)
+        return _query_memo[key]
+
+    BACKTESTING_CATALOG.query = memoized_query
+
+
+def run_chunk(tasks):
+    """Backtest a chunk of `run_day` tasks, all on one day. Top-level so a spawned worker can import it."""
+    global _query_memo_day
+    day_str = tasks[0][2]
+    if day_str != _query_memo_day:
+        # Only one day's ticks are held at a time
+        _query_memo.clear()
+        get_catalog_data.cache_clear()
+        _query_memo_day = day_str
+    return [run_day(task) for task in tasks]
+
+
+def make_pool():
+    """
+    Create the pool backtests run in: spawned interpreters with a fixed string hash seed.
+
+    PYTHONHASHSEED is read once, at interpreter start, so it has to be in the environment the
+    workers are spawned with; this interpreter's own seed is left as it was.
+    """
+    os.environ["PYTHONHASHSEED"] = WORKER_HASH_SEED
+    ctx = multiprocessing.get_context("spawn")
+    return ctx.Pool(processes=N_WORKERS, initializer=_init_worker, maxtasksperchild=MAX_CHUNKS_PER_WORKER)
+
+
+def _chunk_by_day(tasks):
+    chunks = []
+    for _, day_tasks in itertools.groupby(sorted(tasks, key=lambda task: task[2]), key=lambda task: task[2]):
+        day_tasks = list(day_tasks)
+        chunks.extend(day_tasks[i : i + CHUNK_SIZE] for i in range(0, len(day_tasks), CHUNK_SIZE))
+    return chunks
 
 
 def linspace_int(low, high, step):
@@ -118,18 +193,18 @@ def run_study(conn, symbol, start_time, end_time, params, restart=False) -> str:
 
     tasks = [(p_hash, symbol, day, start_time, end_time, grid[p_hash]) for p_hash, day in missing]
     started = datetime.now()
-    # `maxtasksperchild=1` gives every backtest a fresh interpreter (see module docstring), but it
-    # counts *tasks*, and the pool batches items into chunks by default. `chunksize=1` makes one
-    # backtest one task. Each result is stored as it lands, so an interrupted run loses nothing;
-    # a backtest that raises stops the run rather than being stored as a score.
-    ctx = multiprocessing.get_context("spawn")
-    with ctx.Pool(processes=N_WORKERS, maxtasksperchild=1) as pool:
-        for i, (p_hash, day, result) in enumerate(pool.imap_unordered(run_day, tasks, chunksize=1), start=1):
-            study_store.insert_result(conn, p_hash, day, result)
-            if i % 25 == 0 or i == len(tasks):
-                elapsed = datetime.now() - started
-                eta = elapsed / i * (len(tasks) - i)
-                print(f"  {i}/{len(tasks)} backtests | elapsed {elapsed} | eta {eta}")
+    # `chunksize=1` hands each worker one of our day chunks at a time, rather than the pool
+    # batching several of them together. Each chunk's results are stored as it lands; a backtest
+    # that raises stops the run rather than being stored as a score.
+    with make_pool() as pool:
+        i = 0
+        for chunk_results in pool.imap_unordered(run_chunk, _chunk_by_day(tasks), chunksize=1):
+            for p_hash, day, result in chunk_results:
+                study_store.insert_result(conn, p_hash, day, result)
+            i += len(chunk_results)
+            elapsed = datetime.now() - started
+            eta = elapsed / i * (len(tasks) - i)
+            print(f"  {i}/{len(tasks)} backtests | elapsed {elapsed} | eta {eta}")
     study_store.touch_study(conn, study_hash)
     print(f"TOTAL RUN TIME: {datetime.now() - started}\n")
     return study_hash
@@ -292,7 +367,7 @@ if __name__ == "__main__":
     # A past study's hash prefix (see "list"). None = the study defined by the spec below.
     STUDY_HASH = None
 
-    SYMBOL = "MSFT"
+    SYMBOL = "AMZN"
     # Backtest window applied to every day, as New York wall-clock "HH:MM:SS". Each day's UTC
     # offset (EST or EDT) is worked out in `et_time_str`.
     START_TIME = "09:29:00"
@@ -303,13 +378,12 @@ if __name__ == "__main__":
     params = dict(
         allow_trades=True,
         max_position_multiplier=1,
-        trade_size=50,
-        stop_loss=linspace_float(low=3.5, high=4.5, step=0.5),
-        take_profit=0.5,
-        # take_profit=linspace_float(low=0.6, high=0.8, step=0.1),
+        trade_size=100,
+        stop_loss=linspace_int(low=160, high=160, step=80),
+        take_profit=linspace_int(low=20, high=32, step=4),
         upper_scalar_multiplier=0.5,
-        rolling_vwap_window=3000,
-        # rolling_vwap_window=linspace_int(low=1000, high=4000, step=1000),
+        # rolling_vwap_window=3000,
+        rolling_vwap_window=linspace_int(low=2000, high=6000, step=1000),
         vwap_window=150,
         variance_window=300,
         outer_band_multiplier=2.5,
@@ -320,12 +394,12 @@ if __name__ == "__main__":
         # direction_strategy=[DirectionStrategy.REVERSION, DirectionStrategy.MOMENTUM],
         direction_threshold=DirectionThreshold.ROLLING_VWAP,
         # direction_threshold=[DirectionThreshold.OPEN, DirectionThreshold.ROLLING_VWAP],
-        exit_strategy=ExitStrategy.SIT_ON_ROLLING_VWAP,
+        exit_strategy=ExitStrategy.SIMPLE_TAKE,
         # exit_strategy=[ExitStrategy.SIT_ON_ROLLING_VWAP, ExitStrategy.SIMPLE_TAKE],
         num_exit_tiers=2,
         # num_exit_tiers=linspace_int(1, 3, step=1),
         entry_strategy=EntryStrategy.SIT_AT_DISTANCE,
-        entry_distance=linspace_float(low=1.4, high=2.4, step=0.25),
+        entry_distance=linspace_int(low=20, high=60, step=5),
         start_trading_at="09:29:58",
         stop_entries_after=["09:31"],
         force_exit_at="09:40",

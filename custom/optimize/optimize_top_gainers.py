@@ -67,7 +67,7 @@ def optimize(trial):
         # --- STRATEGY PARAMS ---------------------
         trade_size=100,
         max_position_multiplier=1,
-        stop_loss=0.15,
+        stop_loss=300,  # bps, ~$0.15 on a $5 stock
         take_profit=None,
         vwap_window=160,
         variance_window=300,
@@ -153,8 +153,8 @@ if __name__ == "__main__":
     search_space = dict(
         random_seed=[1, 2, 3, 4],
         # max_position_multiplier=linspace_int(low=1, high=1, step=1),
-        # stop_loss=linspace_float(low=0.05, high=0.15, step=0.05),
-        # take_profit=linspace_float(low=0.25, high=0.35, step=0.10),
+        # stop_loss=linspace_int(low=100, high=300, step=100),
+        # take_profit=linspace_int(low=500, high=700, step=200),  # bps; ~$0.25-0.35 on a $5 stock
         # variance_window=linspace_int(low=250, high=350, step=50),
         # vwap_window=linspace_int(low=120, high=200, step=40),
         upper_scalar_multiplier=linspace_float(low=0.6, high=1.8, step=0.4),
