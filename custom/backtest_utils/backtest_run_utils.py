@@ -44,10 +44,13 @@ from nautilus_trader.model.objects import Money
 from nautilus_trader.persistence.config import StreamingConfig
 
 
-def build_backtest_engine(artifacts_location, log_level, controller=None):
+def build_backtest_engine(artifacts_location, log_level, controller=None, bypass_logging=False):
     """Build a BacktestEngine with standard logging, cache, and streaming config.
 
     Clears any existing *.log files in artifacts_location.
+
+    `bypass_logging` skips initializing the Rust logger. It can only be initialized once per
+    process, so a second engine in the same process panics unless every engine bypasses it.
     """
     streaming = None
     if artifacts_location is not None:
@@ -74,6 +77,7 @@ def build_backtest_engine(artifacts_location, log_level, controller=None):
                     Portfolio="WARNING",
                 ),
                 use_pyo3=False,
+                bypass_logging=bypass_logging,
             ),
             cache=CacheConfig(tick_capacity=1000, bar_capacity=1000),
             streaming=streaming,

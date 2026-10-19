@@ -6,7 +6,7 @@ import pandas as pd
 
 from custom.nt_extensions.indicators import PressureVWAPBands, RollingVWAP, VWAPBands
 from custom.strategies._side import Side
-from custom.strategies.base import BaseStrategy, BaseStrategyConfig
+from custom.strategies.base import ET_TZ, BaseStrategy, BaseStrategyConfig
 from custom.strategies._exit_tiers import ExitTiers
 from custom.strategies.metric import Metric
 from nautilus_trader.common.enums import LogColor
@@ -53,7 +53,7 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     trade_size: int
     max_position_multiplier: int
     stop_loss: float
-    take_profit: float
+    take_profit: float | None # Defaults to stop_loss
 
     upper_scalar_multiplier: float = 1.0
     lower_scalar_multiplier: float | None = None  # Defaults to upper_scalar_multiplier
@@ -67,14 +67,11 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     direction_threshold: DirectionThreshold = DirectionThreshold.OPEN
     flip_side_confirm_ticks: int = 150
     only_buy_if_macd_positive: bool = False
-    entry_strategy: EntryStrategy = EntryStrategy.CROSS_VWAP_BAND
-    # Distance from the direction threshold that `sit_at_distance` rests its entry at. Required
-    # by that strategy, ignored by the others.
-    entry_distance: float | None = None
+    entry_strategy: EntryStrategy = EntryStrategy.SIT_AT_DISTANCE
+    entry_distance: float | None = None # Required by SIT_AT_DISTANCE, ignored by others.
     exit_strategy: ExitStrategy
     num_exit_tiers: int = 1
-    # "HH:MM" or "HH:MM:SS" in US/Eastern
-    start_trading_at: str | None = None
+    start_trading_at: str | None = None # "HH:MM" or "HH:MM:SS" in US/Eastern
     stop_entries_after: str | None = None
     force_exit_at: str | None = None
 
@@ -147,6 +144,13 @@ class MomoStrategy(BaseStrategy):
                 f"start_trading_at {self.config.start_trading_at!r} is not before "
                 f"force_exit_at {self.config.force_exit_at!r}, so every position would be forced out at once"
             )
+
+        self._et_day_start_ns = 0
+        self._et_day_end_ns = 0
+        self._start_trading_ns: int | None = None
+        self._stop_entries_ns: int | None = None
+        self._force_exit_ns: int | None = None
+
         if self.config.entry_exclusion_band is not None and self.config.entry_exclusion_band < 0:
             raise ValueError(f"entry_exclusion_band must be >= 0 or None, got {self.config.entry_exclusion_band!r}")
         self._entry_exclusion_band: float | None = self.config.entry_exclusion_band
@@ -168,7 +172,7 @@ class MomoStrategy(BaseStrategy):
                     f"entry_strategy '{self.entry_strategy}'"
                 )
 
-        self.take_profit = self.config.take_profit if self.config.take_profit is not None else self.config.stop_loss
+        self.take_profit = self.config.take_profit
         lower_scalar_multiplier = (
             self.config.lower_scalar_multiplier
             if self.config.lower_scalar_multiplier is not None
@@ -412,12 +416,13 @@ class MomoStrategy(BaseStrategy):
                     self.enter(self.config.trade_size, trail_price, cancel_after_secs=None)
 
             elif self.entry_strategy == EntryStrategy.SIT_AT_DISTANCE:
-                # Keep one entry resting `entry_distance` from the threshold, below it when long
-                # and above it when short. Nothing rests until the threshold exists, and it is
-                # repriced whenever the threshold moves (`rolling_vwap`) rather than re-sent.
+                # Keep one entry resting `entry_distance` basis points of the rolling VWAP from the
+                # threshold, below it when long and above it when short.
                 threshold = self._direction_threshold_value
-                if threshold is not None:
-                    offset = -self.config.entry_distance if self.is_long else self.config.entry_distance
+                rolling_vwap = self.rolling_vwap.value
+                if threshold is not None and rolling_vwap is not None:
+                    distance = rolling_vwap * self.config.entry_distance / 10_000
+                    offset = -distance if self.is_long else distance
                     entry_price = self.instrument.make_price(threshold + offset)
                     for order in self.open_entries:
                         if order.price != entry_price:
@@ -441,24 +446,29 @@ class MomoStrategy(BaseStrategy):
                 self._rolling_tiered_take()
             elif self.exit_strategy == ExitStrategy.SIMPLE_TAKE:
                 if self.open_exits_qty < exposure:
+                    take_profit = self._take_profit_distance(float(self.last_entry_price))
                     if self.is_long:
-                        take_price = self.last_entry_price + self.take_profit
+                        take_price = self.last_entry_price + take_profit
                     else:
-                        take_price = self.last_entry_price - self.take_profit
+                        take_price = self.last_entry_price - take_profit
 
                     self.exit(exposure, limit_price=take_price, tag="simple")
 
-    def _trading_has_started(self) -> bool:
-        """
-        True once the Eastern wall clock has reached `start_trading_at`.
+    def _bps_of_rolling_vwap(self, bps: float, price: float) -> float:
+        reference = self.rolling_vwap.value if self.rolling_vwap.value is not None else price
+        return reference * bps / 10_000
 
-        The mirror of `_entries_stopped_for_the_day`, except this gates the whole tick rather
-        than entries alone: before the start there is nothing to exit, so nothing to run.
-        """
+    def _stop_loss_distance(self, price: float) -> float:
+        return self._bps_of_rolling_vwap(self.stop_loss, price)
+
+    def _take_profit_distance(self, price: float) -> float:
+        bps = self.take_profit if self.take_profit is not None else self.stop_loss
+        return self._bps_of_rolling_vwap(bps, price)
+
+    def _trading_has_started(self) -> bool:
         if self._start_trading_at is None:
             return True
-        now_est = self.clock.utc_now().tz_convert("US/Eastern")
-        return now_est.time() >= self._start_trading_at
+        return self._et_now_ns() >= self._start_trading_ns
 
     def _entries_stopped_for_the_day(self) -> bool:
         """True once the Eastern wall clock has reached `stop_entries_after` or `force_exit_at`."""
@@ -466,16 +476,42 @@ class MomoStrategy(BaseStrategy):
             return True
         if self._stop_entries_after is None:
             return False
-        now_est = self.clock.utc_now().tz_convert("US/Eastern")
-        return now_est.time() >= self._stop_entries_after
+        return self._et_now_ns() >= self._stop_entries_ns
 
     def _force_exit_due(self) -> bool:
         """True once the Eastern wall clock has reached `force_exit_at`."""
         # TODO: Refactor, move to base
         if self._force_exit_at is None:
             return False
-        now_est = self.clock.utc_now().tz_convert("US/Eastern")
-        return now_est.time() >= self._force_exit_at
+        return self._et_now_ns() >= self._force_exit_ns
+
+    def _et_now_ns(self) -> int:
+        """
+        The clock in nanoseconds, with the Eastern cutoffs above resolved for the day it falls in.
+
+        The cutoffs are checked several times per tick, so they are resolved to nanosecond
+        timestamps once per Eastern day and compared as integers, rather than converting the clock
+        to Eastern wall-clock time on every check.
+        """
+        now_ns = self.clock.timestamp_ns()
+        if not self._et_day_start_ns <= now_ns < self._et_day_end_ns:
+            self._resolve_et_cutoffs(now_ns)
+        return now_ns
+
+    def _resolve_et_cutoffs(self, now_ns: int) -> None:
+        day = pd.Timestamp(now_ns, unit="ns", tz="UTC").tz_convert(ET_TZ).normalize()
+        # 26h clears the next midnight whether the day is 23, 24 or 25 hours long (DST).
+        self._et_day_start_ns = day.value
+        self._et_day_end_ns = (day + pd.Timedelta(hours=26)).normalize().value
+
+        def at(t: time | None) -> int | None:
+            if t is None:
+                return None
+            return pd.Timestamp.combine(day.date(), t).tz_localize(ET_TZ).value
+
+        self._start_trading_ns = at(self._start_trading_at)
+        self._stop_entries_ns = at(self._stop_entries_after)
+        self._force_exit_ns = at(self._force_exit_at)
 
     def _entry_blocked_by_exclusion_band(self, price: float) -> bool:
         """Apply `entry_exclusion_band` around the direction threshold."""

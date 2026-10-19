@@ -12,7 +12,7 @@ pin that the full target is sent, and that the modify is skipped once the target
 from unittest.mock import MagicMock
 
 from custom.strategies._open_order import OpenOrder
-from custom.strategies.base import BaseStrategy
+from custom.strategies.base import BaseStrategy, Side
 from nautilus_trader.model import Price, Quantity
 from nautilus_trader.model.enums import OrderStatus
 
@@ -139,3 +139,29 @@ def test_a_modify_held_while_pending_new_is_retried_without_cooldown_or_reconcil
 
     strategy._trigger_nt_reconciliation.assert_not_called()
     assert open_order._last_modify_ns == 0  # no cooldown pushed into the future
+
+
+def test_a_modify_rejected_in_a_backtest_does_not_try_to_reconcile():
+    """
+    The simulated exchange rejects a modify that lands after its order filled ("... not found").
+    There is no live exec engine in a backtest, and reaching for one raised AttributeError, which
+    ended the backtest on the spot (it stopped a 33k-backtest AMZN optimizer run on 2026-08-04).
+    """
+    from nautilus_trader.model.events import OrderModifyRejected
+
+    strategy = _ModifyHarness()
+    strategy._side = Side.LONG
+    strategy._buy_orders = set()
+    strategy._sell_orders = set()
+    strategy._exec_engine = None  # Only run_utils' live path sets it
+    strategy._reconciliation_task = None
+    strategy._last_force_reconcile_ns = 0
+    strategy._force_reconcile_count = 0
+    event = MagicMock(spec=OrderModifyRejected)
+    event.client_order_id = "O-1"
+    event.reason = "ClientOrderId('O-1') not found"
+
+    strategy.on_order_event(event)
+
+    assert strategy._force_reconcile_count == 0
+    assert strategy._reconciliation_task is None

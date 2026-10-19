@@ -407,6 +407,13 @@ class BaseStrategy(Strategy):
         """Whether to stop out now regardless of price. Subclasses override; never by default."""
         return False
 
+    def _stop_loss_distance(self, price: float) -> float:
+        """
+        Price distance from `price` to the stop. `stop_loss` is that distance in price units here;
+        subclasses override to read it in other units.
+        """
+        return self.stop_loss
+
     def _stop_out_if_needed(self, tick: TradeTick):
         if self.position_qty == 0:
             if self._stopping_out:
@@ -424,7 +431,7 @@ class BaseStrategy(Strategy):
         force_exit = self._force_exit_due()
         if self.exposure > 0 and self.stop_price is None:
             # Below the market when long, above it when short
-            self.stop_price = tick.price - sign * self.stop_loss
+            self.stop_price = float(tick.price) - sign * self._stop_loss_distance(float(tick.price))
             self.log.info(f"Setting stop price to {self.stop_price}")
 
         if self.stop_price is not None or force_exit:
@@ -768,7 +775,7 @@ class BaseStrategy(Strategy):
         if order.order_side == self._entry_order_side:
             self._total_entry_qty += int(order.last_qty)
             self.stop_loss = self.config.stop_loss
-            new_stop_price = float(order.last_px) - sign * self.stop_loss
+            new_stop_price = float(order.last_px) - sign * self._stop_loss_distance(float(order.last_px))
             if self.stop_price is not None:
                 # Only ever tighten: upward when long, downward when short
                 if (new_stop_price - float(self.stop_price)) * sign > 0:
@@ -880,6 +887,10 @@ class BaseStrategy(Strategy):
 
     def _trigger_nt_reconciliation(self):
         """Trigger an async force-reconciliation via the execution engine to re-sync cache with broker."""
+        if self._exec_engine is None:
+            # Backtest: the simulated exchange and the cache can't drift apart, so there is nothing
+            # to reconcile (and no live exec engine to do it)
+            return
         # Skip if a reconciliation is already in-flight
         if self._reconciliation_task is not None and not self._reconciliation_task.done():
             return

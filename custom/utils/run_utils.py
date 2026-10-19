@@ -9,7 +9,14 @@ from nautilus_trader.common.component import Logger
 log = Logger(name="run_utils")
 
 
-def run_strategy(strategy, node_or_engine, artifacts_location=None, run_config=None, paper=True):
+def run_strategy(strategy, node_or_engine, artifacts_location=None, run_config=None, paper=True, raise_errors=False):
+    """
+    Run `strategy` on a live node or backtest engine and return its performance stats.
+
+    An exception during the run is logged and swallowed, so a live node still cleans up and
+    reports. `raise_errors` re-raises it after cleanup instead, for callers that must not treat a
+    failed run's stats as a result (and whose logging may be bypassed, hiding the log line).
+    """
     if isinstance(node_or_engine, TradingNode):
         symbol = strategy.config.instrument_id.symbol.value
         alpaca_helper = AlpacaTraderHelper(paper=paper)
@@ -29,6 +36,8 @@ def run_strategy(strategy, node_or_engine, artifacts_location=None, run_config=N
     except Exception as e:
         log.error(f"Exception during run with params {run_config}: {e}")
         log.error(f"Traceback:\n{traceback.format_exc()}")
+        if raise_errors:
+            raise
     finally:
         if isinstance(node_or_engine, TradingNode):
             try:

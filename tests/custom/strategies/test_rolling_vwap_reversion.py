@@ -453,12 +453,16 @@ def _tick_strategy(
     s._last_entry_adjustment_ns = 0
     s._last_exit_adjustment_ns = 0
     s.clock = MagicMock()
-    s.clock.timestamp_ns.return_value = 10**12
+    s.clock.timestamp_ns.return_value = now.value
     s.clock.utc_now.return_value = now
     s._on_first_tick = MagicMock()
     s._trading_has_started = MomoStrategy._trading_has_started.__get__(s, MomoStrategy)
     s._entries_stopped_for_the_day = MomoStrategy._entries_stopped_for_the_day.__get__(s, MomoStrategy)
     s._force_exit_due = MomoStrategy._force_exit_due.__get__(s, MomoStrategy)
+    s._et_now_ns = MomoStrategy._et_now_ns.__get__(s, MomoStrategy)
+    s._resolve_et_cutoffs = MomoStrategy._resolve_et_cutoffs.__get__(s, MomoStrategy)
+    s._et_day_start_ns = 0
+    s._et_day_end_ns = 0
     s._entry_blocked_by_exclusion_band = MomoStrategy._entry_blocked_by_exclusion_band.__get__(s, MomoStrategy)
     s._flip_side_if_needed = MagicMock()  # exercised on its own above
     s._rolling_tiered_take = MagicMock()
@@ -678,7 +682,8 @@ def test_no_band_means_no_effect():
 # ---------------------------------------------------------------------------
 
 
-def _distance_strategy(threshold=10.0, distance=0.5, is_long=True, resting=()):
+def _distance_strategy(threshold=10.0, distance=500, is_long=True, resting=(), rolling_vwap=10.0):
+    """`distance` is in bps of `rolling_vwap`, so the defaults put the entry $0.50 from the threshold."""
     s = _tick_strategy(
         flipping=False,
         entry_strategy=EntryStrategy.SIT_AT_DISTANCE,
@@ -686,18 +691,19 @@ def _distance_strategy(threshold=10.0, distance=0.5, is_long=True, resting=()):
         threshold=threshold,
         is_long=is_long,
     )
+    s.rolling_vwap = MagicMock(value=rolling_vwap)
     s.open_entries = set(resting)
     return s
 
 
 def test_long_rests_below_the_threshold():
-    s = _distance_strategy(threshold=10.0, distance=0.5)
+    s = _distance_strategy(threshold=10.0, distance=500)
     s._on_trade_tick(MagicMock(price=8.0))
     s.enter.assert_called_once_with(50, 9.5, cancel_after_secs=None)
 
 
 def test_short_rests_above_the_threshold():
-    s = _distance_strategy(threshold=10.0, distance=0.5, is_long=False)
+    s = _distance_strategy(threshold=10.0, distance=500, is_long=False)
     s._on_trade_tick(MagicMock(price=12.0))
     s.enter.assert_called_once_with(50, 10.5, cancel_after_secs=None)
 
@@ -705,7 +711,7 @@ def test_short_rests_above_the_threshold():
 def test_the_resting_entry_ignores_where_the_tick_printed():
     """Unlike cross_vwap_band, the price that triggers the tick has no bearing on the entry."""
     for tick_price in (5.0, 9.5, 20.0):
-        s = _distance_strategy(threshold=10.0, distance=0.5)
+        s = _distance_strategy(threshold=10.0, distance=500)
         s._on_trade_tick(MagicMock(price=tick_price))
         s.enter.assert_called_once_with(50, 9.5, cancel_after_secs=None)
 
@@ -719,7 +725,7 @@ def test_nothing_rests_before_the_threshold_exists():
 
 def test_a_resting_order_is_repriced_when_the_threshold_moves():
     order = MagicMock(price=9.5, quantity=50)
-    s = _distance_strategy(threshold=10.4, distance=0.5, resting=[order])
+    s = _distance_strategy(threshold=10.4, distance=500, resting=[order])
     s._on_trade_tick(MagicMock(price=8.0))
     s.modify_open_order.assert_called_once_with(order, quantity=50, price=9.9)
     s.enter.assert_not_called()  # Repriced, not re-sent
@@ -727,10 +733,24 @@ def test_a_resting_order_is_repriced_when_the_threshold_moves():
 
 def test_a_correctly_priced_order_is_left_alone():
     order = MagicMock(price=9.5, quantity=50)
-    s = _distance_strategy(threshold=10.0, distance=0.5, resting=[order])
+    s = _distance_strategy(threshold=10.0, distance=500, resting=[order])
     s._on_trade_tick(MagicMock(price=8.0))
     s.modify_open_order.assert_not_called()
     s.enter.assert_not_called()
+
+
+def test_nothing_rests_before_the_rolling_vwap_exists():
+    s = _distance_strategy(rolling_vwap=None)
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.enter.assert_not_called()
+    s.modify_open_order.assert_not_called()
+
+
+def test_the_distance_scales_with_the_rolling_vwap():
+    """The same bps rest twice as far away on a stock trading at twice the price."""
+    s = _distance_strategy(threshold=20.0, distance=500, rolling_vwap=20.0)
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.enter.assert_called_once_with(50, 19.0, cancel_after_secs=None)
 
 
 def test_zero_distance_rests_on_the_threshold():
@@ -749,10 +769,10 @@ def _config(**overrides):
         instrument_id=InstrumentId.from_str("AMZN.ALPACA"),
         trade_size=50,
         max_position_multiplier=1,
-        stop_loss=3.0,
-        take_profit=0.5,
+        stop_loss=120,
+        take_profit=20,
         entry_strategy=EntryStrategy.SIT_AT_DISTANCE,
-        entry_distance=0.5,
+        entry_distance=20,
         exit_strategy=ExitStrategy.SIT_ON_VWAP_BANDS,
     )
     return MomoStrategyConfig(**{**params, **overrides})
@@ -909,3 +929,41 @@ def test_the_flip_keeps_sparing_it_on_every_re_issue():
     for _ in range(5):
         s._flip_side_if_needed(_tick(101.0))
     s.cancel_open_order.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# stop_loss: basis points of the rolling VWAP
+# ---------------------------------------------------------------------------
+
+
+def _stop_strategy(stop_loss=120, rolling_vwap=250.0, take_profit=None):
+    s = MagicMock(spec=MomoStrategy)
+    s.stop_loss = stop_loss
+    s.take_profit = take_profit
+    s.rolling_vwap = MagicMock(value=rolling_vwap)
+    s._bps_of_rolling_vwap = MomoStrategy._bps_of_rolling_vwap.__get__(s, MomoStrategy)
+    s._stop_loss_distance = MomoStrategy._stop_loss_distance.__get__(s, MomoStrategy)
+    s._take_profit_distance = MomoStrategy._take_profit_distance.__get__(s, MomoStrategy)
+    return s
+
+
+def test_the_stop_distance_is_bps_of_the_rolling_vwap():
+    # 120 bps of 250 is 3.00, whatever price the fill came at
+    assert _stop_strategy(stop_loss=120, rolling_vwap=250.0)._stop_loss_distance(240.0) == pytest.approx(3.0)
+
+
+def test_the_stop_distance_falls_back_to_the_price_before_the_rolling_vwap_exists():
+    assert _stop_strategy(stop_loss=120, rolling_vwap=None)._stop_loss_distance(200.0) == pytest.approx(2.4)
+
+
+def test_no_take_profit_means_the_stop_distance():
+    assert _stop_strategy(stop_loss=120, take_profit=None)._take_profit_distance(240.0) == pytest.approx(3.0)
+
+
+def test_the_take_profit_distance_is_bps_of_the_rolling_vwap():
+    # 20 bps of 250 is 0.50, independent of the stop
+    assert _stop_strategy(stop_loss=120, take_profit=20)._take_profit_distance(240.0) == pytest.approx(0.5)
+
+
+def test_the_take_profit_distance_falls_back_to_the_price_before_the_rolling_vwap_exists():
+    assert _stop_strategy(take_profit=20, rolling_vwap=None)._take_profit_distance(200.0) == pytest.approx(0.4)

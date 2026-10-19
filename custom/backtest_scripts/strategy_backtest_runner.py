@@ -33,13 +33,15 @@ def run_single_backtest(
     allow_trading_times=None,
     log_level="ERROR",
     analyze=False,
+    bypass_logging=False,
+    raise_errors=False,
 ):
     start_time = pd.Timestamp.now()
     params_copy = params.copy()
     random_seed = params_copy.pop("random_seed", None)
     random.seed(random_seed)
 
-    engine = build_backtest_engine(artifacts_location, log_level)
+    engine = build_backtest_engine(artifacts_location, log_level, bypass_logging=bypass_logging)
     add_default_venue(engine, random_seed)
     test_instrument, engine = load_catalog_data_to_engine(engine, symbol, start_str, end_str, data_venue="ALPACA")
     register_custom_statistics(engine)
@@ -56,7 +58,9 @@ def run_single_backtest(
     strategy.internal_bars = True
     strategy.set_data_delay(default_secs=DATA_DELAY_SECS, windows=DATA_DELAY_WINDOWS)
 
-    performance_stats = run_strategy(strategy, engine, artifacts_location, run_config=config.dict())
+    performance_stats = run_strategy(
+        strategy, engine, artifacts_location, run_config=config.dict(), raise_errors=raise_errors
+    )
 
     save_backtest_order_updates(engine, artifacts_location)
 
@@ -156,8 +160,8 @@ if __name__ == "__main__":
             allow_trades=True,
             max_position_multiplier=1,
             trade_size=100,
-            stop_loss=2.0,
-            take_profit=0.6,
+            stop_loss=80,  # bps, ~$2.00 on AMZN
+            take_profit=24,  # bps, ~$0.60 on AMZN
             upper_scalar_multiplier=0.5,
             lower_scalar_multiplier=0.5,
             rolling_vwap_window=3000,
@@ -171,7 +175,7 @@ if __name__ == "__main__":
             exit_strategy=ExitStrategy.SIT_ON_ROLLING_VWAP,
             num_exit_tiers=2,
             entry_strategy=EntryStrategy.SIT_AT_DISTANCE,
-            entry_distance=0.6,
+            entry_distance=25,  # bps
             random_seed=1,
             start_trading_at="09:29:58",
             stop_entries_after="09:31",
@@ -192,7 +196,7 @@ if __name__ == "__main__":
     # )
 
     symbol = "AMZN"
-    day_str = "2026-05-01"
+    day_str = "2026-05-07"
     start_str = day_str + " " + "09:29-04:00"
     end_str__ = day_str + " " + "09:35-04:00"
     run_single_backtest(
