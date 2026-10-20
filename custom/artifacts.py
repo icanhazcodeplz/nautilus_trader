@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 import json
 import pickle
 from enum import StrEnum
@@ -30,7 +31,7 @@ def load_txt_file_to_dict(filename):
         return json.load(f)
 
 
-class ArtifactsIO:
+class _ArtifactsIO(ABC):
     def __init__(self, directory):
         self.directory = directory
         self._backtest = directory == BACKTEST_RUNS_PATH
@@ -216,24 +217,17 @@ class ArtifactsIO:
         durations_list = durations_df.reset_index(drop=True).to_dict(orient="records")
         return durations_list
 
+    @abstractmethod
+    def _get_fills_and_order_durations(self) -> tuple[list[dict], list[dict]]:
+        """Return (fill_events, order_durations_list) for this run"""
+
+
     def get_run_data(self):
-        orders_report = self.load_orders_report()
 
         if self._backtest:
-            order_events = self.load_backtest_order_updates_to_pkl()
-            fill_events = [self._parse_fill_event(event) for event in order_events if isinstance(event, OrderFilled)]
-            order_durations_list = self._order_events_to_order_durations(order_events)
-
+            fill_events, order_durations_list = self._get_fills_and_order_durations()
         else:
-            order_events = self.read_db_order_events()
-            fill_events = [
-                self._parse_fill_event(event)
-                for order in order_events.values()
-                for event in order.events
-                if isinstance(event, OrderFilled)
-            ]
-
-            order_durations_list = self._alpaca_order_durations_list(time_as_ns_int=True, as_list=True)
+            fill_events, order_durations_list = self._get_fills_and_order_durations()
 
         fills = sorted(fill_events, key=lambda e: e["ts_event"])
 
@@ -244,6 +238,8 @@ class ArtifactsIO:
             qty = fill["qty"] if fill["side"] == "buy" else -fill["qty"]
             position += qty
             positions.append({"time": fill["ts_event"], "position": position})
+
+        orders_report = self.load_orders_report()
 
         return orders_report, fills, positions, order_durations_list
 
@@ -394,6 +390,29 @@ class ArtifactsIO:
 
     def load_ticks_and_metrics_file(self):
         return self._load_pickle("ticks_and_metrics.pkl")
+
+
+class BacktestArtifactsIO(_ArtifactsIO):
+    def _get_fills_and_order_durations(self):
+        order_events = self.load_backtest_order_updates_to_pkl()
+        fill_events = [self._parse_fill_event(event) for event in order_events if isinstance(event, OrderFilled)]
+        order_durations_list = self._order_events_to_order_durations(order_events)
+        return fill_events, order_durations_list
+
+
+class LiveArtifactsIO(_ArtifactsIO):
+
+    def _get_fills_and_order_durations(self):
+        order_events = self.read_db_order_events()
+        fill_events = [
+            self._parse_fill_event(event)
+            for order in order_events.values()
+            for event in order.events
+            if isinstance(event, OrderFilled)
+        ]
+        order_durations_list = self._alpaca_order_durations_list(time_as_ns_int=True, as_list=True)
+        return fill_events, order_durations_list
+
 
 
 class Colors(StrEnum):

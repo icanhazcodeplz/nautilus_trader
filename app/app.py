@@ -9,8 +9,7 @@ from flask import jsonify
 from flask_cors import CORS
 from flask_restful import Api
 
-from custom.artifacts import BACKTEST_RUNS_PATH
-from custom.artifacts import ArtifactsIO
+from custom.artifacts import BACKTEST_RUNS_PATH, BacktestArtifactsIO, LiveArtifactsIO
 from custom.artifacts import CreateMarkers
 from custom.backtest_utils.backtest_run_utils import analyze_trades
 from custom.utils.orders_to_trades import orders_to_trades
@@ -21,11 +20,10 @@ app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, expose_headers=["Content-Range"])
 
 api = Api(app)
-artifacts_dir = data_subdir("runs", "20260313_144138")
-artifacts_dir = data_subdir("paper_runs", "20260921_092739")
-# artifacts_dir = BACKTEST_RUNS_PATH
+artifacts_io = LiveArtifactsIO(data_subdir("runs", "20261020_084759"))
+# artifacts_io = LiveArtifactsIO(data_subdir("paper_runs", "20260925_092608"))
+# artifacts_io = BacktestArtifactsIO(BACKTEST_RUNS_PATH)
 
-artifacts_io = ArtifactsIO(artifacts_dir)
 
 baby_blue = "#59e5ea"
 light_green = "#45d14c"
@@ -282,7 +280,7 @@ def get_data():
     )
     title_end_str = pd.Timestamp(int(ticks[-1]["time"]), unit="ns", tz="UTC").tz_convert("US/Eastern").strftime("%H:%M")
     title = (
-        f"{symbol} {title_start_str} to {title_end_str} {' - backtest' if artifacts_dir == BACKTEST_RUNS_PATH else ''}",
+        f"{symbol} {title_start_str} to {title_end_str} {' - backtest' if isinstance(artifacts_io, BacktestArtifactsIO) else ''}",
     )
     records = dict(
         title=title,

@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from custom.artifacts import ArtifactsIO
+from custom.artifacts import LiveArtifactsIO
 from custom.utils.paths import data_subdir
 
 MARKET_TZ = ZoneInfo("America/New_York")
@@ -72,7 +72,7 @@ def latest_paper_run() -> Path:
 
 def load_tick_latencies(run_dir: Path) -> pd.DataFrame:
     """Return one row per tick in the run's ticks_and_metrics.pkl, sorted by event time."""
-    data = ArtifactsIO(run_dir).load_ticks_and_metrics_file()
+    data = LiveArtifactsIO(run_dir).load_ticks_and_metrics_file()
     df = pd.DataFrame(
         [
             {"ts_event": v["ts_event"], "ts_init": v["ts_init"]}
@@ -119,7 +119,7 @@ def load_order_events(run_dir: Path) -> dict[str, list]:
     database, which is only readable while that database is up; if it isn't, this returns
     an empty dict.
     """
-    artifacts_io = ArtifactsIO(run_dir)
+    artifacts_io = LiveArtifactsIO(run_dir)
     events_by_order: dict[str, list] = {}
     if (run_dir / "order_updates.pkl").exists():
         for event in artifacts_io.load_backtest_order_updates_to_pkl():

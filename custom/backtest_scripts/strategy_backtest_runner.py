@@ -3,8 +3,7 @@ import random
 
 import pandas as pd
 
-from custom.artifacts import BACKTEST_RUNS_PATH
-from custom.artifacts import ArtifactsIO
+from custom.artifacts import BACKTEST_RUNS_PATH, LiveArtifactsIO
 from custom.backtest_scripts.backtest_config import DATA_DELAY_SECS
 from custom.backtest_scripts.backtest_config import DATA_DELAY_WINDOWS
 from custom.backtest_utils.backtest_run_utils import add_default_venue
@@ -18,7 +17,6 @@ from custom.backtest_utils.prepare_top_gainers import get_allow_trading_times_fo
 from custom.backtest_utils.prepare_top_gainers import parse_candidate_str
 from custom.strategies.momo import MomoStrategy, DirectionStrategy, DirectionThreshold, EntryStrategy, ExitStrategy
 from custom.strategies.momo import MomoStrategyConfig
-from custom.utils.paths import data_subdir
 from custom.utils.run_utils import run_strategy
 from nautilus_trader.adapters.alpaca.utils import ns_to_iso_8601
 
@@ -66,7 +64,7 @@ def run_single_backtest(
 
     if artifacts_location is not None and analyze:
         analyze_backtest()
-        print(f"\nTotal Runtime {pd.Timestamp.now() - start_time}")
+        print(f"Total Runtime {pd.Timestamp.now() - start_time}")
 
     engine.dispose()
     return performance_stats
@@ -120,7 +118,7 @@ def run_multiple_backtests(dataset_names, strategy_name, params, log_level="ERRO
 
 def replay_live_run(live_run_artifacts_dir, log_level="ERROR", random_seed=1):
     """Run a backtest with the same parameters as a live run."""
-    artifacts_io = ArtifactsIO(live_run_artifacts_dir)
+    artifacts_io = LiveArtifactsIO(live_run_artifacts_dir)
     config = artifacts_io.load_config()
     # Live configs carry no seed; without one the simulated venue's fills differ run to run
     config["random_seed"] = random_seed

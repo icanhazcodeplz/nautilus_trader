@@ -1,6 +1,6 @@
 import traceback
 
-from custom.artifacts import ArtifactsIO
+from custom.artifacts import LiveArtifactsIO, BacktestArtifactsIO
 from custom.utils.alpaca_trader_http_client import AlpacaTraderHelper
 from nautilus_trader.backtest.engine import BacktestEngine
 from nautilus_trader.live.node import TradingNode
@@ -21,13 +21,14 @@ def run_strategy(strategy, node_or_engine, artifacts_location=None, run_config=N
         symbol = strategy.config.instrument_id.symbol.value
         alpaca_helper = AlpacaTraderHelper(paper=paper)
         alpaca_helper.cancel_orders_and_flatten_position_with_retry(symbol)
-
-        strategy.initialize(artifacts_location=artifacts_location, trader_helper=alpaca_helper)
+        artifacts_io = LiveArtifactsIO(directory=artifacts_location) if artifacts_location is not None else None
+        strategy.initialize(artifacts_io=artifacts_io, trader_helper=alpaca_helper)
         node_or_engine.trader.add_strategy(strategy=strategy)
         node_or_engine.build()
         strategy._exec_engine = node_or_engine.kernel.exec_engine
     elif isinstance(node_or_engine, BacktestEngine):
-        strategy.initialize(artifacts_location=artifacts_location, trader_helper=None)
+        artifacts_io = BacktestArtifactsIO(directory=artifacts_location) if artifacts_location is not None else None
+        strategy.initialize(artifacts_io=artifacts_io, trader_helper=None)
         node_or_engine.add_strategy(strategy=strategy)
 
     try:
@@ -52,7 +53,6 @@ def run_strategy(strategy, node_or_engine, artifacts_location=None, run_config=N
             **node_or_engine.portfolio.analyzer.get_performance_stats_general(),
         }
         if artifacts_location is not None:
-            artifacts_io = ArtifactsIO(artifacts_location)
             artifacts_io.save_orders_report(orders_report)
             artifacts_io.save_performance_metrics(performance_stats)
             if run_config is not None:

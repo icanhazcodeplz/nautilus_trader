@@ -10,7 +10,6 @@ from typing import Optional
 import pandas as pd
 from pandas import Timestamp
 
-from custom.artifacts import ArtifactsIO
 from custom.strategies._open_order import OpenOrder, CLOSED_STATUS_LIST, FLATTEN_TAG
 from custom.strategies._side import Side  # noqa: F401  (re-exported: `from ...base import Side`)
 from custom.utils.alpaca_trader_http_client import AlpacaTraderHelper
@@ -131,11 +130,11 @@ class BaseStrategy(Strategy):
         self._tick_indicators: list[Indicator] = []  # Fed from the buffer while the delay is on
         self._feed_indicators_manually = False
 
-    def initialize(self, artifacts_location: Optional[Path], trader_helper: Optional[AlpacaTraderHelper] = None):
+    def initialize(self, artifacts_io: Optional[Path] = None, trader_helper: Optional[AlpacaTraderHelper] = None):
         self._initialized = True
         self._trader_helper = trader_helper
-        if artifacts_location is not None:
-            self._artifacts_io = ArtifactsIO(artifacts_location)
+        if artifacts_io is not None:
+            self._artifacts_io = artifacts_io
             self.save_artifacts = True
 
     def _add_tick_data(self, ts_event, data_dict: dict):

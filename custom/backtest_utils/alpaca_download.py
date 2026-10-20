@@ -5,7 +5,7 @@ from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockQuotesRequest
 from alpaca.data.requests import StockTradesRequest
 
-from custom.artifacts import ArtifactsIO
+from custom.artifacts import LiveArtifactsIO
 from custom.backtest_utils.load_catalog_data import BACKTESTING_CATALOG
 from custom.catalog_options import write_json_single_line_entries
 from custom.utils.paths import repo_path
@@ -208,7 +208,7 @@ def add_entry_to_catalog_options(key, symbol, data_start_dt, data_end_dt, notes=
 
 def download_matching_data_from_live_run(artifacts_dir):
     """ """
-    artifacts_io = ArtifactsIO(artifacts_dir)
+    artifacts_io = LiveArtifactsIO(artifacts_dir)
     ticks = artifacts_io.load_ticks_and_metrics_file()
     start = min(ticks.keys())
     symbol = artifacts_io.symbol
@@ -282,14 +282,18 @@ if __name__ == "__main__":
         pd.Timestamp("2026-11-26"),  # Thanksgiving
         pd.Timestamp("2026-12-25"),  # Christmas
     ]
-    trading_days = pd.bdate_range("2026-05-01", "2026-10-08", freq="C", holidays=nasdaq_holidays_2026)
+    trading_days = pd.bdate_range("2026-01-01", "2026-10-13", freq="C", holidays=nasdaq_holidays_2026)
 
-    symbol = "GOOG"
+    symbols = ["AMZN", "AAPL", "MSFT", "GOOG", "TSLA"]
+    symbols = ["GOOG"]
     # New York wall-clock window to download each day. `None` for either end means midnight.
     start_time = "00:00"
+    start_time = None
     end_time = "10:00"
-    for day in trading_days:
-        prepare_alpaca_data(symbol, day, force=True, start_time=start_time, end_time=end_time)
+    end_time = None
+    for symbol in symbols:
+        for day in trading_days:
+            prepare_alpaca_data(symbol, day, force=False, start_time=start_time, end_time=end_time)
 
     if False:
         end_dt_str = pd.Timestamp(start_dt_str) + pd.Timedelta(days=1)

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from custom.artifacts import ArtifactsIO, BACKTEST_RUNS_PATH
+from custom.artifacts import BACKTEST_RUNS_PATH, BacktestArtifactsIO
 from custom.backtest_utils.backtest_run_utils import (
     add_default_venue,
     analyze_backtest,
@@ -57,7 +57,7 @@ def run_single_news_backtest(
             **engine.portfolio.analyzer.get_performance_stats_general(),
         }
         if artifacts_location is not None:
-            artifacts_io = ArtifactsIO(artifacts_location)
+            artifacts_io = BacktestArtifactsIO(artifacts_location)
             artifacts_io.save_orders_report(orders_report)
             artifacts_io.save_performance_metrics(performance_stats)
             artifacts_io.save_config(
