@@ -26,14 +26,10 @@ class NewsStrategy(MomoStrategy):
         super().__init__(config)
         self.article_published_ns: int = 0  # Initialized in self.initialize
 
-    def initialize(
-        self,
-        article_published_ns: int,
-        artifacts_location: Optional[Path],
-        trader_helper: Optional[AlpacaTraderHelper] = None,
-    ):
-        super().initialize(artifacts_location=artifacts_location, trader_helper=trader_helper)
-        self.article_published_ns = article_published_ns
+    def initialize(self, artifacts_io: int = None, trader_helper: Optional[Path] = None):
+        # FIXME: Need to figure out artifacts_io
+        super().initialize(artifacts_io=artifacts_location, trader_helper=trader_helper)
+        self.article_published_ns = artifacts_io
 
     def _on_historical_ticks_loaded(self, request_id) -> None:
         super()._on_historical_ticks_loaded(request_id)

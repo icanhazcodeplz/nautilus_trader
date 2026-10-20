@@ -100,7 +100,8 @@ class NewsManager(_NewsManagerBase):
 
     def _initialize_and_start_strategy(self, strategy, article_published_ns:int) -> NewsStrategy:
         helper = AlpacaTraderHelper(paper=self.config.paper)
-        strategy.initialize(article_published_ns=article_published_ns, artifacts_location=None, trader_helper=helper)
+        # FIXME: Figure out artifacts_io
+        strategy.initialize(artifacts_io=None, trader_helper=helper)
         self.create_strategy(strategy, start=True)
 
         raise RuntimeError("need to figure out artifacts location")
@@ -170,7 +171,8 @@ class NewsManagerBacktest(_NewsManagerBase):
         self._events_by_alert: dict[str, dict] = {}
 
     def _initialize_and_start_strategy(self, strategy, article_published_ns:int) -> NewsStrategy:
-        strategy.initialize(article_published_ns=article_published_ns, artifacts_location=BACKTEST_RUNS_PATH, trader_helper=None)
+        # FIXME: Figure out artifacts_io
+        strategy.initialize(artifacts_io=BACKTEST_RUNS_PATH, trader_helper=None)
         # Trader.add_strategy creates a fresh clock at epoch 0; sync it before on_start()
         # runs, otherwise timers registered there will fire ~56 years of missed events
         # the next time the simulator advances this strategy's clock.

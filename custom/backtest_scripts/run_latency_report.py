@@ -115,23 +115,17 @@ def load_order_events(run_dir: Path) -> dict[str, list]:
     """
     Return the run's order events grouped by client order id and sorted by ts_init.
 
-    Backtests save them to order_updates.pkl. Live and paper runs keep them in the cache
-    database, which is only readable while that database is up; if it isn't, this returns
-    an empty dict.
     """
     artifacts_io = LiveArtifactsIO(run_dir)
     events_by_order: dict[str, list] = {}
-    if (run_dir / "order_updates.pkl").exists():
-        for event in artifacts_io.load_backtest_order_updates_to_pkl():
-            events_by_order.setdefault(event.client_order_id.value, []).append(event)
-    else:
-        try:
-            orders = artifacts_io.read_db_order_events()
-        except Exception as e:
-            print(f"Order events unavailable (cache database not readable: {e})")
-            return {}
-        for order in orders.values():
-            events_by_order[order.client_order_id.value] = list(order.events)
+
+    try:
+        orders = artifacts_io.load_order_updates()
+    except Exception as e:
+        print(f"Order events unavailable (cache database not readable: {e})")
+        return {}
+    for order in orders.values():
+        events_by_order[order.client_order_id.value] = list(order.events)
     return {cid: sorted(events, key=lambda e: e.ts_init) for cid, events in events_by_order.items()}
 
 

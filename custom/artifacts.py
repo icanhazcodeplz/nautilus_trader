@@ -92,21 +92,95 @@ class _ArtifactsIO(ABC):
             "client_order_id": str(fill_event.client_order_id),
         }
 
-    def read_db_order_events(self):
-        database = CacheDatabaseAdapter(
-            trader_id=TraderId(f"T-{self._run_dt_str}"),  # must match what the run used
-            instance_id=UUID4(),
-            serializer=MsgSpecSerializer(
-                encoding=msgspec.msgpack,
-                timestamps_as_str=True,
-            ),
-            config=CacheConfig(database=DatabaseConfig()),
-        )
-        return database.load_orders()
+    @abstractmethod
+    def _get_fills_and_order_durations(self) -> tuple[list[dict], list[dict]]:
+        """Return (fill_events, order_durations_list) for this run"""
+
+    @abstractmethod
+    def _load_order_udpates(self):
+        """Load order updates"""
+
+    def load_order_updates(self):
+        return self._load_order_udpates()
+
+    def get_run_data(self):
+
+        if self._backtest:
+            fill_events, order_durations_list = self._get_fills_and_order_durations()
+        else:
+            fill_events, order_durations_list = self._get_fills_and_order_durations()
+
+        fills = sorted(fill_events, key=lambda e: e["ts_event"])
+
+        # Use fill events to create a list of (time, position) dicts
+        position = 0
+        positions = []
+        for fill in fills:
+            qty = fill["qty"] if fill["side"] == "buy" else -fill["qty"]
+            position += qty
+            positions.append({"time": fill["ts_event"], "position": position})
+
+        orders_report = self.load_orders_report()
+
+        return orders_report, fills, positions, order_durations_list
+
+    def save_performance_metrics(self, performance_metrics):
+        dict_to_file(performance_metrics, self.directory / "performance_metrics.json")
+
+    def load_performance_metrics(self):
+        return load_txt_file_to_dict(self.directory / "performance_metrics.json")
+
+    def save_orders_report(self, orders_report_df: pd.DataFrame):
+        self._save_pickle(orders_report_df, "orders_report.pkl")
+
+    def load_orders_report(self, process=False):
+        # TODO: Create orders_report from individual order events
+        df = self._load_pickle("orders_report.pkl")
+        if process:
+            cols = [
+                "venue_order_id",
+                "side",
+                "ts_init",
+                "ts_last",
+                "quantity",
+                "price",
+                "filled_qty",
+                "avg_px",
+                "status",
+                "tags",
+                "init_id",
+            ]
+            df = df[cols]
+            for col in ["ts_init", "ts_last"]:
+                df[col] = pd.to_datetime(df[col]).dt.tz_localize("UTC").dt.tz_convert("US/Eastern")
+
+        return df
+
+    def save_ticks_and_metrics(self, metrics):
+        self._save_pickle(metrics, "ticks_and_metrics.pkl")
+
+    def load_ticks_and_metrics_file(self):
+        return self._load_pickle("ticks_and_metrics.pkl")
+
+
+class BacktestArtifactsIO(_ArtifactsIO):
+    def _load_order_udpates(self):
+        """Load order updates"""
+        return self._load_pickle("order_updates.pkl")
+
+    def save_backtest_order_updates_to_pkl(self, fills_list: list[OrderEvent]):
+        self._save_pickle(fills_list, "order_updates.pkl")
+
+    def _get_fills_and_order_durations(self):
+        order_events = self.load_order_updates()
+        fill_events = [self._parse_fill_event(event) for event in order_events if isinstance(event, OrderFilled)]
+        order_durations_list = self._order_events_to_order_durations(order_events)
+        return fill_events, order_durations_list
 
     def _order_events_to_order_durations(self, order_events):
         if len(order_events) == 0:
             return []
+
         def parse_order_event_dict(o_dict):
             options = o_dict.get("options")
             if options is not None:
@@ -217,43 +291,30 @@ class _ArtifactsIO(ABC):
         durations_list = durations_df.reset_index(drop=True).to_dict(orient="records")
         return durations_list
 
-    @abstractmethod
-    def _get_fills_and_order_durations(self) -> tuple[list[dict], list[dict]]:
-        """Return (fill_events, order_durations_list) for this run"""
 
+class LiveArtifactsIO(_ArtifactsIO):
+    def _load_order_udpates(self):
+        database = CacheDatabaseAdapter(
+            trader_id=TraderId(f"T-{self._run_dt_str}"),  # must match what the run used
+            instance_id=UUID4(),
+            serializer=MsgSpecSerializer(
+                encoding=msgspec.msgpack,
+                timestamps_as_str=True,
+            ),
+            config=CacheConfig(database=DatabaseConfig()),
+        )
+        return database.load_orders()
 
-    def get_run_data(self):
-
-        if self._backtest:
-            fill_events, order_durations_list = self._get_fills_and_order_durations()
-        else:
-            fill_events, order_durations_list = self._get_fills_and_order_durations()
-
-        fills = sorted(fill_events, key=lambda e: e["ts_event"])
-
-        # Use fill events to create a list of (time, position) dicts
-        position = 0
-        positions = []
-        for fill in fills:
-            qty = fill["qty"] if fill["side"] == "buy" else -fill["qty"]
-            position += qty
-            positions.append({"time": fill["ts_event"], "position": position})
-
-        orders_report = self.load_orders_report()
-
-        return orders_report, fills, positions, order_durations_list
-
-    def save_backtest_order_updates_to_pkl(self, fills_list: list[OrderEvent]):
-        self._save_pickle(fills_list, "order_updates.pkl")
-
-    def load_backtest_order_updates_to_pkl(self):
-        return self._load_pickle("order_updates.pkl")
-
-    def save_performance_metrics(self, performance_metrics):
-        dict_to_file(performance_metrics, self.directory / "performance_metrics.json")
-
-    def load_performance_metrics(self):
-        return load_txt_file_to_dict(self.directory / "performance_metrics.json")
+    def _get_fills_and_order_durations(self):
+        order_events = self.load_order_updates()
+        fill_events = [
+            self._parse_fill_event(event)
+            for order in order_events.values()
+            for event in order.events
+            if isinstance(event, OrderFilled)
+        ]
+        order_durations_list = self._alpaca_order_durations_list(time_as_ns_int=True, as_list=True)
+        return fill_events, order_durations_list
 
     def load_alpaca_trade_updates(self):
         txt = load_txt_file_to_dict(self.directory / "alpaca_trade_updates.json")
@@ -334,8 +395,7 @@ class _ArtifactsIO(ABC):
                 order_qty = last_event["qty"]
             else:
                 raise ValueError(
-                    f"Unknown last order event: {last_event_name} "
-                    f"(order {first_event_ser['client_order_id']})"
+                    f"Unknown last order event: {last_event_name} (order {first_event_ser['client_order_id']})"
                 )
 
             return pd.Series(dict(side=side, price=price, qty=int(order_qty), start_time=start_time, end_time=end_time))
@@ -348,7 +408,9 @@ class _ArtifactsIO(ABC):
             # Convert "start_time" and "end_time" columns into ns since epoch
             for col in ["start_time", "end_time"]:
                 # pandas infers the unit from the strings' precision (ms strings → us), so pin ns
-                order_duration_df[col] = pd.to_datetime(order_duration_df[col], format="ISO8601").dt.as_unit("ns").astype("int64")
+                order_duration_df[col] = (
+                    pd.to_datetime(order_duration_df[col], format="ISO8601").dt.as_unit("ns").astype("int64")
+                )
 
             # If end_time equals start_time, add one nanosecond to end_time so that the plotting
             # tools don't break
@@ -358,61 +420,6 @@ class _ArtifactsIO(ABC):
         if as_list:
             return order_duration_df.reset_index(drop=True).to_dict(orient="records")
         return order_duration_df.sort_values("start_time")
-
-    def save_orders_report(self, orders_report_df: pd.DataFrame):
-        self._save_pickle(orders_report_df, "orders_report.pkl")
-
-    def load_orders_report(self, process=False):
-        # TODO: Create orders_report from individual order events
-        df = self._load_pickle("orders_report.pkl")
-        if process:
-            cols = [
-                "venue_order_id",
-                "side",
-                "ts_init",
-                "ts_last",
-                "quantity",
-                "price",
-                "filled_qty",
-                "avg_px",
-                "status",
-                "tags",
-                "init_id",
-            ]
-            df = df[cols]
-            for col in ["ts_init", "ts_last"]:
-                df[col] = pd.to_datetime(df[col]).dt.tz_localize("UTC").dt.tz_convert("US/Eastern")
-
-        return df
-
-    def save_ticks_and_metrics(self, metrics):
-        self._save_pickle(metrics, "ticks_and_metrics.pkl")
-
-    def load_ticks_and_metrics_file(self):
-        return self._load_pickle("ticks_and_metrics.pkl")
-
-
-class BacktestArtifactsIO(_ArtifactsIO):
-    def _get_fills_and_order_durations(self):
-        order_events = self.load_backtest_order_updates_to_pkl()
-        fill_events = [self._parse_fill_event(event) for event in order_events if isinstance(event, OrderFilled)]
-        order_durations_list = self._order_events_to_order_durations(order_events)
-        return fill_events, order_durations_list
-
-
-class LiveArtifactsIO(_ArtifactsIO):
-
-    def _get_fills_and_order_durations(self):
-        order_events = self.read_db_order_events()
-        fill_events = [
-            self._parse_fill_event(event)
-            for order in order_events.values()
-            for event in order.events
-            if isinstance(event, OrderFilled)
-        ]
-        order_durations_list = self._alpaca_order_durations_list(time_as_ns_int=True, as_list=True)
-        return fill_events, order_durations_list
-
 
 
 class Colors(StrEnum):
