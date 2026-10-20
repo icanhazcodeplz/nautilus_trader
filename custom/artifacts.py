@@ -34,7 +34,6 @@ def load_txt_file_to_dict(filename):
 class _ArtifactsIO(ABC):
     def __init__(self, directory):
         self.directory = directory
-        self._backtest = directory == BACKTEST_RUNS_PATH
         self._run_dt_str = str(directory).split("/")[-1]  # TODO: Sloppy. Should pass this in as arg
 
     def _save_pickle(self, data, filename):
@@ -104,12 +103,7 @@ class _ArtifactsIO(ABC):
         return self._load_order_udpates()
 
     def get_run_data(self):
-
-        if self._backtest:
-            fill_events, order_durations_list = self._get_fills_and_order_durations()
-        else:
-            fill_events, order_durations_list = self._get_fills_and_order_durations()
-
+        fill_events, order_durations_list = self._get_fills_and_order_durations()
         fills = sorted(fill_events, key=lambda e: e["ts_event"])
 
         # Use fill events to create a list of (time, position) dicts

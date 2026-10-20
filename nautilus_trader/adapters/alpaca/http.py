@@ -11,7 +11,7 @@ import pandas as pd
 
 from nautilus_trader.common.component import Logger
 
-from custom.utils.paths import run_artifacts_subdir
+from custom.utils.paths import current_live_run_artifacts_dir
 from nautilus_trader.adapters.alpaca.utils import get_alpaca_key_and_secret
 
 
@@ -40,7 +40,7 @@ class AlpacaHttpClient:
         self._session: aiohttp.ClientSession | None = None
         self.record_orders = record_orders
         if record_orders:
-            self._orders_file_buffer = open(run_artifacts_subdir("order_submissions.json"), "w")
+            self._orders_file_buffer = open(current_live_run_artifacts_dir("order_submissions.json"), "w")
 
         # Rate limiting: track request timestamps in a sliding window
         self._rate_limit = rate_limit
@@ -353,7 +353,7 @@ class AlpacaHttpClient:
     def _record_order(self, order_type: str, submit_dt, order_params: dict[str, Any]) -> None:
         if self.record_orders:
             full_order = {"type": order_type, "submit_dt": str(submit_dt), **order_params}
-            with open(run_artifacts_subdir("order_submissions.json"), "a") as f:
+            with open(current_live_run_artifacts_dir("order_submissions.json"), "a") as f:
                 f.write(f"{json.dumps(full_order)}\n")
 
     async def submit_order(self, order_request: dict[str, Any]) -> dict[str, Any]:

@@ -20,10 +20,16 @@ def data_subdir(*dirs):
     return repo_path("data", *dirs)
 
 
-DT_STR = datetime.datetime.now(ZoneInfo("America/New_York")).strftime("%Y%m%d_%H%M%S")
+def live_run_artifacts_dir(*dirs, paper=True):
+    if paper:
+        return data_subdir("paper_runs", *dirs)
+    return data_subdir("runs", *dirs)
 
 
-def run_artifacts_subdir(*dirs):
-    if ENV.PAPER:
-        return data_subdir("paper_runs", DT_STR, *dirs)
-    return data_subdir("runs", DT_STR, *dirs)
+RUN_START_TIME_AS_STR = datetime.datetime.now(ZoneInfo("America/New_York")).strftime("%Y%m%d_%H%M%S")
+
+def current_live_run_artifacts_dir(*dirs):
+    return live_run_artifacts_dir(*dirs, paper=ENV.PAPER)
+
+
+

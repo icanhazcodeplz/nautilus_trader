@@ -17,37 +17,21 @@
 
 from __future__ import annotations
 
-import uuid
-from decimal import Decimal
-from typing import Any
 
-from custom.utils.paths import DT_STR
+from custom.utils.paths import RUN_START_TIME_AS_STR
 from nautilus_trader.adapters.alpaca.enums import AlpacaOrderStatus
 from nautilus_trader.adapters.alpaca.enums import AlpacaOrderType
 from nautilus_trader.adapters.alpaca.enums import AlpacaTimeInForce
-from nautilus_trader.core.uuid import UUID4
 
-from nautilus_trader.adapters.alpaca.utils import alpaca_date_str_to_nanos
-from nautilus_trader.execution.reports import FillReport
-from nautilus_trader.execution.reports import OrderStatusReport
-from nautilus_trader.model.enums import LiquiditySide
 from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.enums import OrderStatus
 from nautilus_trader.model.enums import OrderType
 from nautilus_trader.model.enums import TimeInForce
-from nautilus_trader.model.identifiers import AccountId
-from nautilus_trader.model.identifiers import ClientOrderId
-from nautilus_trader.model.identifiers import InstrumentId
-from nautilus_trader.model.identifiers import TradeId
-from nautilus_trader.model.identifiers import VenueOrderId
-from nautilus_trader.model.objects import Money
-from nautilus_trader.model.objects import Price
-from nautilus_trader.model.objects import Quantity
 
 
 def client_id_is_real(client_order_id: str) -> bool:
     # FIXME: This requires that DT_STR is part of the trader_id in TradingNodeConfig()
-    return DT_STR in str(client_order_id)
+    return RUN_START_TIME_AS_STR in str(client_order_id)
 
 
 class AlpacaEnumParser:

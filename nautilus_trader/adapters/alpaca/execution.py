@@ -25,7 +25,7 @@ import pandas as pd
 
 from nautilus_trader.model.orders import StopLimitOrder
 
-from custom.utils.paths import run_artifacts_subdir
+from custom.utils.paths import current_live_run_artifacts_dir
 from nautilus_trader.adapters.alpaca.http import AlpacaHttpClient
 from nautilus_trader.adapters.alpaca.constants import ALPACA_VENUE
 from nautilus_trader.adapters.alpaca.utils import alpaca_date_str_to_nanos, ns_to_iso_8601, dt_to_iso_8601
@@ -205,7 +205,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
 
         # Setup output directory and file for trade updates
         # TODO: Pull trade_updates from the logs instead to reduce overhead?
-        self._trade_updates_output_file_path = run_artifacts_subdir("alpaca_trade_updates.json")
+        self._trade_updates_output_file_path = current_live_run_artifacts_dir("alpaca_trade_updates.json")
         self._trade_updates_data = []
 
         # Keep track of the associated client_order_id with the venue_order_id as orders are replaced/modified

@@ -7,7 +7,7 @@ from custom.strategies.momo import EntryStrategy
 from custom.strategies.momo import ExitStrategy
 from custom.strategies.momo import MomoStrategy
 from custom.strategies.momo import MomoStrategyConfig
-from custom.utils.paths import run_artifacts_subdir, DT_STR
+from custom.utils.paths import current_live_run_artifacts_dir, RUN_START_TIME_AS_STR
 from custom.utils.run_utils import run_strategy
 from nautilus_trader import ENV
 from nautilus_trader.adapters.alpaca import ALPACA, AlpacaExecClientConfig, AlpacaDataClientConfig
@@ -34,9 +34,9 @@ log_level = "INFO"
 # log_level = "DEBUG"
 file_log_level = "DEBUG"
 
-artifacts_directory = run_artifacts_subdir()
+artifacts_directory = current_live_run_artifacts_dir()
 config_node = TradingNodeConfig(
-    trader_id=TraderId(f"T-{DT_STR}"),  # FIXME: DO NOT REMOVE DT_STR, Is there a more robust way?
+    trader_id=TraderId(f"T-{RUN_START_TIME_AS_STR}"),  # FIXME: DO NOT REMOVE DT_STR, Is there a more robust way?
     logging=LoggingConfig(
         log_level=log_level,
         log_level_file=file_log_level,
