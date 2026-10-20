@@ -3,6 +3,7 @@ from functools import lru_cache
 import pandas as pd
 
 from custom.nt_extensions.tbbo_data import TBBOData
+from custom.strategies.base import ET_TZ
 
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
 from nautilus_trader.model.data import QuoteTick, TradeTick
@@ -12,6 +13,11 @@ from nautilus_trader.persistence.catalog import ParquetDataCatalog
 CATALOG_PATH = PACKAGE_ROOT / "catalog"
 BACKTESTING_CATALOG = ParquetDataCatalog(CATALOG_PATH)
 CATALOG_TIME_STR_FMT = "%Y-%m-%d %H:%M:%S%z"
+
+
+def et_to_utc_str(day_str, time_str):
+    """Return New York wall-clock `time_str` on `day_str` as a UTC "YYYY-MM-DD HH:MM:SS+0000" string."""
+    return pd.Timestamp(f"{day_str} {time_str}").tz_localize(ET_TZ).tz_convert("UTC").strftime(CATALOG_TIME_STR_FMT)
 
 
 @lru_cache(maxsize=10)

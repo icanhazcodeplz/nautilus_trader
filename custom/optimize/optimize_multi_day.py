@@ -37,12 +37,11 @@ import pandas as pd
 
 from custom.backtest_scripts.strategy_backtest_runner import run_single_backtest
 from custom.backtest_utils.load_catalog_data import BACKTESTING_CATALOG
-from custom.backtest_utils.load_catalog_data import CATALOG_TIME_STR_FMT
 from custom.backtest_utils.load_catalog_data import catalog_days_available
+from custom.backtest_utils.load_catalog_data import et_to_utc_str
 from custom.backtest_utils.load_catalog_data import get_catalog_data
 from custom.optimize import study_store
 from custom.optimize.study_store import HASH_DISPLAY_LEN
-from custom.strategies.base import ET_TZ
 from custom.strategies.momo import DirectionStrategy
 from custom.strategies.momo import DirectionThreshold
 from custom.strategies.momo import EntryStrategy
@@ -64,11 +63,6 @@ WORKER_HASH_SEED = "0"
 N_BOOTSTRAP = 2000
 
 
-def et_time_str(day_str, time_str):
-    """Return "YYYY-MM-DD HH:MM:SS+zzzz" for New York wall-clock `time_str` on `day_str`, with that day's offset."""
-    return pd.Timestamp(f"{day_str} {time_str}").tz_localize(ET_TZ).strftime(CATALOG_TIME_STR_FMT)
-
-
 def run_day(task):
     """
     Backtest one param set on one day. Top-level so a spawned worker can import it.
@@ -80,8 +74,8 @@ def run_day(task):
     p_hash, symbol, day_str, start_time, end_time, params = task
     stats = run_single_backtest(
         symbol,
-        et_time_str(day_str, start_time),
-        et_time_str(day_str, end_time),
+        et_to_utc_str(day_str, start_time),
+        et_to_utc_str(day_str, end_time),
         "momo",
         params,
         artifacts_location=None,
@@ -369,7 +363,7 @@ if __name__ == "__main__":
 
     SYMBOL = "AMZN"
     # Backtest window applied to every day, as New York wall-clock "HH:MM:SS". Each day's UTC
-    # offset (EST or EDT) is worked out in `et_time_str`.
+    # offset (EST or EDT) is worked out in `et_to_utc_str`.
     START_TIME = "09:29:00"
     END_TIME = "09:41:00"
     # Momo params. A list is swept by the grid; anything else is fixed. A study's hash covers all

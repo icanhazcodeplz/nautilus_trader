@@ -12,6 +12,7 @@ from custom.backtest_utils.backtest_run_utils import build_backtest_engine
 from custom.backtest_utils.backtest_run_utils import register_custom_statistics
 from custom.backtest_utils.backtest_run_utils import save_backtest_order_updates
 from custom.backtest_utils.load_catalog_data import CATALOG_TIME_STR_FMT
+from custom.backtest_utils.load_catalog_data import et_to_utc_str
 from custom.backtest_utils.load_catalog_data import load_catalog_data_to_engine
 from custom.backtest_utils.prepare_top_gainers import get_allow_trading_times_for_candidate
 from custom.backtest_utils.prepare_top_gainers import parse_candidate_str
@@ -195,12 +196,12 @@ if __name__ == "__main__":
 
     symbol = "AMZN"
     day_str = "2026-05-07"
-    start_str = day_str + " " + "09:29-04:00"
-    end_str__ = day_str + " " + "09:35-04:00"
+    start_str = et_to_utc_str(day_str, "09:29")
+    end_str = et_to_utc_str(day_str, "09:35")
     run_single_backtest(
         symbol,
         start_str,
-        end_str__,
+        end_str,
         strategy_name,
         params,
         allow_trading_times=None,
