@@ -13,16 +13,16 @@ from custom.artifacts import BACKTEST_RUNS_PATH, BacktestArtifactsIO, LiveArtifa
 from custom.artifacts import CreateMarkers
 from custom.backtest_utils.backtest_run_utils import analyze_trades
 from custom.utils.orders_to_trades import orders_to_trades
-from custom.utils.paths import data_subdir
-
+from custom.utils.paths import live_run_artifacts_dir
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, expose_headers=["Content-Range"])
 
 api = Api(app)
-artifacts_io = LiveArtifactsIO(data_subdir("runs", "20261020_084759"))
+paper=False
+artifacts_io = BacktestArtifactsIO(BACKTEST_RUNS_PATH)
+artifacts_io = LiveArtifactsIO(live_run_artifacts_dir("20261021_091129", paper=paper))
 # artifacts_io = LiveArtifactsIO(data_subdir("paper_runs", "20260925_092608"))
-# artifacts_io = BacktestArtifactsIO(BACKTEST_RUNS_PATH)
 
 
 baby_blue = "#59e5ea"

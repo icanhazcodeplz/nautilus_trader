@@ -13,6 +13,8 @@ from unittest.mock import MagicMock
 
 from custom.strategies._open_order import OpenOrder
 from custom.strategies.base import BaseStrategy, Side
+from nautilus_trader.common.component import LiveClock
+from nautilus_trader.common.component import TestClock
 from nautilus_trader.model import Price, Quantity
 from nautilus_trader.model.enums import OrderStatus
 
@@ -41,9 +43,10 @@ class _ModifyHarness(BaseStrategy):
     away and so cannot exercise.
     """
 
-    def __init__(self):
+    def __init__(self, clock_cls=TestClock):
         self._log_mock = MagicMock()
-        self._clock_mock = MagicMock()
+        # The clock's class is what `is_backtest` reads: TestClock in a backtest, LiveClock live
+        self._clock_mock = MagicMock(spec=clock_cls)
         self._clock_mock.timestamp_ns.return_value = FAR_FUTURE_NS
         self.instrument = MagicMock()
         self.instrument.make_qty.side_effect = lambda q: Quantity.from_int(int(q))
@@ -165,3 +168,30 @@ def test_a_modify_rejected_in_a_backtest_does_not_try_to_reconcile():
 
     assert strategy._force_reconcile_count == 0
     assert strategy._reconciliation_task is None
+    assert not any("without an exec engine" in c.args[0] for c in strategy.log.error.call_args_list)
+
+
+def test_a_live_run_without_an_exec_engine_logs_instead_of_skipping_reconciliation_silently():
+    """
+    A strategy started by something other than run_utils.run_strategy (e.g. StrategyManager's
+    create_strategy) never gets `_exec_engine`. That used to read as "backtest" and skip
+    reconciliation without a word.
+    """
+    from nautilus_trader.model.events import OrderModifyRejected
+
+    strategy = _ModifyHarness(clock_cls=LiveClock)
+    strategy._side = Side.LONG
+    strategy._buy_orders = set()
+    strategy._sell_orders = set()
+    strategy._exec_engine = None
+    strategy._reconciliation_task = None
+    strategy._last_force_reconcile_ns = 0
+    strategy._force_reconcile_count = 0
+    event = MagicMock(spec=OrderModifyRejected)
+    event.client_order_id = "O-1"
+    event.reason = "ClientOrderId('O-1') not found"
+
+    strategy.on_order_event(event)
+
+    assert strategy._force_reconcile_count == 0
+    assert any("without an exec engine" in c.args[0] for c in strategy.log.error.call_args_list)

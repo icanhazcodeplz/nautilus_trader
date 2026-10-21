@@ -5,6 +5,8 @@ from zoneinfo import ZoneInfo
 from nautilus_trader import PACKAGE_ROOT, ENV
 
 
+BACKTEST_DIR_DATE_FORMAT = "%Y%m%d-%H%M"
+
 def repo_path(*dirs):
     directory = Path(PACKAGE_ROOT)
     for dir in dirs:
@@ -29,7 +31,11 @@ def live_run_artifacts_dir(*dirs, paper=True):
 RUN_START_TIME_AS_STR = datetime.datetime.now(ZoneInfo("America/New_York")).strftime("%Y%m%d_%H%M%S")
 
 def current_live_run_artifacts_dir(*dirs):
-    return live_run_artifacts_dir(*dirs, paper=ENV.PAPER)
+    return live_run_artifacts_dir(*(RUN_START_TIME_AS_STR, *dirs), paper=ENV.PAPER)
 
 
-
+def backtest_dir(start_str_est, end_str_est):
+    """Return "YYYYMMDD-HHMM_YYYYMMDD-HHMM" for a New York wall-clock "YYYY-MM-DD HH:MM[:SS]" window."""
+    start_str = datetime.datetime.fromisoformat(start_str_est).strftime(BACKTEST_DIR_DATE_FORMAT)
+    end_str = datetime.datetime.fromisoformat(end_str_est).strftime(BACKTEST_DIR_DATE_FORMAT)
+    return data_subdir("backtest_runs", f"{start_str}_{end_str}")

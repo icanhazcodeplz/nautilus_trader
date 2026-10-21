@@ -15,9 +15,18 @@ BACKTESTING_CATALOG = ParquetDataCatalog(CATALOG_PATH)
 CATALOG_TIME_STR_FMT = "%Y-%m-%d %H:%M:%S%z"
 
 
-def et_to_utc_str(day_str, time_str):
-    """Return New York wall-clock `time_str` on `day_str` as a UTC "YYYY-MM-DD HH:MM:SS+0000" string."""
-    return pd.Timestamp(f"{day_str} {time_str}").tz_localize(ET_TZ).tz_convert("UTC").strftime(CATALOG_TIME_STR_FMT)
+# New York wall clock with no offset, the form run_single_backtest takes its window in
+ET_TIME_STR_FMT = "%Y-%m-%d %H:%M:%S"
+
+
+def et_to_utc_str(et_str):
+    """Return New York wall-clock "YYYY-MM-DD HH:MM[:SS]" `et_str` as a UTC "YYYY-MM-DD HH:MM:SS+0000" string."""
+    return pd.Timestamp(et_str).tz_localize(ET_TZ).tz_convert("UTC").strftime(CATALOG_TIME_STR_FMT)
+
+
+def to_et_str(ts):
+    """Return tz-aware `ts` as a New York wall-clock "YYYY-MM-DD HH:MM:SS" string."""
+    return ts.tz_convert(ET_TZ).strftime(ET_TIME_STR_FMT)
 
 
 @lru_cache(maxsize=10)

@@ -15,6 +15,7 @@ from custom.strategies._side import Side  # noqa: F401  (re-exported: `from ...b
 from custom.utils.alpaca_trader_http_client import AlpacaTraderHelper
 from custom.utils.precision_utils import make_Price
 from nautilus_trader.adapters.alpaca.execution import MODIFY_HELD_PENDING_NEW_REASON
+from nautilus_trader.common.component import TestClock
 from nautilus_trader.common.component import TimeEvent
 
 from nautilus_trader.common.enums import LogColor
@@ -112,7 +113,7 @@ class BaseStrategy(Strategy):
         self._flipping = False  # Waiting to go flat so set_side() can switch.
         self._last_stop_out_attempt = 0
         self._entries_blocked_until_ns = 0  # Set by _stop_out_if_needed; see _in_stop_out_cooldown
-        self._exec_engine = None  # Set by run_utils after node.build()
+        self._exec_engine = None  # Set by run_utils after node.build(); None in a backtest
         self._force_reconcile_count = 0
         self._last_force_reconcile_ns = 0
         self._last_wrong_way_flatten_ns = 0
@@ -153,6 +154,10 @@ class BaseStrategy(Strategy):
     @property
     def trading_enabled(self):
         return self._trading_enabled
+
+    @property
+    def is_backtest(self) -> bool:
+        return isinstance(self.clock, TestClock)
 
     # SIDE ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -481,6 +486,10 @@ class BaseStrategy(Strategy):
             self._tick_event_dt_adjusted += 1
         else:
             self._tick_event_dt_adjusted = tick.ts_event
+
+        # FIXME: BRENT add this back in after refactoring folder structure
+        # tick_data = {}
+        # if not self.is_backtest:
         tick_data = {
             "price": float(tick.price),
             "size": int(tick.size),
@@ -492,7 +501,8 @@ class BaseStrategy(Strategy):
         }
         for metric in self.metrics_to_save_on_tick:
             tick_data = {**tick_data, **metric.get_vals()}
-        self._add_tick_data(self._tick_event_dt_adjusted, tick_data)
+        if tick_data:
+            self._add_tick_data(self._tick_event_dt_adjusted, tick_data)
 
     # DATA DELAY BUFFER ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -556,9 +566,7 @@ class BaseStrategy(Strategy):
         if not self._tick_delay_windows:
             return self._tick_delay_default_ns
 
-        if self._window_bounds_day is None or not (
-            self._window_bounds_day[0] <= ts_event < self._window_bounds_day[1]
-        ):
+        if self._window_bounds_day is None or not (self._window_bounds_day[0] <= ts_event < self._window_bounds_day[1]):
             self._build_window_bounds(ts_event)
 
         for start_ns, stop_ns, delay_ns in self._window_bounds:
@@ -578,6 +586,7 @@ class BaseStrategy(Strategy):
         # 26h clears the next midnight whether the day is 23, 24 or 25 hours long (DST).
         next_day = (day + pd.Timedelta(hours=26)).normalize()
         self._window_bounds_day = (day.value, next_day.value)
+
         def at(t: time) -> int:
             offset = pd.Timedelta(hours=t.hour, minutes=t.minute, seconds=t.second, microseconds=t.microsecond)
             return (day + offset).value
@@ -886,9 +895,8 @@ class BaseStrategy(Strategy):
 
     def _trigger_nt_reconciliation(self):
         """Trigger an async force-reconciliation via the execution engine to re-sync cache with broker."""
-        if self._exec_engine is None:
-            # Backtest: the simulated exchange and the cache can't drift apart, so there is nothing
-            # to reconcile (and no live exec engine to do it)
+        exec_engine = self._exec_engine
+        if exec_engine is None:
             return
         # Skip if a reconciliation is already in-flight
         if self._reconciliation_task is not None and not self._reconciliation_task.done():
@@ -900,17 +908,21 @@ class BaseStrategy(Strategy):
         self._force_reconcile_count += 1
         self._last_force_reconcile_ns = now_ns
         self._log.warning(f"Triggering nt reconciliation (attempt {self._force_reconcile_count}) via execution engine")
-        self._reconciliation_task = self._exec_engine._loop.create_task(self._exec_engine.reconcile_execution_state())
+        self._reconciliation_task = exec_engine._loop.create_task(exec_engine.reconcile_execution_state())
 
     def _reconcile(self, event: TimeEvent = None):
         # TODO: Remove overlap with _trigger_force_reconciliation
-        if self._trader_helper is not None:
+        if self.is_backtest:
+            # The simulated exchange and the cache can't drift apart, so just use the local position
+            position_at_broker = self.position_qty
+        elif self._trader_helper is None:
+            # Whatever started the strategy never attached a helper (see run_utils.run_strategy)
+            self.log.error("Live run without a trader helper attached; cannot get the broker position")
+            position_at_broker = self.position_qty
+        else:
             # Running live. Get position from broker
             position_at_broker = self._trader_helper.get_position_obj(self.config.instrument_id.symbol.value)
             position_at_broker = int(position_at_broker.qty)
-        else:
-            # Running a backtest, so just use the local position
-            position_at_broker = self.position_qty
 
         # FLATTEN POSITION IF NEEDED (position is opposite the side we are trading)
         # Deliberately literal, not entry/exit: this branch runs precisely when the position

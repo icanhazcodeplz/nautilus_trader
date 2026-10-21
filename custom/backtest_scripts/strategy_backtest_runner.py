@@ -3,7 +3,7 @@ import random
 
 import pandas as pd
 
-from custom.artifacts import BACKTEST_RUNS_PATH, LiveArtifactsIO
+from custom.artifacts import BACKTEST_RUNS_PATH, LiveArtifactsIO, BacktestArtifactsIO
 from custom.backtest_scripts.backtest_config import DATA_DELAY_SECS
 from custom.backtest_scripts.backtest_config import DATA_DELAY_WINDOWS
 from custom.backtest_utils.backtest_run_utils import add_default_venue
@@ -11,24 +11,24 @@ from custom.backtest_utils.backtest_run_utils import analyze_backtest
 from custom.backtest_utils.backtest_run_utils import build_backtest_engine
 from custom.backtest_utils.backtest_run_utils import register_custom_statistics
 from custom.backtest_utils.backtest_run_utils import save_backtest_order_updates
-from custom.backtest_utils.load_catalog_data import CATALOG_TIME_STR_FMT
 from custom.backtest_utils.load_catalog_data import et_to_utc_str
 from custom.backtest_utils.load_catalog_data import load_catalog_data_to_engine
+from custom.backtest_utils.load_catalog_data import to_et_str
 from custom.backtest_utils.prepare_top_gainers import get_allow_trading_times_for_candidate
 from custom.backtest_utils.prepare_top_gainers import parse_candidate_str
 from custom.strategies.momo import MomoStrategy, DirectionStrategy, DirectionThreshold, EntryStrategy, ExitStrategy
 from custom.strategies.momo import MomoStrategyConfig
+from custom.utils.paths import backtest_dir
 from custom.utils.run_utils import run_strategy
-from nautilus_trader.adapters.alpaca.utils import ns_to_iso_8601
 
 
 def run_single_backtest(
     symbol,
-    start_str,
-    end_str,
+    start_str_est,
+    end_str_est,
     strategy_name,
     params,
-    artifacts_location=None,
+    save_artifacts=True,
     allow_trading_times=None,
     log_level="ERROR",
     analyze=False,
@@ -40,9 +40,20 @@ def run_single_backtest(
     random_seed = params_copy.pop("random_seed", None)
     random.seed(random_seed)
 
+    if save_artifacts:
+        bt_dir = backtest_dir(start_str_est, end_str_est)
+        artifacts_io = BacktestArtifactsIO(directory=bt_dir)
+        artifacts_location = artifacts_io.directory
+    else:
+        artifacts_io = None
+        artifacts_location = None
+
     engine = build_backtest_engine(artifacts_location, log_level, bypass_logging=bypass_logging)
     add_default_venue(engine, random_seed)
-    test_instrument, engine = load_catalog_data_to_engine(engine, symbol, start_str, end_str, data_venue="ALPACA")
+    # The catalog reads a string without an offset as UTC
+    test_instrument, engine = load_catalog_data_to_engine(
+        engine, symbol, et_to_utc_str(start_str_est), et_to_utc_str(end_str_est), data_venue="ALPACA"
+    )
     register_custom_statistics(engine)
 
     if strategy_name == "momo":
@@ -58,14 +69,14 @@ def run_single_backtest(
     strategy.set_data_delay(default_secs=DATA_DELAY_SECS, windows=DATA_DELAY_WINDOWS)
 
     performance_stats = run_strategy(
-        strategy, engine, artifacts_location, run_config=config.dict(), raise_errors=raise_errors
+        strategy, engine, run_config=config.dict(), artifacts_io=artifacts_io, raise_errors=raise_errors
     )
 
-    save_backtest_order_updates(engine, artifacts_location)
-
-    if artifacts_location is not None and analyze:
-        analyze_backtest()
-        print(f"Total Runtime {pd.Timestamp.now() - start_time}")
+    if save_artifacts:
+        save_backtest_order_updates(engine, artifacts_io)
+        if analyze:
+            analyze_backtest(artifacts_io)
+            print(f"Total Runtime {pd.Timestamp.now() - start_time}")
 
     engine.dispose()
     return performance_stats
@@ -90,17 +101,17 @@ def run_single_backtest_from_top_gainers_candidate(
 
     # start = allow_trading_times[0] + pd.Timedelta(minutes=2)
     # end = allow_trading_times[0] + pd.Timedelta(minutes=5)
-    start_str = pd.Timestamp.strftime(start, CATALOG_TIME_STR_FMT)
-    end_str = pd.Timestamp.strftime(end, CATALOG_TIME_STR_FMT)
+    start_str_est = to_et_str(start)
+    end_str_est = to_et_str(end)
 
     return run_single_backtest(
         symbol,
-        start_str,
-        end_str,
-    strategy_name,
+        start_str_est,
+        end_str_est,
+        strategy_name,
         params,
+        save_artifacts=artifacts_location,
         allow_trading_times=allow_trading_times,
-        artifacts_location=artifacts_location,
         log_level=log_level,
         analyze=analyze,
     )
@@ -126,18 +137,19 @@ def replay_live_run(live_run_artifacts_dir, log_level="ERROR", random_seed=1):
 
     # Derive dataset name from run date and symbol
     ticks = artifacts_io.load_ticks_and_metrics_file()
-    start_str = ns_to_iso_8601(min(ticks.keys()))
-    end_str = ns_to_iso_8601(max(ticks.keys()))
+    # Widened to whole seconds, which is all the Eastern string carries, so the window still covers every tick
+    start_str_est = to_et_str(pd.Timestamp(min(ticks.keys()), unit="ns", tz="UTC").floor("s"))
+    end_str_est = to_et_str(pd.Timestamp(max(ticks.keys()), unit="ns", tz="UTC").ceil("s"))
 
     symbol = config.pop("instrument_id").split(".")[0]
 
     return run_single_backtest(
         symbol,
-        start_str,
-        end_str,
+        start_str_est,
+        end_str_est,
         "momo",
         config,
-        artifacts_location=BACKTEST_RUNS_PATH,
+        save_artifacts=BACKTEST_RUNS_PATH,
         log_level=log_level,
         analyze=True,
     )
@@ -196,16 +208,16 @@ if __name__ == "__main__":
 
     symbol = "AMZN"
     day_str = "2026-05-07"
-    start_str = et_to_utc_str(day_str, "09:29")
-    end_str = et_to_utc_str(day_str, "09:35")
+    start_str_est = f"{day_str} 09:29"
+    end_str_est = f"{day_str} 09:35"
     run_single_backtest(
         symbol,
-        start_str,
-        end_str,
+        start_str_est,
+        end_str_est,
         strategy_name,
         params,
+        save_artifacts=BACKTEST_RUNS_PATH,
         allow_trading_times=None,
-        artifacts_location=BACKTEST_RUNS_PATH,
         log_level=log_level,
         analyze=True,
     )

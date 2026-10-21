@@ -128,12 +128,10 @@ def register_custom_statistics(engine):
         engine.portfolio.analyzer.register_statistic(stat_class())
 
 
-def save_backtest_order_updates(engine, artifacts_location):
-    if artifacts_location is None:
-        return
+def save_backtest_order_updates(engine, artifacts_io):
     from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
 
-    catalog = ParquetDataCatalog(str(artifacts_location))
+    catalog = ParquetDataCatalog(str(artifacts_io.directory))
     relevant_order_updates = catalog.read_backtest(instance_id=str(engine.kernel.instance_id))
 
     # Drop the same event object seen twice: OrderFilled is published once from
@@ -167,9 +165,9 @@ def save_backtest_order_updates(engine, artifacts_location):
 
     # `sort` is stable, so events sharing a ts_event keep the order they were streamed in.
     relevant_order_updates.sort(key=lambda e: e.ts_event)
-    artifacts_io = BacktestArtifactsIO(BACKTEST_RUNS_PATH)
     artifacts_io.save_backtest_order_updates_to_pkl(relevant_order_updates)
-    shutil.rmtree(BACKTEST_RUNS_PATH / "backtest", ignore_errors=True)
+    # FIXME: BRENT figure out if this needs editing
+    # shutil.rmtree(artifacts_io.directory / "backtest", ignore_errors=True)
 
 
 def analyze_trades(trades, print_report=False):
@@ -190,12 +188,9 @@ def analyze_trades(trades, print_report=False):
     return win_ratio
 
 
-def analyze_backtest():
-    artifacts_io = BacktestArtifactsIO(BACKTEST_RUNS_PATH)
-
+def analyze_backtest(artifacts_io):
     p_mets = artifacts_io.load_performance_metrics()
     print("\n".join(f"{k}: {round(v, 2)}" for k, v in p_mets.items()))
-    print()
 
     orders_report = artifacts_io.load_orders_report()
     trades, exit_legs = orders_to_trades(orders_report)

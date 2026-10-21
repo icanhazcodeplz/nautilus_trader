@@ -11,6 +11,7 @@ import pytest
 
 from custom.strategies._open_order import FLATTEN_TAG
 from custom.strategies.base import BaseStrategy, Side
+from nautilus_trader.common.component import TestClock
 from nautilus_trader.model.enums import OrderSide
 
 
@@ -62,7 +63,8 @@ class _FakeStrategy(BaseStrategy):
         # `log`, `clock`, `config` and `cache` are non-writable Cython attributes on Actor, so
         # they are shadowed by properties below rather than assigned.
         self._log_mock = MagicMock()
-        self._clock_mock = MagicMock()
+        # A TestClock, so `is_backtest` holds and _reconcile compares against the local position
+        self._clock_mock = MagicMock(spec=TestClock)
         self._clock_mock.timestamp_ns.return_value = 10_000_000_000
         self._config_mock = MagicMock(instrument_id="X.ALPACA", stop_loss=stop_loss)
         self._cache_mock = MagicMock()

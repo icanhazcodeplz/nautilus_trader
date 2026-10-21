@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import sys
 
+from custom.artifacts import LiveArtifactsIO
 from custom.strategies.momo import DirectionStrategy
 from custom.strategies.momo import DirectionThreshold
 from custom.strategies.momo import EntryStrategy
@@ -99,9 +100,9 @@ strategy_config = MomoStrategyConfig(
     external_order_claims=[instrument_id],
     allow_trades=True,
     max_position_multiplier=1,
-    trade_size=2,
+    trade_size=4,
     stop_loss=120,  # bps, ~$3.10 on AMZN
-    take_profit=22,  # bps, ~$0.50 on AMZN
+    take_profit=26,  # bps, ~$0.50 on AMZN
     upper_scalar_multiplier=0.5,
     lower_scalar_multiplier=0.5,
     rolling_vwap_window=4000,
@@ -115,9 +116,9 @@ strategy_config = MomoStrategyConfig(
     exit_strategy=ExitStrategy.SIMPLE_TAKE,
     num_exit_tiers=2,
     entry_strategy=EntryStrategy.SIT_AT_DISTANCE,
-    entry_distance=28,  # bps, ~$0.50 on AMZN
+    entry_distance=30,  # bps, ~$0.50 on AMZN
     start_trading_at="09:29:58",
-    stop_entries_after="09:32",
+    stop_entries_after="09:31:30",
     force_exit_at="09:40",
     entry_exclusion_band=None,
     print_update_every_secs=5,
@@ -125,7 +126,7 @@ strategy_config = MomoStrategyConfig(
 
 if not paper:
     blocking = []
-    if strategy_config.trade_size > 3:
+    if strategy_config.trade_size > 4:
         blocking.append(f"trade_size={strategy_config.trade_size} (max 3)")
     if strategy_config.max_position_multiplier > 1:
         blocking.append(f"max_position_multiplier={strategy_config.max_position_multiplier} (max 1)")
@@ -148,8 +149,8 @@ node.add_exec_client_factory(ALPACA, AlpacaLiveExecClientFactory)
 
 
 if __name__ == "__main__":
-    # place_orders_for_testing(paper=paper)
     run_config = strategy_config.dict()
     strategy = MomoStrategy(config=strategy_config)
-    performance_stats = run_strategy(strategy, node, artifacts_directory, run_config=run_config, paper=paper)
+    artifacts_io = LiveArtifactsIO(artifacts_directory)
+    performance_stats = run_strategy(strategy, node, run_config=run_config, artifacts_io=artifacts_io, paper=paper)
     print()

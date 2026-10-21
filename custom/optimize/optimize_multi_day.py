@@ -38,7 +38,6 @@ import pandas as pd
 from custom.backtest_scripts.strategy_backtest_runner import run_single_backtest
 from custom.backtest_utils.load_catalog_data import BACKTESTING_CATALOG
 from custom.backtest_utils.load_catalog_data import catalog_days_available
-from custom.backtest_utils.load_catalog_data import et_to_utc_str
 from custom.backtest_utils.load_catalog_data import get_catalog_data
 from custom.optimize import study_store
 from custom.optimize.study_store import HASH_DISPLAY_LEN
@@ -74,11 +73,11 @@ def run_day(task):
     p_hash, symbol, day_str, start_time, end_time, params = task
     stats = run_single_backtest(
         symbol,
-        et_to_utc_str(day_str, start_time),
-        et_to_utc_str(day_str, end_time),
+        f"{day_str} {start_time}",
+        f"{day_str} {end_time}",
         "momo",
         params,
-        artifacts_location=None,
+        save_artifacts=None,
         allow_trading_times=None,
         log_level="ERROR",
         bypass_logging=True,
@@ -363,7 +362,7 @@ if __name__ == "__main__":
 
     SYMBOL = "AMZN"
     # Backtest window applied to every day, as New York wall-clock "HH:MM:SS". Each day's UTC
-    # offset (EST or EDT) is worked out in `et_to_utc_str`.
+    # offset (EST or EDT) is worked out in `run_single_backtest`.
     START_TIME = "09:29:00"
     END_TIME = "09:41:00"
     # Momo params. A list is swept by the grid; anything else is fixed. A study's hash covers all
