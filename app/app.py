@@ -19,9 +19,10 @@ app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, expose_headers=["Content-Range"])
 
 api = Api(app)
-paper=True
-symbol = "tsla"
-artifacts_io = LiveArtifactsIO(live_run_artifacts_dir("20261022_071507", paper=paper), symbol)
+paper=False
+symbol = "AMZN"
+symbol = None
+artifacts_io = LiveArtifactsIO(live_run_artifacts_dir("20261009_092542", paper=paper), symbol)
 # artifacts_io = LiveArtifactsIO(data_subdir("paper_runs", "20260925_092608"))
 # artifacts_io = BacktestArtifactsIO(BACKTEST_RUNS_PATH)
 

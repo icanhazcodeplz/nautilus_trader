@@ -16,14 +16,14 @@ symbol_configs = {
     "AMZN": MomoStrategyConfig(
         allow_trades=True,
         max_position_multiplier=1,
-        trade_size=4,
+        trade_size=2,
         stop_loss=120,  # bps, ~$3.10 on AMZN
         take_profit=26,  # bps, ~$0.50 on AMZN
         upper_scalar_multiplier=0.5,
         lower_scalar_multiplier=0.5,
         rolling_vwap_window=4000,
         vwap_window=150,
-        variance_window=300,
+        variance_window=300,/
         outer_band_multiplier=2.5,
         pressure_window=25,
         only_buy_if_macd_positive=False,
@@ -42,7 +42,7 @@ symbol_configs = {
     "AAPL": MomoStrategyConfig(
         allow_trades=True,
         max_position_multiplier=1,
-        trade_size=4,
+        trade_size=2,
         stop_loss=120,  # bps, ~$3.10 on AMZN
         take_profit=26,  # bps, ~$0.50 on AMZN
         upper_scalar_multiplier=0.5,

@@ -10,6 +10,7 @@ from custom.strategies.momo import MomoStrategyConfig
 from custom.utils.alpaca_trader_http_client import AlpacaTraderHelper
 from custom.utils.paths import RUN_START_TIME_AS_STR
 from custom.utils.paths import current_live_run_artifacts_dir
+from custom.utils.paths import run_trader_id
 from custom.utils.run_utils import live_performance_stats, register_custom_statistics
 from nautilus_trader import ENV
 from nautilus_trader.adapters.alpaca import ALPACA
@@ -28,7 +29,6 @@ from nautilus_trader.config import TradingNodeConfig
 from nautilus_trader.live.config import LiveDataEngineConfig
 from nautilus_trader.live.node import TradingNode
 from nautilus_trader.model.identifiers import InstrumentId
-from nautilus_trader.model.identifiers import TraderId
 
 
 log = Logger(name="MultipleStocks")
@@ -43,7 +43,7 @@ def _node_config(
 ) -> TradingNodeConfig:
     instrument_provider_config = InstrumentProviderConfig(load_ids=frozenset(instrument_ids), load_all=False)
     return TradingNodeConfig(
-        trader_id=TraderId(f"T-{RUN_START_TIME_AS_STR}"),  # FIXME: DO NOT REMOVE DT_STR, Is there a more robust way?
+        trader_id=run_trader_id(RUN_START_TIME_AS_STR),
         logging=LoggingConfig(
             log_level=log_level,
             log_level_file=file_log_level,
@@ -178,6 +178,14 @@ class MultipleStocks:
             self.run_dir,
             self.log_level,
             self.file_log_level,
+        )
+        # Before anything can crash, so the run's orders can always be found in Redis afterwards
+        LiveArtifactsIO.save_run_info(
+            self.run_dir,
+            trader_id=config_node.trader_id,
+            run_start=RUN_START_TIME_AS_STR,
+            paper=ENV.PAPER,
+            symbols=list(self.configs),
         )
         node = TradingNode(config=config_node)
         node.add_data_client_factory(ALPACA, AlpacaLiveDataClientFactory)

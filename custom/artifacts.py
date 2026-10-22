@@ -10,7 +10,9 @@ import numpy as np
 import pandas as pd
 
 from custom.utils.market_utils import market_round
+from custom.utils.paths import RUN_INFO_FILE
 from custom.utils.paths import data_subdir
+from custom.utils.paths import run_trader_id
 from nautilus_trader.cache.database import CacheDatabaseAdapter
 from nautilus_trader.config import CacheConfig, DatabaseConfig
 from nautilus_trader.model.enums import OrderSide
@@ -35,7 +37,6 @@ def load_txt_file_to_dict(filename):
 class _ArtifactsIO(ABC):
     def __init__(self, directory):
         self.directory = directory
-        self._run_dt_str = str(directory).split("/")[-1]  # TODO: Sloppy. Should pass this in as arg
 
     def _save_pickle(self, data, filename):
         filepath = self.directory / filename
@@ -300,11 +301,25 @@ class LiveArtifactsIO(_ArtifactsIO):
         super().__init__(directory)
         self.run_dir = run_dir
         self.run_symbol = None if symbol is None else symbol.upper()
-        self._run_dt_str = run_dir.name
+
+    @staticmethod
+    def save_run_info(run_dir, trader_id: TraderId, run_start: str, paper: bool, symbols: list[str]):
+        """Record the node-wide facts about a live run. MultipleStocks calls this before the node starts."""
+        info = {"trader_id": trader_id.value, "run_start": run_start, "paper": paper, "symbols": symbols}
+        dict_to_file(info, Path(run_dir) / RUN_INFO_FILE)
+
+    def load_run_info(self) -> dict | None:
+        path = self.run_dir / RUN_INFO_FILE
+        return load_txt_file_to_dict(path) if path.exists() else None
+
+    def trader_id(self) -> TraderId:
+        """The trader ID the run's node used, which scopes its keys in Redis."""
+        run_info = self.load_run_info()
+        return TraderId(run_info["trader_id"])
 
     def _load_order_updates(self):
         database = CacheDatabaseAdapter(
-            trader_id=TraderId(f"T-{self._run_dt_str}"),  # must match what the run used
+            trader_id=self.trader_id(),
             instance_id=UUID4(),
             serializer=MsgSpecSerializer(
                 encoding=msgspec.msgpack,

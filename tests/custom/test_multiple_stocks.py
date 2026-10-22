@@ -12,6 +12,7 @@ from custom.strategies.momo import MomoStrategy
 from custom.strategies.momo import MomoStrategyConfig
 from nautilus_trader import ENV
 from nautilus_trader.model.identifiers import InstrumentId
+from nautilus_trader.model.identifiers import TraderId
 
 
 def _config(**overrides) -> MomoStrategyConfig:
@@ -95,8 +96,6 @@ def test_live_artifacts_io_reads_a_symbol_folder_inside_the_run(tmp_path):
 
     assert artifacts_io.directory == run_dir / "AMZN"
     assert artifacts_io.run_dir == run_dir
-    # The Redis trader ID comes from the run folder, not the symbol folder
-    assert artifacts_io._run_dt_str == "20261021_092900"
 
 
 def test_live_artifacts_io_without_a_symbol_reads_the_run_folder(tmp_path):
@@ -106,7 +105,29 @@ def test_live_artifacts_io_without_a_symbol_reads_the_run_folder(tmp_path):
     artifacts_io = LiveArtifactsIO(run_dir)
 
     assert artifacts_io.directory == run_dir
-    assert artifacts_io._run_dt_str == "20260306_105709"
+
+
+def test_trader_id_comes_from_run_info_even_after_the_folder_is_renamed(tmp_path):
+    run_dir = tmp_path / "20261021_092900"
+    run_dir.mkdir()
+    LiveArtifactsIO.save_run_info(
+        run_dir, trader_id=TraderId("T-20261021_092900"), run_start="20261021_092900", paper=True, symbols=["AMZN"]
+    )
+    renamed = run_dir.rename(tmp_path / "good_day_copy")
+
+    artifacts_io = LiveArtifactsIO(renamed, "AMZN")
+
+    assert artifacts_io.trader_id() == TraderId("T-20261021_092900")
+    assert artifacts_io.load_run_info()["symbols"] == ["AMZN"]
+
+
+def test_trader_id_of_a_run_without_run_info_comes_from_the_run_folder(tmp_path):
+    # Runs made before run_info.json; a symbol folder still resolves to the run folder's name
+    run_dir = tmp_path / "20260306_105709"
+    run_dir.mkdir()
+
+    assert LiveArtifactsIO(run_dir).trader_id() == TraderId("T-20260306_105709")
+    assert LiveArtifactsIO(run_dir, "AMZN").trader_id() == TraderId("T-20260306_105709")
 
 
 def _trade_update(symbol, order_id):
