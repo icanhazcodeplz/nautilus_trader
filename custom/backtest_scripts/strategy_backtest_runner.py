@@ -127,8 +127,8 @@ def run_multiple_backtests(dataset_names, strategy_name, params, log_level="ERRO
     return stats_df
 
 
-def replay_live_run(live_run_artifacts_dir, symbol=None, log_level="ERROR", random_seed=1):
-    """Run a backtest with the same parameters as a live run. `symbol` picks one from a multi-symbol run."""
+def replay_live_run(live_run_artifacts_dir, symbol, log_level="ERROR", random_seed=1):
+    """Run a backtest with the same parameters as one symbol of a live run."""
     artifacts_io = LiveArtifactsIO(live_run_artifacts_dir, symbol)
     config = artifacts_io.load_config()
     # Live configs carry no seed; without one the simulated venue's fills differ run to run

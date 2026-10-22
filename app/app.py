@@ -21,9 +21,8 @@ CORS(app, resources={r"/*": {"origins": "*"}}, expose_headers=["Content-Range"])
 api = Api(app)
 paper=False
 symbol = "AMZN"
-symbol = None
-artifacts_io = LiveArtifactsIO(live_run_artifacts_dir("20261009_092542", paper=paper), symbol)
-# artifacts_io = LiveArtifactsIO(data_subdir("paper_runs", "20260925_092608"))
+artifacts_io = LiveArtifactsIO(live_run_artifacts_dir("20261008_092655", paper=paper), symbol)
+# artifacts_io = LiveArtifactsIO(data_subdir("paper_runs", "20260925_092608"), symbol)
 # artifacts_io = BacktestArtifactsIO(BACKTEST_RUNS_PATH)
 
 

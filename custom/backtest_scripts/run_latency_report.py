@@ -70,7 +70,7 @@ def latest_paper_run() -> Path:
     return runs[-1]
 
 
-def load_tick_latencies(run_dir: Path, symbol: str | None = None) -> pd.DataFrame:
+def load_tick_latencies(run_dir: Path, symbol: str) -> pd.DataFrame:
     """Return one row per tick in the run's ticks_and_metrics.pkl, sorted by event time."""
     data = LiveArtifactsIO(run_dir, symbol).load_ticks_and_metrics_file()
     df = pd.DataFrame(
@@ -111,7 +111,7 @@ def open_bins(open_ticks: pd.DataFrame, by: pd.Series) -> pd.DataFrame:
     return bins.rename(columns={"size": "n"})
 
 
-def load_order_events(run_dir: Path, symbol: str | None = None) -> dict[str, list]:
+def load_order_events(run_dir: Path, symbol: str) -> dict[str, list]:
     """
     Return the run's order events grouped by client order id and sorted by ts_init.
 
@@ -210,7 +210,7 @@ def build_report(
     market_open: str,
     open_detail_s: float,
     open_detail_bin_s: float,
-    symbol: str | None = None,
+    symbol: str,
 ) -> LatencyReport:
     if not run_dir.exists():
         raise FileNotFoundError(f"Run directory not found: {run_dir}")
@@ -260,18 +260,20 @@ def aggregate_reports(reports: list[LatencyReport]) -> AggregateReport:
 
 
 def run_latency_report(
+    symbol: str,
     run: str | None = None,
     run_dir: str | Path | list[str | Path] | None = None,
     market_open: str = "09:30",
     open_detail_s: float = 15.0,
     open_detail_bin_s: float = 0.25,
-    symbol: str | None = None,
 ) -> tuple[list[LatencyReport], AggregateReport]:
     """
     Build the latency report for each run, and stats pooled across all of them.
 
     Parameters
     ----------
+    symbol : str
+        The symbol to report on.
     run : str, optional
         Run timestamp directory under data/paper_runs, e.g. "20260922_092920". None uses the
         most recent run there.
@@ -284,9 +286,6 @@ def run_latency_report(
         How many seconds after the open to profile.
     open_detail_bin_s : float
         Bin width in seconds for that profile.
-    symbol : str, optional
-        The symbol to report on, for runs made with MultipleStocks. None reads a run made
-        before it, which keeps its files directly in the run directory.
 
     """
     if run_dir is not None:
@@ -333,19 +332,30 @@ def print_aggregate(aggregate: AggregateReport) -> None:
 
 
 if __name__ == "__main__":
+    symbol = "AAPL"
     reports, aggregate = run_latency_report(
-        run="20260930_092805",  # None uses the most recent run under data/paper_runs
+        run=None,  # None uses the most recent run under data/paper_runs
         # Full path to a run, or a list of them; overrides `run`
         run_dir=[
-            "/Users/brent/code/nautilus_trader/data/runs/20260928_092632",
-            "/Users/brent/code/nautilus_trader/data/runs/20260929_092633",
-            "/Users/brent/code/nautilus_trader/data/runs/20260930_092805",
-            "/Users/brent/code/nautilus_trader/data/runs/20261001_092727",
-            "/Users/brent/code/nautilus_trader/data/runs/20261002_092645",
+            # "/Users/brent/code/nautilus_trader/data/runs/20260928_092632",
+            # "/Users/brent/code/nautilus_trader/data/runs/20260929_092633",
+            # "/Users/brent/code/nautilus_trader/data/runs/20260930_092805",
+            # "/Users/brent/code/nautilus_trader/data/runs/20261001_092727",
+            # "/Users/brent/code/nautilus_trader/data/runs/20261002_092645",
+
+            # "/Users/brent/code/nautilus_trader/data/runs/20261013_092752",
+            # "/Users/brent/code/nautilus_trader/data/runs/20261014_092802",
+            # "/Users/brent/code/nautilus_trader/data/runs/20261015_092802",  # I didn't start this one on time
+            # "/Users/brent/code/nautilus_trader/data/runs/20261016_092623",
+            # "/Users/brent/code/nautilus_trader/data/runs/20261019_092835",
+            # "/Users/brent/code/nautilus_trader/data/runs/20261020_092931",
+            # "/Users/brent/code/nautilus_trader/data/runs/20261021_092908",
+            "/Users/brent/code/nautilus_trader/data/runs/20261022_092741",
         ],
         market_open="09:30",
         open_detail_s=12.0,
         open_detail_bin_s=0.5,
+        symbol=symbol,
     )
     for i, report in enumerate(reports):
         if i:

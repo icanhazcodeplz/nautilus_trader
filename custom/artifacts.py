@@ -12,7 +12,6 @@ import pandas as pd
 from custom.utils.market_utils import market_round
 from custom.utils.paths import RUN_INFO_FILE
 from custom.utils.paths import data_subdir
-from custom.utils.paths import run_trader_id
 from nautilus_trader.cache.database import CacheDatabaseAdapter
 from nautilus_trader.config import CacheConfig, DatabaseConfig
 from nautilus_trader.model.enums import OrderSide
@@ -290,17 +289,15 @@ class BacktestArtifactsIO(_ArtifactsIO):
 
 class LiveArtifactsIO(_ArtifactsIO):
     """
-    A live run's artifacts. Node-wide files (logs, alpaca_trade_updates.json) sit in `run_dir`, and
-    each symbol's reports in `run_dir/<symbol>`. With no `symbol`, everything is read from
-    `run_dir`, which is how runs made before MultipleStocks are laid out.
+    One symbol's artifacts from a live run. Node-wide files (logs, alpaca_trade_updates.json,
+    run_info.json) sit in `run_dir`, and each symbol's reports in `run_dir/<symbol>`.
     """
 
-    def __init__(self, run_dir, symbol: str | None = None):
+    def __init__(self, run_dir, symbol: str):
         run_dir = Path(run_dir)
-        directory = run_dir if symbol is None else run_dir / symbol.upper()
-        super().__init__(directory)
+        self.run_symbol = symbol.upper()
+        super().__init__(run_dir / self.run_symbol)
         self.run_dir = run_dir
-        self.run_symbol = None if symbol is None else symbol.upper()
 
     @staticmethod
     def save_run_info(run_dir, trader_id: TraderId, run_start: str, paper: bool, symbols: list[str]):
@@ -328,9 +325,7 @@ class LiveArtifactsIO(_ArtifactsIO):
             config=CacheConfig(database=DatabaseConfig()),
         )
         orders = database.load_orders()
-        if self.run_symbol is not None:
-            orders = {cid: o for cid, o in orders.items() if o.instrument_id.symbol.value == self.run_symbol}
-        return orders
+        return {cid: o for cid, o in orders.items() if o.instrument_id.symbol.value == self.run_symbol}
 
     def _get_fills_and_order_durations(self):
         order_events = self.load_order_updates()
@@ -345,8 +340,7 @@ class LiveArtifactsIO(_ArtifactsIO):
 
     def load_alpaca_trade_updates(self):
         txt = load_txt_file_to_dict(self.run_dir / "alpaca_trade_updates.json")
-        if self.run_symbol is not None:
-            txt = [update for update in txt if update.get("symbol") == self.run_symbol]
+        txt = [update for update in txt if update.get("symbol") == self.run_symbol]
         if len(txt) == 0:
             return None
         alpaca_updates_df = pd.DataFrame.from_dict(txt)

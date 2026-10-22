@@ -206,8 +206,7 @@ def add_entry_to_catalog_options(key, symbol, data_start_dt, data_end_dt, notes=
     write_json_single_line_entries(catalog_options, catalog_json_path)
 
 
-def download_matching_data_from_live_run(artifacts_dir, symbol=None):
-    """`symbol` picks one from a multi-symbol run."""
+def download_matching_data_from_live_run(artifacts_dir, symbol):
     artifacts_io = LiveArtifactsIO(artifacts_dir, symbol)
     ticks = artifacts_io.load_ticks_and_metrics_file()
     start = min(ticks.keys())

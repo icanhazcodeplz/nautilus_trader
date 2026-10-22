@@ -98,15 +98,6 @@ def test_live_artifacts_io_reads_a_symbol_folder_inside_the_run(tmp_path):
     assert artifacts_io.run_dir == run_dir
 
 
-def test_live_artifacts_io_without_a_symbol_reads_the_run_folder(tmp_path):
-    run_dir = tmp_path / "20260306_105709"
-    run_dir.mkdir()
-
-    artifacts_io = LiveArtifactsIO(run_dir)
-
-    assert artifacts_io.directory == run_dir
-
-
 def test_trader_id_comes_from_run_info_even_after_the_folder_is_renamed(tmp_path):
     run_dir = tmp_path / "20261021_092900"
     run_dir.mkdir()
@@ -119,15 +110,6 @@ def test_trader_id_comes_from_run_info_even_after_the_folder_is_renamed(tmp_path
 
     assert artifacts_io.trader_id() == TraderId("T-20261021_092900")
     assert artifacts_io.load_run_info()["symbols"] == ["AMZN"]
-
-
-def test_trader_id_of_a_run_without_run_info_comes_from_the_run_folder(tmp_path):
-    # Runs made before run_info.json; a symbol folder still resolves to the run folder's name
-    run_dir = tmp_path / "20260306_105709"
-    run_dir.mkdir()
-
-    assert LiveArtifactsIO(run_dir).trader_id() == TraderId("T-20260306_105709")
-    assert LiveArtifactsIO(run_dir, "AMZN").trader_id() == TraderId("T-20260306_105709")
 
 
 def _trade_update(symbol, order_id):
@@ -157,10 +139,8 @@ def test_trade_updates_are_read_from_the_run_folder_and_filtered_by_symbol(tmp_p
     (run_dir / "alpaca_trade_updates.json").write_text(json.dumps(updates))
 
     amzn = LiveArtifactsIO(run_dir, "AMZN").load_alpaca_trade_updates()
-    every_symbol = LiveArtifactsIO(run_dir).load_alpaca_trade_updates()
 
     assert list(amzn["id"]) == ["a1", "a2"]
-    assert len(every_symbol) == 3
 
 
 def test_trade_updates_for_a_symbol_with_none_return_none(tmp_path):
