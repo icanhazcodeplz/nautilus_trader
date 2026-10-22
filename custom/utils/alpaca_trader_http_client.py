@@ -9,6 +9,7 @@ from alpaca.trading.requests import GetOrdersRequest, LimitOrderRequest
 from alpaca.trading.enums import QueryOrderStatus, OrderSide, TimeInForce, PositionSide, AssetExchange, AssetClass
 
 from custom.utils.retry import retry
+from nautilus_trader import ENV
 from nautilus_trader.adapters.alpaca.utils import get_alpaca_key_and_secret
 from nautilus_trader.common.component import Logger
 
@@ -17,15 +18,12 @@ class AlpacaTraderHttpClient:
     """
     Synchronous HTTP client for Alpaca trading operations using alpaca-py.
 
-    Parameters
-    ----------
-    paper : bool, default True
-        Whether to use paper trading or live trading.
+    Trades the paper or live account according to the PAPER env var (`ENV.PAPER`).
     """
 
-    def __init__(self, paper: bool = True):
-        api_key, api_secret = get_alpaca_key_and_secret(paper=paper)
-        self.client = TradingClient(api_key, api_secret, paper=paper)
+    def __init__(self):
+        api_key, api_secret = get_alpaca_key_and_secret(paper=ENV.PAPER)
+        self.client = TradingClient(api_key, api_secret, paper=ENV.PAPER)
         self.log = Logger(name=self.__class__.__name__)
 
     def get_order(self, order_id: str):
@@ -85,8 +83,8 @@ class AlpacaTraderHttpClient:
 
 
 class AlpacaTraderHelper:
-    def __init__(self, paper: bool = True):
-        self.client = AlpacaTraderHttpClient(paper=paper)
+    def __init__(self):
+        self.client = AlpacaTraderHttpClient()
         self._log = Logger(name=self.__class__.__name__)
 
     def get_position_obj(self, symbol: str) -> Position:

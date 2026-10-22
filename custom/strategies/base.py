@@ -55,13 +55,13 @@ def parse_et_time(value: time | str) -> time:
         ) from None
 
 
-class BaseStrategyConfig(StrategyConfig, frozen=True):
-    instrument_id: InstrumentId
+class BaseStrategyConfig(StrategyConfig, frozen=True, kw_only=True):
+    instrument_id: InstrumentId | None = None  # Filled in by MultipleStocks from the symbol key
     trade_size: int
     max_position_multiplier: int
     stop_loss: float
     allow_trades: bool = True
-    print_update_every_secs: int = None
+    print_update_every_secs: int | None = None
 
 
 class BaseStrategy(Strategy):
@@ -74,6 +74,8 @@ class BaseStrategy(Strategy):
     _DELAY_RELEASE_INTERVAL_MS = 100  # How often the delay buffer is checked for ticks now due
 
     def __init__(self, config: BaseStrategyConfig) -> None:
+        if config.instrument_id is None:
+            raise ValueError(f"{type(config).__name__} has no instrument_id; run it through MultipleStocks or set one")
         super().__init__(config)
         self.instrument: Instrument = None  # Initialized in on_start
         self.metrics_to_save_on_tick = []
@@ -113,7 +115,7 @@ class BaseStrategy(Strategy):
         self._flipping = False  # Waiting to go flat so set_side() can switch.
         self._last_stop_out_attempt = 0
         self._entries_blocked_until_ns = 0  # Set by _stop_out_if_needed; see _in_stop_out_cooldown
-        self._exec_engine = None  # Set by run_utils after node.build(); None in a backtest
+        self._exec_engine = None  # Set by MultipleStocks after node.build(); None in a backtest
         self._force_reconcile_count = 0
         self._last_force_reconcile_ns = 0
         self._last_wrong_way_flatten_ns = 0
@@ -916,7 +918,7 @@ class BaseStrategy(Strategy):
             # The simulated exchange and the cache can't drift apart, so just use the local position
             position_at_broker = self.position_qty
         elif self._trader_helper is None:
-            # Whatever started the strategy never attached a helper (see run_utils.run_strategy)
+            # Whatever started the strategy never attached a helper (see MultipleStocks.run)
             self.log.error("Live run without a trader helper attached; cannot get the broker position")
             position_at_broker = self.position_qty
         else:

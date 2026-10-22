@@ -40,7 +40,6 @@ class _NewsManagerConfig(ActorConfig, frozen=True):
 
 
 class NewsManagerConfig(_NewsManagerConfig, frozen=True, kw_only=True):
-    paper: bool = True
     socket_path: str
 
 
@@ -99,7 +98,7 @@ class NewsManager(_NewsManagerBase):
         self._decoder = msgspec.json.Decoder()
 
     def _initialize_and_start_strategy(self, strategy, article_published_ns:int) -> NewsStrategy:
-        helper = AlpacaTraderHelper(paper=self.config.paper)
+        helper = AlpacaTraderHelper()
         # FIXME: Figure out artifacts_io
         strategy.initialize(artifacts_io=None, trader_helper=helper)
         self.create_strategy(strategy, start=True)

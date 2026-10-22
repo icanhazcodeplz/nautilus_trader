@@ -49,7 +49,7 @@ class ExitStrategy(StrEnum):
 
 
 class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
-    instrument_id: InstrumentId
+    instrument_id: InstrumentId | None = None  # Filled in by MultipleStocks from the symbol key
     trade_size: int
     max_position_multiplier: int
     stop_loss: float
@@ -80,7 +80,7 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     # the price is within it. None disables the band; long_only/short_only ignore it.
     entry_exclusion_band: float | None = None
 
-    print_update_every_secs: int = None
+    print_update_every_secs: int | None = None
     allow_trades: bool = True
 
 

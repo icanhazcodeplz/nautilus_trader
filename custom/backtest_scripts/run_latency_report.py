@@ -70,9 +70,9 @@ def latest_paper_run() -> Path:
     return runs[-1]
 
 
-def load_tick_latencies(run_dir: Path) -> pd.DataFrame:
+def load_tick_latencies(run_dir: Path, symbol: str | None = None) -> pd.DataFrame:
     """Return one row per tick in the run's ticks_and_metrics.pkl, sorted by event time."""
-    data = LiveArtifactsIO(run_dir).load_ticks_and_metrics_file()
+    data = LiveArtifactsIO(run_dir, symbol).load_ticks_and_metrics_file()
     df = pd.DataFrame(
         [
             {"ts_event": v["ts_event"], "ts_init": v["ts_init"]}
@@ -111,12 +111,12 @@ def open_bins(open_ticks: pd.DataFrame, by: pd.Series) -> pd.DataFrame:
     return bins.rename(columns={"size": "n"})
 
 
-def load_order_events(run_dir: Path) -> dict[str, list]:
+def load_order_events(run_dir: Path, symbol: str | None = None) -> dict[str, list]:
     """
     Return the run's order events grouped by client order id and sorted by ts_init.
 
     """
-    artifacts_io = LiveArtifactsIO(run_dir)
+    artifacts_io = LiveArtifactsIO(run_dir, symbol)
     events_by_order: dict[str, list] = {}
 
     try:
@@ -205,12 +205,18 @@ def order_fills(events_by_order: dict[str, list]) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=columns).sort_values("filled", ignore_index=True)
 
 
-def build_report(run_dir: Path, market_open: str, open_detail_s: float, open_detail_bin_s: float) -> LatencyReport:
+def build_report(
+    run_dir: Path,
+    market_open: str,
+    open_detail_s: float,
+    open_detail_bin_s: float,
+    symbol: str | None = None,
+) -> LatencyReport:
     if not run_dir.exists():
         raise FileNotFoundError(f"Run directory not found: {run_dir}")
-    ticks = load_tick_latencies(run_dir)
+    ticks = load_tick_latencies(run_dir, symbol)
     window = open_ticks(ticks, market_open, open_detail_s, open_detail_bin_s)
-    events_by_order = load_order_events(run_dir)
+    events_by_order = load_order_events(run_dir, symbol)
     requests = order_requests(events_by_order)
     return LatencyReport(
         run_dir=run_dir,
@@ -259,6 +265,7 @@ def run_latency_report(
     market_open: str = "09:30",
     open_detail_s: float = 15.0,
     open_detail_bin_s: float = 0.25,
+    symbol: str | None = None,
 ) -> tuple[list[LatencyReport], AggregateReport]:
     """
     Build the latency report for each run, and stats pooled across all of them.
@@ -277,6 +284,9 @@ def run_latency_report(
         How many seconds after the open to profile.
     open_detail_bin_s : float
         Bin width in seconds for that profile.
+    symbol : str, optional
+        The symbol to report on, for runs made with MultipleStocks. None reads a run made
+        before it, which keeps its files directly in the run directory.
 
     """
     if run_dir is not None:
@@ -286,7 +296,7 @@ def run_latency_report(
     else:
         run_dirs = [latest_paper_run()]
 
-    reports = [build_report(d, market_open, open_detail_s, open_detail_bin_s) for d in run_dirs]
+    reports = [build_report(d, market_open, open_detail_s, open_detail_bin_s, symbol) for d in run_dirs]
     return reports, aggregate_reports(reports)
 
 

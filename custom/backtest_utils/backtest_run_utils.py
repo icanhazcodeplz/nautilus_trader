@@ -1,34 +1,16 @@
+import traceback
 import glob
 import os
-import shutil
 
-from custom.artifacts import BACKTEST_RUNS_PATH, BacktestArtifactsIO
 from custom.backtest_scripts.backtest_config import DATA_VENUE, prob_fill_on_limit, latency_model
 from custom.nt_extensions.limit_fill_model import LimitFillModel
-from custom.statistics.trade_avg import AvgTrade
-from custom.statistics.trade_avg_scaled import AverageEntryPrice, PnlPer100, TotalEntered
-from custom.statistics.trade_counts import Winners, Losers, NumTrades
-from custom.statistics.win_loss_ratio import WinLossRatio
 from custom.utils.orders_to_trades import orders_to_trades
 from custom.backtest_utils.load_catalog_data import BACKTESTING_CATALOG
-
+from custom.utils.run_utils import performance_stats
+from nautilus_trader.common.component import Logger
 from nautilus_trader.backtest.engine import BacktestEngine, BacktestEngineConfig
 from nautilus_trader.cache.config import CacheConfig
 from nautilus_trader.config import LoggingConfig
-from nautilus_trader.core.nautilus_pyo3 import (
-    Expectancy,
-    LongRatio,
-    MinLoser,
-    MinWinner,
-    ProfitFactor,
-    ReturnsAverage,
-    ReturnsAverageLoss,
-    ReturnsAverageWin,
-    ReturnsVolatility,
-    RiskReturnRatio,
-    SharpeRatio,
-    SortinoRatio,
-)
 from nautilus_trader.model.currencies import USD
 from nautilus_trader.model.enums import AccountType, BookType, OmsType
 from nautilus_trader.model.events import (
@@ -42,6 +24,8 @@ from nautilus_trader.model.events import (
 from nautilus_trader.model.identifiers import TraderId, Venue
 from nautilus_trader.model.objects import Money
 from nautilus_trader.persistence.config import StreamingConfig
+
+log = Logger(name="backtest_run_utils")
 
 
 def build_backtest_engine(artifacts_location, log_level, controller=None, bypass_logging=False):
@@ -106,26 +90,37 @@ def add_default_venue(engine, random_seed):
         latency_model=latency_model,
     )
 
+def run_strategy(strategy, engine: BacktestEngine, run_config, artifacts_io=None, raise_errors=False):
+    """
+    Run `strategy` on a backtest engine and return its performance stats.
 
-def register_custom_statistics(engine):
-    for stat_class in [
-        ReturnsVolatility,
-        SharpeRatio,
-        SortinoRatio,
-        LongRatio,
-        ProfitFactor,
-        RiskReturnRatio,
-        ReturnsAverage,
-        ReturnsAverageLoss,
-        ReturnsAverageWin,
-        MinWinner,
-        MinLoser,
-        Expectancy,
-    ]:
-        engine.portfolio.analyzer.deregister_statistic(stat_class())
+    Live runs go through `custom.managers.multiple_stocks.MultipleStocks` instead.
 
-    for stat_class in [NumTrades, Winners, Losers, WinLossRatio, AvgTrade, TotalEntered, AverageEntryPrice, PnlPer100]:
-        engine.portfolio.analyzer.register_statistic(stat_class())
+    An exception during the run is logged and swallowed. `raise_errors` re-raises it after cleanup
+    instead, for callers that must not treat a failed run's stats as a result (and whose logging
+    may be bypassed, hiding the log line).
+    """
+    strategy.initialize(artifacts_io=artifacts_io, trader_helper=None)
+    engine.add_strategy(strategy=strategy)
+
+    try:
+        engine.run()
+    except Exception as e:
+        log.error(f"Exception during run with params {run_config}: {e}")
+        log.error(f"Traceback:\n{traceback.format_exc()}")
+        if raise_errors:
+            raise
+    finally:
+        orders_report = engine.trader.generate_orders_report()
+        stats = performance_stats(engine.portfolio.analyzer)
+        if artifacts_io is not None:
+            artifacts_io.save_orders_report(orders_report)
+            artifacts_io.save_performance_metrics(stats)
+            artifacts_io.save_config(run_config)
+
+        engine.dispose()
+
+    return stats
 
 
 def save_backtest_order_updates(engine, artifacts_io):
@@ -171,6 +166,7 @@ def save_backtest_order_updates(engine, artifacts_io):
 
 
 def analyze_trades(trades, print_report=False):
+    # TODO: Move to run_utils.py and use in live runs?
     if len(trades) == 0:
         return 0
     trades = trades.copy()

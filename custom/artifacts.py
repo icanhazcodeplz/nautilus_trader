@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 import json
 import pickle
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 import msgspec
 import numpy as np
@@ -96,11 +97,11 @@ class _ArtifactsIO(ABC):
         """Return (fill_events, order_durations_list) for this run"""
 
     @abstractmethod
-    def _load_order_udpates(self):
+    def _load_order_updates(self):
         """Load order updates"""
 
     def load_order_updates(self):
-        return self._load_order_udpates()
+        return self._load_order_updates()
 
     def get_run_data(self):
         fill_events, order_durations_list = self._get_fills_and_order_durations()
@@ -158,7 +159,7 @@ class _ArtifactsIO(ABC):
 
 
 class BacktestArtifactsIO(_ArtifactsIO):
-    def _load_order_udpates(self):
+    def _load_order_updates(self):
         """Load order updates"""
         return self._load_pickle("order_updates.pkl")
 
@@ -287,7 +288,21 @@ class BacktestArtifactsIO(_ArtifactsIO):
 
 
 class LiveArtifactsIO(_ArtifactsIO):
-    def _load_order_udpates(self):
+    """
+    A live run's artifacts. Node-wide files (logs, alpaca_trade_updates.json) sit in `run_dir`, and
+    each symbol's reports in `run_dir/<symbol>`. With no `symbol`, everything is read from
+    `run_dir`, which is how runs made before MultipleStocks are laid out.
+    """
+
+    def __init__(self, run_dir, symbol: str | None = None):
+        run_dir = Path(run_dir)
+        directory = run_dir if symbol is None else run_dir / symbol.upper()
+        super().__init__(directory)
+        self.run_dir = run_dir
+        self.run_symbol = None if symbol is None else symbol.upper()
+        self._run_dt_str = run_dir.name
+
+    def _load_order_updates(self):
         database = CacheDatabaseAdapter(
             trader_id=TraderId(f"T-{self._run_dt_str}"),  # must match what the run used
             instance_id=UUID4(),
@@ -297,7 +312,10 @@ class LiveArtifactsIO(_ArtifactsIO):
             ),
             config=CacheConfig(database=DatabaseConfig()),
         )
-        return database.load_orders()
+        orders = database.load_orders()
+        if self.run_symbol is not None:
+            orders = {cid: o for cid, o in orders.items() if o.instrument_id.symbol.value == self.run_symbol}
+        return orders
 
     def _get_fills_and_order_durations(self):
         order_events = self.load_order_updates()
@@ -311,7 +329,9 @@ class LiveArtifactsIO(_ArtifactsIO):
         return fill_events, order_durations_list
 
     def load_alpaca_trade_updates(self):
-        txt = load_txt_file_to_dict(self.directory / "alpaca_trade_updates.json")
+        txt = load_txt_file_to_dict(self.run_dir / "alpaca_trade_updates.json")
+        if self.run_symbol is not None:
+            txt = [update for update in txt if update.get("symbol") == self.run_symbol]
         if len(txt) == 0:
             return None
         alpaca_updates_df = pd.DataFrame.from_dict(txt)

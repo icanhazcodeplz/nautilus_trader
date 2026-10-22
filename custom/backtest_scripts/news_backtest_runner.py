@@ -9,9 +9,9 @@ from custom.backtest_utils.backtest_run_utils import (
     add_default_venue,
     analyze_backtest,
     build_backtest_engine,
-    register_custom_statistics,
     save_backtest_order_updates,
 )
+from custom.utils.run_utils import register_custom_statistics
 from custom.backtest_utils.load_catalog_data import load_catalog_data_to_engine
 from nautilus_trader.trading.config import ImportableControllerConfig
 
@@ -42,7 +42,7 @@ def run_single_news_backtest(
     engine = build_backtest_engine(artifacts_location, log_level, controller=controller)
     add_default_venue(engine, random_seed)
     test_instrument, engine = load_catalog_data_to_engine(engine, symbol, start_str, end_str, data_venue="ALPACA")
-    register_custom_statistics(engine)
+    register_custom_statistics(engine.portfolio.analyzer)
 
     try:
         engine.run()

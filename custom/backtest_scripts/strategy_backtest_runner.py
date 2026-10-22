@@ -6,10 +6,9 @@ import pandas as pd
 from custom.artifacts import BACKTEST_RUNS_PATH, LiveArtifactsIO, BacktestArtifactsIO
 from custom.backtest_scripts.backtest_config import DATA_DELAY_SECS
 from custom.backtest_scripts.backtest_config import DATA_DELAY_WINDOWS
-from custom.backtest_utils.backtest_run_utils import add_default_venue
+from custom.backtest_utils.backtest_run_utils import add_default_venue, run_strategy
 from custom.backtest_utils.backtest_run_utils import analyze_backtest
 from custom.backtest_utils.backtest_run_utils import build_backtest_engine
-from custom.backtest_utils.backtest_run_utils import register_custom_statistics
 from custom.backtest_utils.backtest_run_utils import save_backtest_order_updates
 from custom.backtest_utils.load_catalog_data import et_to_utc_str
 from custom.backtest_utils.load_catalog_data import load_catalog_data_to_engine
@@ -19,7 +18,7 @@ from custom.backtest_utils.prepare_top_gainers import parse_candidate_str
 from custom.strategies.momo import MomoStrategy, DirectionStrategy, DirectionThreshold, EntryStrategy, ExitStrategy
 from custom.strategies.momo import MomoStrategyConfig
 from custom.utils.paths import backtest_dir
-from custom.utils.run_utils import run_strategy
+from custom.utils.run_utils import register_custom_statistics
 
 
 def run_single_backtest(
@@ -54,7 +53,7 @@ def run_single_backtest(
     test_instrument, engine = load_catalog_data_to_engine(
         engine, symbol, et_to_utc_str(start_str_est), et_to_utc_str(end_str_est), data_venue="ALPACA"
     )
-    register_custom_statistics(engine)
+    register_custom_statistics(engine.portfolio.analyzer)
 
     if strategy_name == "momo":
         config = MomoStrategyConfig(instrument_id=test_instrument.id, **params_copy)
@@ -128,9 +127,9 @@ def run_multiple_backtests(dataset_names, strategy_name, params, log_level="ERRO
     return stats_df
 
 
-def replay_live_run(live_run_artifacts_dir, log_level="ERROR", random_seed=1):
-    """Run a backtest with the same parameters as a live run."""
-    artifacts_io = LiveArtifactsIO(live_run_artifacts_dir)
+def replay_live_run(live_run_artifacts_dir, symbol=None, log_level="ERROR", random_seed=1):
+    """Run a backtest with the same parameters as a live run. `symbol` picks one from a multi-symbol run."""
+    artifacts_io = LiveArtifactsIO(live_run_artifacts_dir, symbol)
     config = artifacts_io.load_config()
     # Live configs carry no seed; without one the simulated venue's fills differ run to run
     config["random_seed"] = random_seed
