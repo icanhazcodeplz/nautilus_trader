@@ -1,3 +1,4 @@
+import shutil
 import traceback
 import glob
 import os
@@ -90,6 +91,7 @@ def add_default_venue(engine, random_seed):
         latency_model=latency_model,
     )
 
+
 def run_strategy(strategy, engine: BacktestEngine, run_config, artifacts_io=None, raise_errors=False):
     """
     Run `strategy` on a backtest engine and return its performance stats.
@@ -153,16 +155,13 @@ def save_backtest_order_updates(engine, artifacts_io):
 
     kept_updates = set(latest_update.values())
     relevant_order_updates = [
-        event
-        for event in relevant_order_updates
-        if not isinstance(event, OrderUpdated) or event in kept_updates
+        event for event in relevant_order_updates if not isinstance(event, OrderUpdated) or event in kept_updates
     ]
 
     # `sort` is stable, so events sharing a ts_event keep the order they were streamed in.
     relevant_order_updates.sort(key=lambda e: e.ts_event)
     artifacts_io.save_backtest_order_updates_to_pkl(relevant_order_updates)
-    # FIXME: BRENT figure out if this needs editing
-    # shutil.rmtree(artifacts_io.directory / "backtest", ignore_errors=True)
+    shutil.rmtree(artifacts_io.directory / "backtest", ignore_errors=True)
 
 
 def analyze_trades(trades, print_report=False):
