@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
 
 from nautilus_trader.adapters.alpaca.execution import AlpacaExecutionClient
 from nautilus_trader.adapters.alpaca.parsing import AlpacaEnumParser
@@ -79,9 +80,25 @@ def make_mock_order(
     return order
 
 
+_created_clients: list[MagicMock] = []
+
+
+@pytest.fixture(autouse=True)
+def fail_on_swallowed_errors():
+    """
+    _handle_ws_message catches every exception and only logs it, so a broken mock looks like
+    "nothing was generated" instead of a crash. Fail any test whose client logged an error.
+    """
+    _created_clients.clear()
+    yield
+    for client in _created_clients:
+        assert not client._log.error.called, f"_handle_ws_message swallowed: {client._log.error.call_args_list}"
+
+
 def make_mock_client(order=None):
     """Create a mock AlpacaExecutionClient with the attributes _handle_ws_message needs."""
     client = MagicMock()
+    _created_clients.append(client)
     client._enum_parser = AlpacaEnumParser()
     client._clock.timestamp_ns.return_value = 0
     client._processed_execution_ids = set()
@@ -262,3 +279,18 @@ class TestHandleWsMessage:
         AlpacaExecutionClient._handle_ws_message(client, msg)
 
         assert len(client._trade_updates_data) == 1
+
+    def test_handler_exception_is_logged_as_error(self):
+        # fail_on_swallowed_errors relies on swallowed exceptions landing in _log.error
+        flat_data = load_trade_updates()
+        flat_msg = next(m for m in flat_data if m["event"] == "fill")
+        msg = unflatten_trade_update(flat_msg)
+        del msg["data"]["qty"]
+
+        client = make_mock_client(order=msg["data"]["order"])
+        client._cache.order.return_value.filled_qty = Quantity.from_int(0)
+        AlpacaExecutionClient._handle_ws_message(client, msg)
+
+        client._log.error.assert_called_once()
+        assert "Error handling WebSocket message" in client._log.error.call_args.args[0]
+        client._log.error.reset_mock()  # Expected error; don't trip the autouse guard
