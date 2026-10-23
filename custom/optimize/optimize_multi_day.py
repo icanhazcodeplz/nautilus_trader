@@ -62,7 +62,7 @@ MAX_CHUNKS_PER_WORKER = 20
 # so a fixed seed keeps results the same whichever worker runs them.
 WORKER_HASH_SEED = "0"
 N_BOOTSTRAP = 2000
-
+SAVE_ARTIFACTS = True
 
 def run_day(task):
     """
@@ -78,7 +78,7 @@ def run_day(task):
         f"{day_str} {start_time}",
         f"{day_str} {end_time}",
         config,
-        save_artifacts=None,
+        save_artifacts=SAVE_ARTIFACTS,
         allow_trading_times=None,
         log_level="ERROR",
         bypass_logging=True,
@@ -373,11 +373,13 @@ if __name__ == "__main__":
         allow_trades=True,
         max_position_multiplier=1,
         trade_size=100,
-        stop_loss=linspace_int(low=160, high=160, step=80),
-        take_profit=linspace_int(low=20, high=36, step=4),
+        stop_loss=160,
+        # stop_loss=linspace_int(low=160, high=160, step=80),
+        # take_profit=linspace_int(low=20, high=36, step=4),
+        take_profit=40,
         upper_scalar_multiplier=0.5,
-        # rolling_vwap_window=3000,
-        rolling_vwap_window=linspace_int(low=2000, high=6000, step=1000),
+        rolling_vwap_window=3000,
+        # rolling_vwap_window=linspace_int(low=2000, high=6000, step=1000),
         vwap_window=150,
         variance_window=300,
         outer_band_multiplier=2.5,
@@ -393,12 +395,18 @@ if __name__ == "__main__":
         num_exit_tiers=2,
         # num_exit_tiers=linspace_int(1, 3, step=1),
         entry_strategy=EntryStrategy.SIT_AT_DISTANCE,
-        entry_distance=linspace_int(low=20, high=60, step=5),
+        entry_distance=linspace_int(low=55, high=60, step=5),
         start_trading_at="09:29:58",
-        stop_entries_after=["09:31"],
+        stop_entries_after="09:31",
         force_exit_at="09:40",
         entry_exclusion_band=None,
     )
+
+    for param_name, param_vals in params.items():
+        if isinstance(param_vals, list) and len(param_vals) == 1:
+            raise ValueError(f"Param {param_name} has only one value. Remove the list.")
+
+
     conn = study_store.open_store()
     if MODE in ("run", "restart"):
         if STUDY_HASH is not None:
