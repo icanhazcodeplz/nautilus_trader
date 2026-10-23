@@ -394,7 +394,6 @@ if __name__ == "__main__":
         stop_entries_after=["09:31"],
         force_exit_at="09:40",
         entry_exclusion_band=None,
-        random_seed=1,
     )
     conn = study_store.open_store()
     if MODE in ("run", "restart"):

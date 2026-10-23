@@ -26,6 +26,7 @@ def run_single_backtest(
     start_str_est,
     end_str_est,
     params,
+    random_seed=42,
     save_artifacts=True,
     allow_trading_times=None,
     log_level="ERROR",
@@ -34,8 +35,6 @@ def run_single_backtest(
     raise_errors=False,
 ):
     start_time = pd.Timestamp.now()
-    params_copy = params.copy()
-    random_seed = params_copy.pop("random_seed", None)
     random.seed(random_seed)
 
     if save_artifacts:
@@ -54,7 +53,7 @@ def run_single_backtest(
     )
     register_custom_statistics(engine.portfolio.analyzer)
 
-    config = MomoStrategyConfig(**params_copy)
+    config = MomoStrategyConfig(**params)
     strategy = MomoStrategy(config=config, symbol=symbol)
 
     if allow_trading_times is not None:
@@ -119,8 +118,6 @@ def replay_live_run(live_run_artifacts_dir, symbol, log_level="ERROR", random_se
     """Run a backtest with the same parameters as one symbol of a live run."""
     artifacts_io = LiveArtifactsIO(live_run_artifacts_dir, symbol)
     config = artifacts_io.load_config()
-    # Live configs carry no seed; without one the simulated venue's fills differ run to run
-    config["random_seed"] = random_seed
 
     # Derive dataset name from run date and symbol
     ticks = artifacts_io.load_ticks_and_metrics_file()
@@ -129,7 +126,14 @@ def replay_live_run(live_run_artifacts_dir, symbol, log_level="ERROR", random_se
     end_str_est = to_et_str(pd.Timestamp(max(ticks.keys()), unit="ns", tz="UTC").ceil("s"))
 
     return run_single_backtest(
-        symbol, start_str_est, end_str_est, config, save_artifacts=BACKTEST_RUNS_PATH, log_level=log_level, analyze=True
+        symbol,
+        start_str_est,
+        end_str_est,
+        config,
+        random_seed=random_seed,
+        save_artifacts=BACKTEST_RUNS_PATH,
+        log_level=log_level,
+        analyze=True,
     )
 
 
@@ -142,41 +146,38 @@ if __name__ == "__main__":
     # log_level = "ERROR"
     # log_level = "WARNING"
 
-    strategy_name = "momo"
-
-    if strategy_name == "momo":
-        params = dict(
-            allow_trades=True,
-            max_position_multiplier=1,
-            trade_size=100,
-            stop_loss=80,  # bps, ~$2.00 on AMZN
-            take_profit=24,  # bps, ~$0.60 on AMZN
-            upper_scalar_multiplier=0.5,
-            lower_scalar_multiplier=0.5,
-            rolling_vwap_window=3000,
-            vwap_window=150,
-            variance_window=300,
-            outer_band_multiplier=2.5,
-            pressure_window=25,
-            only_buy_if_macd_positive=False,
-            direction_strategy=DirectionStrategy.REVERSION,
-            direction_threshold=DirectionThreshold.ROLLING_VWAP,
-            exit_strategy=ExitStrategy.SIT_ON_ROLLING_VWAP,
-            num_exit_tiers=2,
-            entry_strategy=EntryStrategy.SIT_AT_DISTANCE,
-            entry_distance=25,  # bps
-            random_seed=1,
-            start_trading_at="09:29:58",
-            stop_entries_after="09:31",
-            force_exit_at="09:45",
-            entry_exclusion_band=None,
-            # --- TOP GAINERS PARAMS ----------------
-            # price_min=0.8,
-            # price_max=20.0,
-            # vol_30min_min=100_000,
-            # perc_gain_min=30,
-            # rank_max=5,
-        )
+    params = dict(
+        allow_trades=True,
+        max_position_multiplier=1,
+        trade_size=100,
+        stop_loss=80,  # bps, ~$2.00 on AMZN
+        take_profit=24,  # bps, ~$0.60 on AMZN
+        upper_scalar_multiplier=0.5,
+        lower_scalar_multiplier=0.5,
+        rolling_vwap_window=3000,
+        vwap_window=150,
+        variance_window=300,
+        outer_band_multiplier=2.5,
+        pressure_window=25,
+        only_buy_if_macd_positive=False,
+        direction_strategy=DirectionStrategy.REVERSION,
+        direction_threshold=DirectionThreshold.ROLLING_VWAP,
+        exit_strategy=ExitStrategy.SIT_ON_ROLLING_VWAP,
+        num_exit_tiers=2,
+        entry_strategy=EntryStrategy.SIT_AT_DISTANCE,
+        entry_distance=25,  # bps
+        random_seed=1,
+        start_trading_at="09:29:58",
+        stop_entries_after="09:31",
+        force_exit_at="09:45",
+        entry_exclusion_band=None,
+        # --- TOP GAINERS PARAMS ----------------
+        # price_min=0.8,
+        # price_max=20.0,
+        # vol_30min_min=100_000,
+        # perc_gain_min=30,
+        # rank_max=5,
+    )
 
     # candidate_str = "2026-03-19_LNKS"
     #
