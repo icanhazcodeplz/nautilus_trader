@@ -5,26 +5,27 @@ import sys
 sys.path.append(os.getcwd())
 import pandas as pd
 from flask import Flask
+from flask import abort
 from flask import jsonify
 from flask_cors import CORS
 from flask_restful import Api
 
-from custom.artifacts import BACKTEST_RUNS_PATH, BacktestArtifactsIO, LiveArtifactsIO
+from custom.artifacts import BacktestArtifactsIO
 from custom.artifacts import CreateMarkers
+from custom.artifacts import LiveArtifactsIO
 from custom.backtest_utils.backtest_run_utils import analyze_trades
 from custom.utils.orders_to_trades import orders_to_trades
-from custom.utils.paths import live_run_artifacts_dir
+from custom.utils.paths import RUN_INFO_FILE
+from nautilus_trader import PACKAGE_ROOT
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, expose_headers=["Content-Range"])
 
 api = Api(app)
-paper = True
-symbol = "AAPL"
-artifacts_io = LiveArtifactsIO(live_run_artifacts_dir("20261023_081728", paper=paper), symbol)
-artifacts_io = BacktestArtifactsIO(
-    "/Users/brent/code/nautilus_trader/data/backtest_runs/AMZN/0cdec5ae/20261007-0929_20261007-0936"
-)
+# Runs to choose from, one per subfolder: either a folder of backtests (subfolders like
+# "20260105-0929_20260105-0941") or a live run's folder (one subfolder per symbol)
+RUNS_FOLDER = PACKAGE_ROOT / "data/backtest_runs/AMZN/2d0a4a21"
+# RUNS_FOLDER = PACKAGE_ROOT / "data/runs/20261023_092741"
 
 
 baby_blue = "#59e5ea"
@@ -209,8 +210,23 @@ def create_horiz_lines_items(ticks):
     ]
 
 
-@app.route("/api/data")
-def get_data():
+def list_runs() -> list[str]:
+    return sorted(path.name for path in RUNS_FOLDER.iterdir() if path.is_dir())
+
+
+@app.route("/api/runs")
+def get_runs():
+    return jsonify(list_runs())
+
+
+@app.route("/api/data/<run>")
+def get_data(run):
+    # Only names from the listing, so a request can't reach outside RUNS_FOLDER
+    if run not in list_runs():
+        abort(404, f"No run {run!r} in {RUNS_FOLDER}")
+    # Only a live run has run_info.json at the top; each backtest has its own inside its folder
+    is_live = (RUNS_FOLDER / RUN_INFO_FILE).exists()
+    artifacts_io = LiveArtifactsIO(RUNS_FOLDER, run) if is_live else BacktestArtifactsIO(RUNS_FOLDER / run)
     ticks_dict = artifacts_io.load_ticks_and_metrics_file()
     orders_report, fills, positions, order_durations_list = artifacts_io.get_run_data()
 
@@ -272,14 +288,12 @@ def get_data():
     for t in ticks:
         t["time"] = str(t["time"])
 
-    _symbol_for_title = symbol if isinstance(artifacts_io, LiveArtifactsIO) else artifacts_io.load_run_info()["symbol"]
+    symbol = artifacts_io.symbol if is_live else artifacts_io.load_run_info()["symbol"]
     title_start_str = (
         pd.Timestamp(int(ticks[0]["time"]), unit="ns", tz="UTC").tz_convert("US/Eastern").strftime("%m/%d %H:%M")
     )
     title_end_str = pd.Timestamp(int(ticks[-1]["time"]), unit="ns", tz="UTC").tz_convert("US/Eastern").strftime("%H:%M")
-    title = (
-        f"{_symbol_for_title} {title_start_str} to {title_end_str} {' - backtest' if isinstance(artifacts_io, BacktestArtifactsIO) else ''}",
-    )
+    title = (f"{symbol} {title_start_str} to {title_end_str}{'' if is_live else ' - backtest'}",)
     records = dict(
         title=title,
         ticks=ticks,
