@@ -5,13 +5,15 @@ from unittest.mock import MagicMock
 
 from nautilus_trader.adapters.alpaca.execution import AlpacaExecutionClient
 from nautilus_trader.adapters.alpaca.parsing import AlpacaEnumParser
-from nautilus_trader.model.enums import OrderSide, OrderType
+from nautilus_trader.model.enums import OrderSide, OrderStatus, OrderType
 from nautilus_trader.model.identifiers import (
     ClientOrderId,
     InstrumentId,
     StrategyId,
+    TradeId,
     VenueOrderId,
 )
+from nautilus_trader.model.events import OrderFilled
 from nautilus_trader.model.objects import Price, Quantity
 
 DATA_DIR = Path(__file__).parent / "data"
@@ -60,6 +62,11 @@ def make_mock_order(
 ):
     """Create a mock order object with the properties _handle_ws_message reads."""
     order = MagicMock()
+    order.client_order_id = ClientOrderId(client_order_id)
+    order.venue_order_id = VenueOrderId(venue_order_id)
+    order.status = OrderStatus.SUBMITTED
+    order.is_closed = False
+    order.events = []
     order.strategy_id = StrategyId("MomoStrategy-001")
     order.instrument_id = InstrumentId.from_str(instrument_id)
     order.side = side
@@ -81,11 +88,19 @@ def make_mock_client(order=None):
     client._pending_modify_params = {}
     client._trade_updates_data = []
     client._trade_updates_output_file_path = "/dev/null"
+    client._venue_id__client_id_map = {}
+    client._ws_filled_qty = {}
+    client._matched_inferred_qty = {}
+    client._replaced_venue_ids = set()
+    client._pending_new_venue_ids = set()
+    client._ws_new_venue_ids = set()
+    client._unmatched_inferred_fill_qty = lambda o: AlpacaExecutionClient._unmatched_inferred_fill_qty(client, o)
 
     if order:
         client._cache.client_order_id.return_value = ClientOrderId(order.get("client_order_id", "O-TEST-001"))
         mock_order = make_mock_order(
             client_order_id=order.get("client_order_id", "O-TEST-001"),
+            venue_order_id=order.get("id", "abc-123"),
             side=OrderSide.BUY if order.get("side") == "buy" else OrderSide.SELL,
             filled_qty=int(order.get("filled_qty", 0)),
             quantity=int(order.get("qty", 100)),
@@ -193,20 +208,24 @@ class TestHandleWsMessage:
 
         client.generate_order_filled.assert_not_called()
 
-    def test_fill_skipped_when_cache_already_reconciled(self):
+    def test_fill_skipped_when_covered_by_inferred_fill(self):
         flat_data = load_trade_updates()
         flat_msg = next(m for m in flat_data if m["event"] == "fill")
         msg = unflatten_trade_update(flat_msg)
 
         order_data = msg["data"]["order"]
         client = make_mock_client(order=order_data)
-        # Set cache filled_qty >= alpaca filled_qty
-        alpaca_filled = int(order_data["filled_qty"])
-        client._cache.order.return_value.filled_qty = Quantity.from_int(alpaca_filled)
+        # Reconciliation already inferred a fill covering this WS fill
+        inferred_fill = MagicMock(spec=OrderFilled)
+        inferred_fill.trade_id = TradeId("inf-1")
+        inferred_fill.last_qty = Quantity.from_str(flat_msg["qty"])
+        client._cache.order.return_value.events = [inferred_fill]
 
         AlpacaExecutionClient._handle_ws_message(client, msg)
 
         client.generate_order_filled.assert_not_called()
+        coid = str(client._cache.order.return_value.client_order_id)
+        assert client._matched_inferred_qty[coid] == int(flat_msg["qty"])
 
     def test_execution_id_tracked_after_fill(self):
         flat_data = load_trade_updates()

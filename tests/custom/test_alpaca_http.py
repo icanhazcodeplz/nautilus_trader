@@ -85,6 +85,7 @@ async def test_alpaca_fill_to_report():
         mock_self.account_id = AccountId("ALPACA-PAPER")
         mock_self._enum_parser = AlpacaEnumParser()
         mock_self._clock.timestamp_ns.return_value = 0
+        mock_self._venue_id__client_id_map = {f["order_id"]: f"O-{f['order_id']}" for f in fills}
 
         reports = []
         for fill in fills:

@@ -19,11 +19,12 @@ app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, expose_headers=["Content-Range"])
 
 api = Api(app)
-paper=True
+paper = True
 symbol = "AAPL"
 artifacts_io = LiveArtifactsIO(live_run_artifacts_dir("20261023_081728", paper=paper), symbol)
-# artifacts_io = LiveArtifactsIO(data_subdir("paper_runs", "20260925_092608"), symbol)
-# artifacts_io = BacktestArtifactsIO(BACKTEST_RUNS_PATH)
+artifacts_io = BacktestArtifactsIO(
+    "/Users/brent/code/nautilus_trader/data/backtest_runs/AMZN/0cdec5ae/20261007-0929_20261007-0936"
+)
 
 
 baby_blue = "#59e5ea"
@@ -80,6 +81,7 @@ def create_vert_lines_items(day):
         },
     ]
 
+
 def create_horiz_lines_items(ticks):
     if not ticks:
         return []
@@ -95,13 +97,9 @@ def create_horiz_lines_items(ticks):
     if not window_prices:
         return []
 
-    first_min_prices = [
-        t["price"] for t in ticks if start_ns <= int(t["time"]) <= first_min_end_ns and "price" in t
-    ]
+    first_min_prices = [t["price"] for t in ticks if start_ns <= int(t["time"]) <= first_min_end_ns and "price" in t]
 
-    first_10s_prices = [
-        t["price"] for t in ticks if start_ns <= int(t["time"]) <= first_10s_end_ns and "price" in t
-    ]
+    first_10s_prices = [t["price"] for t in ticks if start_ns <= int(t["time"]) <= first_10s_end_ns and "price" in t]
 
     # First trade at/after the open. `ticks` is time-ascending and `window_prices` starts at
     # start_ns, so its first entry is that trade -- the same anchor the strategy takes for
@@ -121,7 +119,7 @@ def create_horiz_lines_items(ticks):
         {
             "start_time": str(start_ns),
             "end_time": str(end_ns),
-            "price": open_price+0.75,
+            "price": open_price + 0.75,
             "color": highlight_green,
             "annotation": "+.75",
             "line_style": "dotted",
@@ -130,7 +128,7 @@ def create_horiz_lines_items(ticks):
         {
             "start_time": str(start_ns),
             "end_time": str(end_ns),
-            "price": open_price+1.00,
+            "price": open_price + 1.00,
             "color": highlight_green,
             "annotation": "+1",
             "line_style": "dotted",
@@ -139,7 +137,7 @@ def create_horiz_lines_items(ticks):
         {
             "start_time": str(start_ns),
             "end_time": str(end_ns),
-            "price": open_price-0.75,
+            "price": open_price - 0.75,
             "color": highlight_green,
             "annotation": "-.75",
             "line_style": "dotted",
@@ -148,7 +146,7 @@ def create_horiz_lines_items(ticks):
         {
             "start_time": str(start_ns),
             "end_time": str(end_ns),
-            "price": open_price-1.00,
+            "price": open_price - 1.00,
             "color": highlight_green,
             "annotation": "-1",
             "line_style": "dotted",
@@ -214,8 +212,6 @@ def create_horiz_lines_items(ticks):
 @app.route("/api/data")
 def get_data():
     ticks_dict = artifacts_io.load_ticks_and_metrics_file()
-    symbol = artifacts_io.symbol
-
     orders_report, fills, positions, order_durations_list = artifacts_io.get_run_data()
 
     trades, exit_legs = orders_to_trades(orders_report)
@@ -276,12 +272,13 @@ def get_data():
     for t in ticks:
         t["time"] = str(t["time"])
 
+    _symbol_for_title = symbol if isinstance(artifacts_io, LiveArtifactsIO) else artifacts_io.load_run_info()["symbol"]
     title_start_str = (
         pd.Timestamp(int(ticks[0]["time"]), unit="ns", tz="UTC").tz_convert("US/Eastern").strftime("%m/%d %H:%M")
     )
     title_end_str = pd.Timestamp(int(ticks[-1]["time"]), unit="ns", tz="UTC").tz_convert("US/Eastern").strftime("%H:%M")
     title = (
-        f"{symbol} {title_start_str} to {title_end_str} {' - backtest' if isinstance(artifacts_io, BacktestArtifactsIO) else ''}",
+        f"{_symbol_for_title} {title_start_str} to {title_end_str} {' - backtest' if isinstance(artifacts_io, BacktestArtifactsIO) else ''}",
     )
     records = dict(
         title=title,

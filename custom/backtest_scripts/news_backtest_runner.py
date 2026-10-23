@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from custom.artifacts import BACKTEST_RUNS_PATH, BacktestArtifactsIO
+from custom.artifacts import BacktestArtifactsIO
 from custom.backtest_utils.backtest_run_utils import (
     add_default_venue,
     analyze_backtest,
@@ -94,7 +94,7 @@ if __name__ == "__main__":
         end_str,
         news_file,
         strategy_overrides=strategy_overrides,
-        artifacts_location=BACKTEST_RUNS_PATH,
+        artifacts_location="FIXME",
         log_level=log_level,
         analyze=True,
     )

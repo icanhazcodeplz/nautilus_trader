@@ -3,7 +3,7 @@ import random
 
 import pandas as pd
 
-from custom.artifacts import BACKTEST_RUNS_PATH, LiveArtifactsIO, BacktestArtifactsIO
+from custom.artifacts import LiveArtifactsIO, BacktestArtifactsIO, backtest_dir
 from custom.backtest_scripts.backtest_config import DATA_DELAY_SECS
 from custom.backtest_scripts.backtest_config import DATA_DELAY_WINDOWS
 from custom.backtest_utils.backtest_run_utils import add_default_venue, run_strategy
@@ -17,29 +17,29 @@ from custom.backtest_utils.prepare_top_gainers import get_allow_trading_times_fo
 from custom.backtest_utils.prepare_top_gainers import parse_candidate_str
 from custom.strategies.momo import MomoStrategy, DirectionStrategy, DirectionThreshold, EntryStrategy, ExitStrategy
 from custom.strategies.momo import MomoStrategyConfig
-from custom.utils.paths import backtest_dir
 from custom.utils.run_utils import register_custom_statistics
 
 
 def run_single_backtest(
-    symbol,
-    start_str_est,
-    end_str_est,
+    symbol:str,
+    start_str_est:str,
+    end_str_est:str,
     config: MomoStrategyConfig,
     random_seed=42,
-    save_artifacts=True,
+    save_artifacts:bool=True,
     allow_trading_times=None,
-    log_level="ERROR",
-    analyze=False,
-    bypass_logging=False,
-    raise_errors=False,
+    log_level:str="ERROR",
+    analyze:bool=False,
+    bypass_logging:bool=False,
+    raise_errors:bool=False,
 ):
     start_time = pd.Timestamp.now()
     random.seed(random_seed)
 
     if save_artifacts:
-        bt_dir = backtest_dir(start_str_est, end_str_est)
-        artifacts_io = BacktestArtifactsIO(directory=bt_dir)
+        _bt_dir = backtest_dir(symbol, config, start_str_est, end_str_est)
+        artifacts_io = BacktestArtifactsIO(directory=_bt_dir)
+        artifacts_io.save_run_info(symbol)
         artifacts_location = artifacts_io.directory
     else:
         artifacts_io = None
@@ -130,7 +130,7 @@ def replay_live_run(live_run_artifacts_dir, symbol, log_level="ERROR", random_se
         end_str_est,
         config,
         random_seed=random_seed,
-        save_artifacts=BACKTEST_RUNS_PATH,
+        save_artifacts=True,
         log_level=log_level,
         analyze=True,
     )
@@ -186,7 +186,7 @@ if __name__ == "__main__":
         start_str_est,
         end_str_est,
         config,
-        save_artifacts=BACKTEST_RUNS_PATH,
+        save_artifacts=True,
         allow_trading_times=None,
         log_level=log_level,
         analyze=True,

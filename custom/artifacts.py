@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
+import datetime
 import json
 import pickle
+import subprocess
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -9,9 +11,12 @@ import numpy as np
 
 import pandas as pd
 
+from custom.strategies.base import BaseStrategyConfig
 from custom.utils.market_utils import market_round
 from custom.utils.paths import RUN_INFO_FILE
+from custom.utils.paths import RUN_START_TIME_AS_STR
 from custom.utils.paths import data_subdir
+from nautilus_trader import PACKAGE_ROOT
 from nautilus_trader.cache.database import CacheDatabaseAdapter
 from nautilus_trader.config import CacheConfig, DatabaseConfig
 from nautilus_trader.model.enums import OrderSide
@@ -21,6 +26,15 @@ from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.model.identifiers import TraderId
 
 BACKTEST_RUNS_PATH = data_subdir("backtest_runs")
+BACKTEST_DIR_DATE_FORMAT = "%Y%m%d-%H%M"
+
+
+def backtest_dir(symbol: str, config: BaseStrategyConfig, start_str_est: str, end_str_est: str):
+    """Return "YYYYMMDD-HHMM_YYYYMMDD-HHMM" for a New York wall-clock "YYYY-MM-DD HH:MM[:SS]" window."""
+
+    start_str = datetime.datetime.fromisoformat(start_str_est).strftime(BACKTEST_DIR_DATE_FORMAT)
+    end_str = datetime.datetime.fromisoformat(end_str_est).strftime(BACKTEST_DIR_DATE_FORMAT)
+    return data_subdir("backtest_runs", symbol.upper(), config.config_hash, f"{start_str}_{end_str}")
 
 
 def dict_to_file(dict_, filename):
@@ -33,8 +47,21 @@ def load_txt_file_to_dict(filename):
         return json.load(f)
 
 
+def git_info() -> dict[str, str]:
+    """The commit and branch the repo is on, for a run's run_info.json. Uncommitted changes aren't captured."""
+
+    def git(*args):
+        return subprocess.run(
+            ["git", *args], cwd=PACKAGE_ROOT, capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+    return {"git_commit": git("rev-parse", "HEAD"), "git_branch": git("rev-parse", "--abbrev-ref", "HEAD")}
+
+
 class _ArtifactsIO(ABC):
     def __init__(self, directory):
+        if isinstance(directory, str):
+            directory = Path(directory)
         self.directory = directory
 
     def _save_pickle(self, data, filename):
@@ -154,8 +181,21 @@ class _ArtifactsIO(ABC):
     def load_ticks_and_metrics_file(self):
         return self._load_pickle("ticks_and_metrics.pkl")
 
+    @abstractmethod
+    def save_run_info(self, symbol: str):
+        pass
+
+    def load_run_info(self) -> dict:
+        path = self.directory / RUN_INFO_FILE
+        return load_txt_file_to_dict(path)
+
 
 class BacktestArtifactsIO(_ArtifactsIO):
+    def save_run_info(self, symbol: str):
+        """Record the facts about a backtest, mirroring a live run's run_info.json."""
+        info = {"run_start": RUN_START_TIME_AS_STR, "symbol": symbol.upper(), **git_info()}
+        dict_to_file(info, self.directory / RUN_INFO_FILE)
+
     def _load_order_updates(self):
         """Load order updates"""
         return self._load_pickle("order_updates.pkl")
@@ -303,7 +343,7 @@ class LiveArtifactsIO(_ArtifactsIO):
     @staticmethod
     def save_run_info(run_dir, trader_id: TraderId, run_start: str, paper: bool, symbols: list[str]):
         """Record the node-wide facts about a live run. MultipleStocks calls this before the node starts."""
-        info = {"trader_id": trader_id.value, "run_start": run_start, "paper": paper, "symbols": symbols}
+        info = {"trader_id": trader_id.value, "run_start": run_start, "paper": paper, "symbols": symbols, **git_info()}
         dict_to_file(info, Path(run_dir) / RUN_INFO_FILE)
 
     def load_run_info(self) -> dict | None:

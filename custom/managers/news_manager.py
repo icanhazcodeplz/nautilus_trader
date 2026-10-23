@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING
 import msgspec
 import pandas as pd
 
-from custom.artifacts import BACKTEST_RUNS_PATH
 from custom.strategies.momo import EntryStrategy
 from custom.strategies.momo import ExitStrategy
 from custom.strategies.news import NewsStrategyConfig, NewsStrategy
@@ -169,7 +168,7 @@ class NewsManagerBacktest(_NewsManagerBase):
 
     def _initialize_and_start_strategy(self, strategy, article_published_ns:int) -> NewsStrategy:
         # FIXME: Figure out artifacts_io
-        strategy.initialize(artifacts_io=BACKTEST_RUNS_PATH, trader_helper=None)
+        strategy.initialize(artifacts_io="FIXME", trader_helper=None)
         # Trader.add_strategy creates a fresh clock at epoch 0; sync it before on_start()
         # runs, otherwise timers registered there will fire ~56 years of missed events
         # the next time the simulator advances this strategy's clock.

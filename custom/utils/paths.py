@@ -6,8 +6,6 @@ from nautilus_trader import PACKAGE_ROOT, ENV
 from nautilus_trader.model.identifiers import TraderId
 
 
-BACKTEST_DIR_DATE_FORMAT = "%Y%m%d-%H%M"
-
 def repo_path(*dirs):
     directory = Path(PACKAGE_ROOT)
     for dir in dirs:
@@ -46,10 +44,3 @@ def run_trader_id(run_start: str) -> TraderId:
 
 def current_live_run_artifacts_dir(*dirs):
     return live_run_artifacts_dir(*(RUN_START_TIME_AS_STR, *dirs), paper=ENV.PAPER)
-
-
-def backtest_dir(start_str_est, end_str_est):
-    """Return "YYYYMMDD-HHMM_YYYYMMDD-HHMM" for a New York wall-clock "YYYY-MM-DD HH:MM[:SS]" window."""
-    start_str = datetime.datetime.fromisoformat(start_str_est).strftime(BACKTEST_DIR_DATE_FORMAT)
-    end_str = datetime.datetime.fromisoformat(end_str_est).strftime(BACKTEST_DIR_DATE_FORMAT)
-    return data_subdir("backtest_runs", f"{start_str}_{end_str}")

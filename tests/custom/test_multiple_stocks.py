@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from custom.artifacts import BacktestArtifactsIO
 from custom.artifacts import LiveArtifactsIO
 from custom.managers import multiple_stocks
 from custom.managers.multiple_stocks import MultipleStocks
@@ -106,6 +107,27 @@ def test_trader_id_comes_from_run_info_even_after_the_folder_is_renamed(tmp_path
 
     assert artifacts_io.trader_id() == TraderId("T-20261021_092900")
     assert artifacts_io.load_run_info()["symbols"] == ["AMZN"]
+
+
+def test_run_info_records_the_git_commit_and_branch(tmp_path):
+    LiveArtifactsIO.save_run_info(
+        tmp_path, trader_id=TraderId("T-20261021_092900"), run_start="20261021_092900", paper=True, symbols=["AMZN"]
+    )
+
+    run_info = LiveArtifactsIO(tmp_path, "AMZN").load_run_info()
+
+    assert len(run_info["git_commit"]) == 40
+    assert run_info["git_branch"]
+
+
+def test_backtest_run_info_mirrors_the_live_one_without_paper_or_trader_id(tmp_path):
+    artifacts_io = BacktestArtifactsIO(tmp_path)
+    artifacts_io.save_run_info("amzn")
+
+    run_info = artifacts_io.load_run_info()
+
+    assert run_info.keys() == {"run_start", "symbol", "git_commit", "git_branch"}
+    assert run_info["symbol"] == "AMZN"
 
 
 def _trade_update(symbol, order_id):
