@@ -24,7 +24,6 @@ from custom.strategies.momo import (
     MomoStrategyConfig,
     parse_est_time,
 )
-from nautilus_trader.model.identifiers import InstrumentId
 
 
 CONFIRM = 3  # Small enough to step through by hand
@@ -766,7 +765,6 @@ def test_zero_distance_rests_on_the_threshold():
 
 def _config(**overrides):
     params = dict(
-        instrument_id=InstrumentId.from_str("AMZN.ALPACA"),
         trade_size=50,
         max_position_multiplier=1,
         stop_loss=120,
@@ -779,53 +777,53 @@ def _config(**overrides):
 
 
 def test_a_valid_sit_at_distance_config_is_accepted():
-    strategy = MomoStrategy(config=_config(direction_strategy=DirectionStrategy.REVERSION))
+    strategy = MomoStrategy(config=_config(direction_strategy=DirectionStrategy.REVERSION), symbol="AMZN")
     assert strategy.entry_strategy == EntryStrategy.SIT_AT_DISTANCE
 
 
 def test_entry_distance_is_required():
     with pytest.raises(ValueError, match="entry_distance is required"):
-        MomoStrategy(config=_config(entry_distance=None))
+        MomoStrategy(config=_config(entry_distance=None), symbol="AMZN")
 
 
 def test_negative_entry_distance_is_rejected():
     with pytest.raises(ValueError, match="entry_distance must be >= 0"):
-        MomoStrategy(config=_config(entry_distance=-0.5))
+        MomoStrategy(config=_config(entry_distance=-0.5), symbol="AMZN")
 
 
 def test_entry_exclusion_band_is_rejected():
     with pytest.raises(ValueError, match="entry_exclusion_band cannot be used"):
-        MomoStrategy(config=_config(entry_exclusion_band=0.5))
+        MomoStrategy(config=_config(entry_exclusion_band=0.5), symbol="AMZN")
 
 
 def test_momentum_is_rejected():
     with pytest.raises(ValueError, match="cannot be used with entry_strategy"):
-        MomoStrategy(config=_config(direction_strategy=DirectionStrategy.MOMENTUM))
+        MomoStrategy(config=_config(direction_strategy=DirectionStrategy.MOMENTUM), symbol="AMZN")
 
 
 def test_the_other_entry_strategies_do_not_require_entry_distance():
-    strategy = MomoStrategy(config=_config(entry_strategy=EntryStrategy.CROSS_VWAP_BAND, entry_distance=None))
+    strategy = MomoStrategy(config=_config(entry_strategy=EntryStrategy.CROSS_VWAP_BAND, entry_distance=None), symbol="AMZN")
     assert strategy.entry_strategy == EntryStrategy.CROSS_VWAP_BAND
 
 
 def test_a_start_at_or_after_the_stop_is_rejected():
     for start in ("09:31", "09:32"):
         with pytest.raises(ValueError, match="is not before"):
-            MomoStrategy(config=_config(start_trading_at=start, stop_entries_after="09:31"))
+            MomoStrategy(config=_config(start_trading_at=start, stop_entries_after="09:31"), symbol="AMZN")
 
 
 def test_a_start_before_the_stop_is_accepted():
-    strategy = MomoStrategy(config=_config(start_trading_at="09:30", stop_entries_after="09:31"))
+    strategy = MomoStrategy(config=_config(start_trading_at="09:30", stop_entries_after="09:31"), symbol="AMZN")
     assert strategy._start_trading_at == parse_est_time("09:30")
 
 
 def test_either_bound_alone_is_accepted():
-    assert MomoStrategy(config=_config(start_trading_at="09:30"))._stop_entries_after is None
-    assert MomoStrategy(config=_config(stop_entries_after="09:31"))._start_trading_at is None
+    assert MomoStrategy(config=_config(start_trading_at="09:30"), symbol="AMZN")._stop_entries_after is None
+    assert MomoStrategy(config=_config(stop_entries_after="09:31"), symbol="AMZN")._start_trading_at is None
 
 
 def test_seconds_are_accepted():
-    strategy = MomoStrategy(config=_config(start_trading_at="09:30:15", stop_entries_after="09:30:45"))
+    strategy = MomoStrategy(config=_config(start_trading_at="09:30:15", stop_entries_after="09:30:45"), symbol="AMZN")
     assert strategy._start_trading_at == time(9, 30, 15)
     assert strategy._stop_entries_after == time(9, 30, 45)
 
@@ -833,7 +831,7 @@ def test_seconds_are_accepted():
 @pytest.mark.parametrize("bad", ["9", "09:30:00:00", "nine", "09:60"])
 def test_a_bad_start_string_is_rejected(bad):
     with pytest.raises(ValueError, match="Expected a time formatted"):
-        MomoStrategy(config=_config(start_trading_at=bad))
+        MomoStrategy(config=_config(start_trading_at=bad), symbol="AMZN")
 
 
 # ---------------------------------------------------------------------------

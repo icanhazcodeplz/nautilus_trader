@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 from abc import abstractmethod
 from collections import deque
 from itertools import pairwise
@@ -7,6 +8,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Optional
 
+import msgspec
 import pandas as pd
 from pandas import Timestamp
 
@@ -14,6 +16,7 @@ from custom.strategies._open_order import OpenOrder, CLOSED_STATUS_LIST, FLATTEN
 from custom.strategies._side import Side  # noqa: F401  (re-exported: `from ...base import Side`)
 from custom.utils.alpaca_trader_http_client import AlpacaTraderHelper
 from custom.utils.precision_utils import make_Price
+from nautilus_trader.adapters.alpaca import ALPACA
 from nautilus_trader.adapters.alpaca.execution import MODIFY_HELD_PENDING_NEW_REASON
 from nautilus_trader.common.component import TestClock
 from nautilus_trader.common.component import TimeEvent
@@ -55,13 +58,38 @@ def parse_et_time(value: time | str) -> time:
         ) from None
 
 
+def alpaca_instrument_id(symbol: str) -> InstrumentId:
+    return InstrumentId.from_str(f"{symbol.upper()}.{ALPACA}")
+
+
+# Fields that don't change what a strategy trades: per-symbol or per-instance names, and logging
+CONFIG_HASH_EXCLUDED_FIELDS = frozenset({
+    "external_order_claims",
+    "strategy_id",
+    "order_id_tag",
+    "print_update_every_secs",
+    "log_events",
+    "log_commands",
+    "log_rejected_due_post_only_as_warning",
+})
+
+
 class BaseStrategyConfig(StrategyConfig, frozen=True, kw_only=True):
-    instrument_id: InstrumentId | None = None  # Filled in by MultipleStocks from the symbol key
     trade_size: int
     max_position_multiplier: int
     stop_loss: float
     allow_trades: bool = True
     print_update_every_secs: int | None = None
+
+    @property
+    def config_hash(self) -> str:
+        """
+        Return the first 8 hex digits of a SHA-256 over every field except those in
+        CONFIG_HASH_EXCLUDED_FIELDS, so the same settings hash the same on any symbol and with any
+        logging.
+        """
+        fields = {k: v for k, v in self.json_primitives().items() if k not in CONFIG_HASH_EXCLUDED_FIELDS}
+        return hashlib.sha256(msgspec.json.encode(fields)).hexdigest()[:8]
 
 
 class BaseStrategy(Strategy):
@@ -73,10 +101,13 @@ class BaseStrategy(Strategy):
     _BLOCK_ENTRIES_AFTER_STOP_OUT_SECS = 10
     _DELAY_RELEASE_INTERVAL_MS = 100  # How often the delay buffer is checked for ticks now due
 
-    def __init__(self, config: BaseStrategyConfig) -> None:
-        if config.instrument_id is None:
-            raise ValueError(f"{type(config).__name__} has no instrument_id; run it through MultipleStocks or set one")
-        super().__init__(config)
+    def __init__(self, config: BaseStrategyConfig, symbol: str) -> None:
+        # The symbol is kept out of the config so the same settings can run on any symbol. The
+        # strategy claims its instrument's external orders through a copy of the config, because
+        # nautilus only reads external_order_claims from there.
+        instrument_id = alpaca_instrument_id(symbol)
+        super().__init__(msgspec.structs.replace(config, external_order_claims=[instrument_id]))
+        self.instrument_id = instrument_id
         self.instrument: Instrument = None  # Initialized in on_start
         self.metrics_to_save_on_tick = []
         self.metrics_to_save_on_1min = []
@@ -235,7 +266,7 @@ class BaseStrategy(Strategy):
     @property
     def position_qty(self):
         """Raw signed net position. Positive is long, negative is short, regardless of self.side."""
-        return int(self.portfolio.net_position(self.config.instrument_id))
+        return int(self.portfolio.net_position(self.instrument_id))
 
     @property
     def exposure(self) -> int:
@@ -275,7 +306,7 @@ class BaseStrategy(Strategy):
         venue confirms it is gone, so it is what to ask before doing anything that assumes
         nothing can fill.
         """
-        instrument_id = self.config.instrument_id
+        instrument_id = self.instrument_id
         return self.cache.orders_open(instrument_id=instrument_id) + self.cache.orders_inflight(
             instrument_id=instrument_id,
         )
@@ -349,7 +380,7 @@ class BaseStrategy(Strategy):
 
     @property
     def position_avg_px(self):
-        positions_open = self.cache.positions_open(instrument_id=self.config.instrument_id)
+        positions_open = self.cache.positions_open(instrument_id=self.instrument_id)
         if len(positions_open) == 0:
             return 0
             # raise RuntimeError("No position open")
@@ -705,7 +736,7 @@ class BaseStrategy(Strategy):
     ):
         tags = [tag] if tag is not None else None
         order: LimitOrder = self.order_factory.limit(
-            instrument_id=self.config.instrument_id,
+            instrument_id=self.instrument_id,
             order_side=side,
             quantity=self.instrument.make_qty(quantity),
             price=make_Price(limit_price),
@@ -796,7 +827,7 @@ class BaseStrategy(Strategy):
                 self.stop_price = new_stop_price
         else:
             if self.save_artifacts:
-                realized_pnl = self.portfolio.realized_pnl(self.config.instrument_id)
+                realized_pnl = self.portfolio.realized_pnl(self.instrument_id)
                 if realized_pnl is not None:
                     self._add_tick_data(order.ts_event, {"pnl": float(realized_pnl)})
 
@@ -889,7 +920,7 @@ class BaseStrategy(Strategy):
                     )
 
     def close_position_limit_order(self):
-        last_trade = self.cache.trade_tick(self.config.instrument_id)
+        last_trade = self.cache.trade_tick(self.instrument_id)
         limit_price = self.position_avg_px if last_trade is None else last_trade.price
         # Aggressive in the direction that closes: below the market when long, above when short
         aggressive_price = limit_price * 0.9 if self.is_long else limit_price * 1.1
@@ -923,7 +954,7 @@ class BaseStrategy(Strategy):
             position_at_broker = self.position_qty
         else:
             # Running live. Get position from broker
-            position_at_broker = self._trader_helper.get_position_obj(self.config.instrument_id.symbol.value)
+            position_at_broker = self._trader_helper.get_position_obj(self.instrument_id.symbol.value)
             position_at_broker = int(position_at_broker.qty)
 
         # FLATTEN POSITION IF NEEDED (position is opposite the side we are trading)
@@ -1070,7 +1101,7 @@ class BaseStrategy(Strategy):
             tick_str = f"Last Tick {timestamp} size {self._last_tick.size} @ {self._last_tick.price}"
 
         # Get P&L information
-        realized_pnl = self.portfolio.realized_pnl(self.config.instrument_id)
+        realized_pnl = self.portfolio.realized_pnl(self.instrument_id)
 
         open_entries_str = "\n".join(str(o) for o in self.open_entries) if len(self.open_entries) > 0 else ""
         open_exits_str = "\n".join(str(o) for o in self.open_exits) if len(self.open_exits) > 0 else ""
@@ -1098,7 +1129,7 @@ class BaseStrategy(Strategy):
             vals = {k: str(round(v, 3)) if v is not None else "None" for k, v in metric.get_vals().items()}
             metrics_data = {**metrics_data, **vals}
         self.log.info(
-            f"UPDATE: {self.config.instrument_id} | Side: {self._side}\n{tick_str}\n"
+            f"UPDATE: {self.instrument_id} | Side: {self._side}\n{tick_str}\n"
             f"Total Entered {self._total_entry_qty} | Realized: {realized_pnl}\n"
             f"{OpenEntryQty=} Orders: {open_entries_str}\n"
             f"{OpenExitQty=} Orders: {open_exits_str}\n"
@@ -1145,9 +1176,9 @@ class BaseStrategy(Strategy):
                 callback=self._set_trading_enabled_based_on_allow_trading_times,
             )
 
-        self.instrument = self.cache.instrument(self.config.instrument_id)
+        self.instrument = self.cache.instrument(self.instrument_id)
         if self.instrument is None:
-            self.log.error(f"Could not find instrument for {self.config.instrument_id}")
+            self.log.error(f"Could not find instrument for {self.instrument_id}")
             self.stop()
             return
 
@@ -1161,7 +1192,7 @@ class BaseStrategy(Strategy):
                 if self._tick_delay_enabled:
                     self._tick_indicators.append(metric.obj)
                 else:
-                    self.register_indicator_for_trade_ticks(self.config.instrument_id, metric.obj)
+                    self.register_indicator_for_trade_ticks(self.instrument_id, metric.obj)
             max_tick_lookback = max(max_tick_lookback, metric.tick_lookback)
 
         self._feed_indicators_manually = bool(self._tick_indicators)
@@ -1179,19 +1210,19 @@ class BaseStrategy(Strategy):
             # Set a long lookback to ensure we get at least `max_tick_lookback` ticks back
             trade_tick_start = self.clock.utc_now() - timedelta(days=2)
             self.request_trade_ticks(
-                self.config.instrument_id,
+                self.instrument_id,
                 start=trade_tick_start,
                 limit=max_tick_lookback,
                 callback=self._on_historical_ticks_loaded,
             )
 
-        self.subscribe_trade_ticks(self.config.instrument_id)
+        self.subscribe_trade_ticks(self.instrument_id)
 
         # TODO: Test if "internal" vs "external" bars does anything for us
         #    Can't request "historical" internal bars. Not implemented in NT
-        bar_type = BarType.from_str(f"{self.config.instrument_id}-1-MINUTE-LAST-EXTERNAL")
+        bar_type = BarType.from_str(f"{self.instrument_id}-1-MINUTE-LAST-EXTERNAL")
         if self.internal_bars:
-            bar_type = BarType.from_str(f"{self.config.instrument_id}-1-MINUTE-LAST-INTERNAL")
+            bar_type = BarType.from_str(f"{self.instrument_id}-1-MINUTE-LAST-INTERNAL")
         for metric in self.metrics_to_save_on_1min:
             self.register_indicator_for_bars(bar_type=bar_type, indicator=metric.obj)
 
@@ -1200,13 +1231,13 @@ class BaseStrategy(Strategy):
             self.subscribe_bars(bar_type)
             self.request_bars(bar_type, start=self._clock.utc_now() - pd.Timedelta(minutes=30))
 
-        # self.subscribe_quote_ticks(self.config.instrument_id)
-        # self.subscribe_order_book_depth(self.config.instrument_id, book_type=BookType.L1_MBP)
-        # self.subscribe_order_book_deltas(self.config.instrument_id, depth=20)  # For debugging
-        # self.subscribe_order_book_at_interval(self.config.instrument_id, depth=20)  # For debugging
+        # self.subscribe_quote_ticks(self.instrument_id)
+        # self.subscribe_order_book_depth(self.instrument_id, book_type=BookType.L1_MBP)
+        # self.subscribe_order_book_deltas(self.instrument_id, depth=20)  # For debugging
+        # self.subscribe_order_book_at_interval(self.instrument_id, depth=20)  # For debugging
 
         # Get historical data
-        # self.request_quote_ticks(self.config.instrument_id)
+        # self.request_quote_ticks(self.instrument_id)
 
     def on_stop(self) -> None:
         if self._delayed_ticks:
@@ -1216,13 +1247,13 @@ class BaseStrategy(Strategy):
 
         if self.position_qty != 0:
             # Cancel entry orders, but use "close_position_limit_order" to modify the exit orders
-            self.cancel_all_orders(self.config.instrument_id, order_side=self._entry_order_side)
+            self.cancel_all_orders(self.instrument_id, order_side=self._entry_order_side)
             self.close_position_limit_order()
         else:
-            self.cancel_all_orders(self.config.instrument_id)
+            self.cancel_all_orders(self.instrument_id)
 
         # Unsubscribe from data
-        self.unsubscribe_trade_ticks(self.config.instrument_id)
+        self.unsubscribe_trade_ticks(self.instrument_id)
 
     def on_dispose(self) -> None:
         if self.save_artifacts:

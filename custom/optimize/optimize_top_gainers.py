@@ -103,7 +103,7 @@ def optimize(trial):
 
     dataset = trial.study.study_name
     performance_stats = run_single_backtest_from_top_gainers_candidate(
-        dataset, "momo", params, artifacts_location=None, log_level="ERROR"
+        dataset, params, artifacts_location=None, log_level="ERROR"
     )
     try:
         for col_name, p_stat_name in custom_metrics_attrs_map.items():

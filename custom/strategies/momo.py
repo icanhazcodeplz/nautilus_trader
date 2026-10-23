@@ -13,7 +13,6 @@ from nautilus_trader.common.enums import LogColor
 from nautilus_trader.indicators.trend import MACDHistogram
 from nautilus_trader.model.data import TradeTick
 from nautilus_trader.model.enums import OrderStatus
-from nautilus_trader.model.identifiers import InstrumentId
 
 
 class DirectionStrategy(StrEnum):
@@ -49,7 +48,6 @@ class ExitStrategy(StrEnum):
 
 
 class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
-    instrument_id: InstrumentId | None = None  # Filled in by MultipleStocks from the symbol key
     trade_size: int
     max_position_multiplier: int
     stop_loss: float
@@ -116,8 +114,8 @@ class MomoStrategy(BaseStrategy):
     _MAX_ALLOWED_EXIT_DIFF_SECS = 5
     _LOG_FLIP_WAIT_EVERY_NS = 5e9  # Throttle for the "flip still waiting" line
 
-    def __init__(self, config: MomoStrategyConfig) -> None:
-        super().__init__(config)
+    def __init__(self, config: MomoStrategyConfig, symbol: str) -> None:
+        super().__init__(config, symbol)
         self.entry_strategy = EntryStrategy(self.config.entry_strategy)
         self.exit_strategy = ExitStrategy(self.config.exit_strategy)
         self.direction_strategy = DirectionStrategy(self.config.direction_strategy)
@@ -350,7 +348,7 @@ class MomoStrategy(BaseStrategy):
         self._on_first_tick(tick)
         # self.log.info(f"Trade tick: {tick}")
         # NOTE: Need to be subscribed to order book deltas to get best bid/ask prices
-        # ob = self.cache.order_book(self.config.instrument_id)
+        # ob = self.cache.order_book(self.instrument_id)
         # best_bid = ob.best_bid_price()
         self._flip_side_if_needed(tick)
         if not self._trading_has_started():
@@ -394,7 +392,7 @@ class MomoStrategy(BaseStrategy):
                     and random.random() < 0.3
                 ):
                     # Only send the entry command if it has been at least 10 seconds of flat
-                    all_positions = self.cache.positions(instrument_id=self.config.instrument_id)
+                    all_positions = self.cache.positions(instrument_id=self.instrument_id)
                     if len(all_positions) > 0:
                         most_recent_close = all_positions[0].ts_closed
                     else:

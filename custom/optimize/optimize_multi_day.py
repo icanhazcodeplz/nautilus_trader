@@ -75,7 +75,6 @@ def run_day(task):
         symbol,
         f"{day_str} {start_time}",
         f"{day_str} {end_time}",
-        "momo",
         params,
         save_artifacts=None,
         allow_trading_times=None,
@@ -172,10 +171,8 @@ def run_study(conn, symbol, start_time, end_time, params, restart=False) -> str:
     days = catalog_days_available(symbol)
     if not days:
         raise ValueError(f"No catalog days for {symbol}")
-    grid = {
-        study_store.params_hash(symbol, start_time, end_time, param_set): param_set
-        for param_set in study_store.expand_grid(params)
-    }
+    expand_grid = study_store.expand_grid(params)
+    grid = {study_store.params_hash(symbol, start_time, end_time, param_set): param_set for param_set in expand_grid}
     missing = study_store.missing_pairs(conn, study_hash, days)
     print(
         f"Study {study_hash[:HASH_DISPLAY_LEN]} | {symbol} {start_time}-{end_time} | {len(grid)} param sets x "
@@ -373,7 +370,7 @@ if __name__ == "__main__":
         max_position_multiplier=1,
         trade_size=100,
         stop_loss=linspace_int(low=160, high=160, step=80),
-        take_profit=linspace_int(low=20, high=32, step=4),
+        take_profit=linspace_int(low=20, high=36, step=4),
         upper_scalar_multiplier=0.5,
         # rolling_vwap_window=3000,
         rolling_vwap_window=linspace_int(low=2000, high=6000, step=1000),

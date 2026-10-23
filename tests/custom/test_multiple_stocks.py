@@ -36,27 +36,15 @@ def run_dir(tmp_path, monkeypatch):
     return tmp_path
 
 
-def test_the_symbol_key_fills_in_instrument_id_and_external_order_claims(run_dir):
-    runner = MultipleStocks({"amzn": _config(), "NVDA": _config()})
+def test_symbol_keys_are_uppercased_and_the_configs_stay_symbol_free(run_dir):
+    amzn_config = _config()
+
+    runner = MultipleStocks({"amzn": amzn_config, "NVDA": _config()})
 
     assert list(runner.configs) == ["AMZN", "NVDA"]
-    amzn = InstrumentId.from_str("AMZN.ALPACA")
-    assert runner.configs["AMZN"].instrument_id == amzn
-    assert runner.configs["AMZN"].external_order_claims == [amzn]
-    assert runner.configs["NVDA"].instrument_id == InstrumentId.from_str("NVDA.ALPACA")
-
-
-def test_a_config_whose_instrument_id_matches_its_key_is_accepted(run_dir):
-    amzn = InstrumentId.from_str("AMZN.ALPACA")
-
-    runner = MultipleStocks({"AMZN": _config(instrument_id=amzn)})
-
-    assert runner.configs["AMZN"].instrument_id == amzn
-
-
-def test_a_config_whose_instrument_id_contradicts_its_key_raises(run_dir):
-    with pytest.raises(ValueError, match="instrument_id"):
-        MultipleStocks({"AMZN": _config(instrument_id=InstrumentId.from_str("NVDA.ALPACA"))})
+    assert runner.configs["AMZN"] is amzn_config
+    assert "instrument_id" not in amzn_config.dict()
+    assert amzn_config.external_order_claims is None
 
 
 def test_the_same_symbol_twice_in_different_case_raises(run_dir):
@@ -83,9 +71,17 @@ def test_a_live_safe_config_has_no_blocking_reasons():
     assert live_blocking_reasons(_config(trade_size=4)) == []
 
 
-def test_a_strategy_without_an_instrument_id_raises_at_construction():
-    with pytest.raises(ValueError, match="no instrument_id"):
-        MomoStrategy(config=_config())
+def test_a_strategy_trades_and_claims_the_instrument_of_its_symbol():
+    config = _config()
+
+    strategy = MomoStrategy(config=config, symbol="amzn")
+
+    amzn = InstrumentId.from_str("AMZN.ALPACA")
+    assert strategy.instrument_id == amzn
+    assert strategy.external_order_claims == [amzn]
+    # The claim goes on the strategy's own copy; the caller's config and its hash are untouched
+    assert config.external_order_claims is None
+    assert strategy.config.config_hash == config.config_hash
 
 
 def test_live_artifacts_io_reads_a_symbol_folder_inside_the_run(tmp_path):

@@ -22,8 +22,8 @@ class NewsStrategy(MomoStrategy):
     # live ticks arrive. Either shrink adjustment_window for news or bypass the gate here.
     MIN_TICK_LOOKBACK = 100
 
-    def __init__(self, config: NewsStrategyConfig) -> None:
-        super().__init__(config)
+    def __init__(self, config: NewsStrategyConfig, symbol: str) -> None:
+        super().__init__(config, symbol)
         self.article_published_ns: int = 0  # Initialized in self.initialize
 
     def initialize(self, artifacts_io: int = None, trader_helper: Optional[Path] = None):
@@ -33,7 +33,7 @@ class NewsStrategy(MomoStrategy):
 
     def _on_historical_ticks_loaded(self, request_id) -> None:
         super()._on_historical_ticks_loaded(request_id)
-        last_tick = self.cache.trade_tick(self.config.instrument_id)
+        last_tick = self.cache.trade_tick(self.instrument_id)
         if last_tick is None:
             return
         self.enter(self.config.trade_size, last_tick.price, tag="initial", cancel_after_secs=10)

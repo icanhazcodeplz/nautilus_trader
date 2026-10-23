@@ -5,11 +5,9 @@ import pandas as pd
 from custom.strategies.base import BaseStrategy, BaseStrategyConfig
 from nautilus_trader.common.component import TimeEvent
 from nautilus_trader.model.data import TradeTick
-from nautilus_trader.model.identifiers import InstrumentId
 
 
 class LatencyTestStrategyConfig(BaseStrategyConfig, frozen=True):
-    instrument_id: InstrumentId
     max_position_multiplier: int = 1
     order_count: int = 2
     buy_on_tick: bool = True
@@ -21,8 +19,8 @@ class LatencyTestStrategyConfig(BaseStrategyConfig, frozen=True):
 class LatencyTestStrategy(BaseStrategy):
     min_secs_between_buys = 10
 
-    def __init__(self, config: LatencyTestStrategyConfig) -> None:
-        super().__init__(config)
+    def __init__(self, config: LatencyTestStrategyConfig, symbol: str) -> None:
+        super().__init__(config, symbol)
 
         self._trade_ticks = []
         self.trade_tick_event = {}
@@ -70,5 +68,5 @@ class LatencyTestStrategy(BaseStrategy):
     def on_start(self) -> None:
         self.clock.set_timer(name="modify_or_cancel", interval=timedelta(seconds=3), callback=self._modify_or_cancel)
 
-        self.instrument = self.cache.instrument(self.config.instrument_id)
-        self.subscribe_trade_ticks(self.config.instrument_id)
+        self.instrument = self.cache.instrument(self.instrument_id)
+        self.subscribe_trade_ticks(self.instrument_id)

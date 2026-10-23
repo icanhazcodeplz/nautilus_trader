@@ -1,103 +1,26 @@
 import traceback
-from pathlib import Path
-
-import msgspec
 
 from custom.artifacts import LiveArtifactsIO
+from custom.strategies.base import alpaca_instrument_id
 from custom.strategies.momo import EntryStrategy
 from custom.strategies.momo import MomoStrategy
 from custom.strategies.momo import MomoStrategyConfig
 from custom.utils.alpaca_trader_http_client import AlpacaTraderHelper
 from custom.utils.paths import RUN_START_TIME_AS_STR
 from custom.utils.paths import current_live_run_artifacts_dir
-from custom.utils.paths import run_trader_id
-from custom.utils.run_utils import live_performance_stats, register_custom_statistics
+from custom.utils.run_utils import live_node_config
+from custom.utils.run_utils import live_performance_stats
+from custom.utils.run_utils import register_custom_statistics
 from nautilus_trader import ENV
 from nautilus_trader.adapters.alpaca import ALPACA
-from nautilus_trader.adapters.alpaca import AlpacaDataClientConfig
-from nautilus_trader.adapters.alpaca import AlpacaExecClientConfig
 from nautilus_trader.adapters.alpaca import AlpacaLiveDataClientFactory
 from nautilus_trader.adapters.alpaca import AlpacaLiveExecClientFactory
 from nautilus_trader.analysis import ReportProvider
-from nautilus_trader.cache.config import CacheConfig
 from nautilus_trader.common.component import Logger
-from nautilus_trader.common.config import DatabaseConfig
-from nautilus_trader.config import InstrumentProviderConfig
-from nautilus_trader.config import LiveExecEngineConfig
-from nautilus_trader.config import LoggingConfig
-from nautilus_trader.config import TradingNodeConfig
-from nautilus_trader.live.config import LiveDataEngineConfig
 from nautilus_trader.live.node import TradingNode
-from nautilus_trader.model.identifiers import InstrumentId
 
 
 log = Logger(name="MultipleStocks")
-
-
-
-def _node_config(
-    instrument_ids: list[InstrumentId],
-    run_dir: Path,
-    log_level: str,
-    file_log_level: str,
-) -> TradingNodeConfig:
-    instrument_provider_config = InstrumentProviderConfig(load_ids=frozenset(instrument_ids), load_all=False)
-    return TradingNodeConfig(
-        trader_id=run_trader_id(RUN_START_TIME_AS_STR),
-        logging=LoggingConfig(
-            log_level=log_level,
-            log_level_file=file_log_level,
-            log_directory=str(run_dir),
-            log_file_name=file_log_level,
-            use_pyo3=True,
-            log_file_max_size=int(10e6),
-            log_file_max_backup_count=50,
-            log_component_levels={
-                "nautilus_infrastructure::redis::cache": "INFO",
-            },
-        ),
-        exec_engine=LiveExecEngineConfig(
-            reconciliation=True,
-            reconciliation_lookback_mins=10,
-            reconciliation_instrument_ids=list(instrument_ids),
-            inflight_check_interval_ms=5000,
-            reconciliation_startup_delay_secs=3.0,
-            open_check_interval_secs=10,
-            # purge_closed_orders_interval_mins=None,
-            # purge_closed_positions_interval_mins=None,
-            open_check_open_only=True,
-            open_check_lookback_mins=5,  # TODO: Reduce this?
-            open_check_threshold_ms=3000,
-            graceful_shutdown_on_exception=True,
-            allow_overfills=True,  # FIXME: Do we want this?
-        ),
-        cache=CacheConfig(
-            database=DatabaseConfig(),
-            encoding="msgpack",
-            timestamps_as_iso8601=True,
-            buffer_interval_ms=None,
-            flush_on_start=False,
-        ),
-        data_clients={
-            ALPACA: AlpacaDataClientConfig(
-                paper=ENV.PAPER,
-                feed="sip",  # 'iex' or 'sip'
-                instrument_provider=instrument_provider_config,
-            ),
-        },
-        exec_clients={
-            ALPACA: AlpacaExecClientConfig(
-                paper=ENV.PAPER,
-                instrument_provider=instrument_provider_config,
-            ),
-        },
-        data_engine=LiveDataEngineConfig(graceful_shutdown_on_exception=True),
-        timeout_connection=60.0,
-        timeout_reconciliation=20.0,
-        timeout_portfolio=10.0,
-        timeout_disconnection=5.0,
-        timeout_post_stop=5.0,
-    )
 
 
 def live_blocking_reasons(config: MomoStrategyConfig) -> list[str]:
@@ -134,26 +57,11 @@ class MultipleStocks:
         self.log_level = log_level
         self.file_log_level = file_log_level
         self.run_dir = current_live_run_artifacts_dir()
-        self.configs = self._fill_instrument_ids(configs)
+        self.configs = {symbol.upper(): config for symbol, config in configs.items()}
+        if len(self.configs) != len(configs):
+            raise ValueError(f"A symbol is in the configs more than once: {list(configs)}")
         if not ENV.PAPER:
             self._confirm_live()
-
-    @staticmethod
-    def _fill_instrument_ids(configs: dict[str, MomoStrategyConfig]) -> dict[str, MomoStrategyConfig]:
-        filled = {}
-        for symbol, config in configs.items():
-            symbol = symbol.upper()
-            if symbol in filled:
-                raise ValueError(f"{symbol} is in the configs more than once")
-            instrument_id = InstrumentId.from_str(f"{symbol}.{ALPACA}")
-            if config.instrument_id is not None and config.instrument_id != instrument_id:
-                raise ValueError(f"Config for {symbol} has instrument_id={config.instrument_id}")
-            filled[symbol] = msgspec.structs.replace(
-                config,
-                instrument_id=instrument_id,
-                external_order_claims=[instrument_id],
-            )
-        return filled
 
     def _confirm_live(self) -> None:
         blocking = [
@@ -165,7 +73,7 @@ class MultipleStocks:
         for symbol, config in self.configs.items():
             print(f"\n  {symbol}")
             for key, value in config.dict().items():
-                if key in ("instrument_id", "oms_type", "external_order_claims"):
+                if key in ("oms_type", "external_order_claims"):
                     continue
                 print(f"    {key}: {value}")
         user_input = input("\nPress 'y' to continue, type any char to exit... ")
@@ -173,8 +81,8 @@ class MultipleStocks:
             raise SystemExit()
 
     def run(self) -> None:
-        config_node = _node_config(
-            [config.instrument_id for config in self.configs.values()],
+        config_node = live_node_config(
+            [alpaca_instrument_id(symbol) for symbol in self.configs],
             self.run_dir,
             self.log_level,
             self.file_log_level,
@@ -200,7 +108,7 @@ class MultipleStocks:
         for symbol, config in self.configs.items():
             artifacts_io = LiveArtifactsIO(self.run_dir, symbol)
             artifacts_io.directory.mkdir(parents=True, exist_ok=True)
-            strategy = MomoStrategy(config=config)
+            strategy = MomoStrategy(config=config, symbol=symbol)
             strategy.initialize(artifacts_io=artifacts_io, trader_helper=helper)
             node.trader.add_strategy(strategy=strategy)
             strategies[symbol] = strategy
@@ -230,12 +138,11 @@ class MultipleStocks:
             for symbol, config in self.configs.items():
                 try:
                     artifacts_io = artifacts[symbol]
-                    report = ReportProvider.generate_orders_report(
-                        node.cache.orders(instrument_id=config.instrument_id)
-                    )
+                    instrument_id = strategies[symbol].instrument_id
+                    report = ReportProvider.generate_orders_report(node.cache.orders(instrument_id=instrument_id))
                     artifacts_io.save_orders_report(report)
                     artifacts_io.save_performance_metrics(
-                        live_performance_stats(analyzer, node.cache, config.instrument_id),
+                        live_performance_stats(analyzer, node.cache, instrument_id),
                     )
                     artifacts_io.save_config(config.dict())
                 except Exception as e:

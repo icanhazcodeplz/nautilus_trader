@@ -66,7 +66,8 @@ class _FakeStrategy(BaseStrategy):
         # A TestClock, so `is_backtest` holds and _reconcile compares against the local position
         self._clock_mock = MagicMock(spec=TestClock)
         self._clock_mock.timestamp_ns.return_value = 10_000_000_000
-        self._config_mock = MagicMock(instrument_id="X.ALPACA", stop_loss=stop_loss)
+        self._config_mock = MagicMock(stop_loss=stop_loss)
+        self.instrument_id = "X.ALPACA"
         self._cache_mock = MagicMock()
         # What the venue still holds. Separate from _buy_orders/_sell_orders on purpose: a sent
         # cancel empties those immediately, so they can be empty while an order is still working.

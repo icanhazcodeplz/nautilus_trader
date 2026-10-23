@@ -25,7 +25,6 @@ def run_single_backtest(
     symbol,
     start_str_est,
     end_str_est,
-    strategy_name,
     params,
     save_artifacts=True,
     allow_trading_times=None,
@@ -55,11 +54,8 @@ def run_single_backtest(
     )
     register_custom_statistics(engine.portfolio.analyzer)
 
-    if strategy_name == "momo":
-        config = MomoStrategyConfig(instrument_id=test_instrument.id, **params_copy)
-        strategy = MomoStrategy(config=config)
-    else:
-        raise ValueError(f"Unknown strategy_name {strategy_name!r}")
+    config = MomoStrategyConfig(**params_copy)
+    strategy = MomoStrategy(config=config, symbol=symbol)
 
     if allow_trading_times is not None:
         strategy.allow_trading_times = allow_trading_times
@@ -68,7 +64,11 @@ def run_single_backtest(
     strategy.set_data_delay(default_secs=DATA_DELAY_SECS, windows=DATA_DELAY_WINDOWS)
 
     performance_stats = run_strategy(
-        strategy, engine, run_config=config.dict(), artifacts_io=artifacts_io, raise_errors=raise_errors
+        strategy,
+        engine,
+        run_config={**config.dict(), "symbol": symbol},
+        artifacts_io=artifacts_io,
+        raise_errors=raise_errors,
     )
 
     if save_artifacts:
@@ -82,7 +82,7 @@ def run_single_backtest(
 
 
 def run_single_backtest_from_top_gainers_candidate(
-    candidate_str, strategy_name, params, artifacts_location=None, log_level="ERROR", analyze=False
+    candidate_str, params, artifacts_location=None, log_level="ERROR", analyze=False
 ):
     rank_max = params.pop("rank_max")
     vol_30min_min = params.pop("vol_30min_min")
@@ -107,24 +107,12 @@ def run_single_backtest_from_top_gainers_candidate(
         symbol,
         start_str_est,
         end_str_est,
-        strategy_name,
         params,
         save_artifacts=artifacts_location,
         allow_trading_times=allow_trading_times,
         log_level=log_level,
         analyze=analyze,
     )
-
-
-def run_multiple_backtests(dataset_names, strategy_name, params, log_level="ERROR"):
-    performance_stats = []
-    for dataset_name in dataset_names:
-        p_stats = run_single_backtest_from_top_gainers_candidate(
-            dataset_name, strategy_name, params, artifacts_location=None, log_level=log_level
-        )
-        performance_stats.append({"name": dataset_name, **p_stats})
-    stats_df = pd.DataFrame(performance_stats).round(3)
-    return stats_df
 
 
 def replay_live_run(live_run_artifacts_dir, symbol, log_level="ERROR", random_seed=1):
@@ -140,17 +128,8 @@ def replay_live_run(live_run_artifacts_dir, symbol, log_level="ERROR", random_se
     start_str_est = to_et_str(pd.Timestamp(min(ticks.keys()), unit="ns", tz="UTC").floor("s"))
     end_str_est = to_et_str(pd.Timestamp(max(ticks.keys()), unit="ns", tz="UTC").ceil("s"))
 
-    symbol = config.pop("instrument_id").split(".")[0]
-
     return run_single_backtest(
-        symbol,
-        start_str_est,
-        end_str_est,
-        "momo",
-        config,
-        save_artifacts=BACKTEST_RUNS_PATH,
-        log_level=log_level,
-        analyze=True,
+        symbol, start_str_est, end_str_est, config, save_artifacts=BACKTEST_RUNS_PATH, log_level=log_level, analyze=True
     )
 
 
@@ -206,14 +185,13 @@ if __name__ == "__main__":
     # )
 
     symbol = "AMZN"
-    day_str = "2026-05-07"
+    day_str = "2026-10-07"
     start_str_est = f"{day_str} 09:29"
-    end_str_est = f"{day_str} 09:35"
+    end_str_est = f"{day_str} 09:36"
     run_single_backtest(
         symbol,
         start_str_est,
         end_str_est,
-        strategy_name,
         params,
         save_artifacts=BACKTEST_RUNS_PATH,
         allow_trading_times=None,

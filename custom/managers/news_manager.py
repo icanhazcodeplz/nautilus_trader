@@ -14,7 +14,6 @@ from custom.strategies.momo import ExitStrategy
 from custom.strategies.news import NewsStrategyConfig, NewsStrategy
 from custom.utils.alpaca_trader_http_client import AlpacaTraderHelper
 from nautilus_trader.common.config import ActorConfig
-from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.trading.controller import Controller
 
 if TYPE_CHECKING:
@@ -67,10 +66,9 @@ class _NewsManagerBase(Controller):
             self.log.info(f"Skipping news for {symbol}: strategy already running")
             return
 
-        instrument_id = InstrumentId.from_str(f"{symbol}.ALPACA")
         kwargs = {**_DEFAULT_KWARGS, **self.config.strategy_overrides}
-        config = NewsStrategyConfig(instrument_id=instrument_id, **kwargs)
-        strategy = NewsStrategy(config=config)
+        config = NewsStrategyConfig(**kwargs)
+        strategy = NewsStrategy(config=config, symbol=symbol)
         article_published_ns = pd.Timestamp(event["published"]).value
         strategy = self._initialize_and_start_strategy(strategy, article_published_ns)
 

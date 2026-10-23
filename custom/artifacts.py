@@ -47,17 +47,14 @@ class _ArtifactsIO(ABC):
         with open(filepath, "rb") as f:
             return pickle.load(f)
 
-    @property
-    def symbol(self):
-        config = self.load_config()
-        return config["instrument_id"].split(".")[0]
-
     def save_config(self, config):
         dict_to_file(config, self.directory / "config.json")
 
     def load_config(self):
         config = load_txt_file_to_dict(self.directory / "config.json")
         for drop_key in [
+            "instrument_id",  # Configs saved before the symbol moved out of the strategy config
+            "symbol",  # Backtests record it next to the config
             "log_rejected_due_post_only_as_warning",
             "use_uuid_client_order_ids",
             "use_hyphens_in_client_order_ids",
@@ -298,6 +295,10 @@ class LiveArtifactsIO(_ArtifactsIO):
         self.run_symbol = symbol.upper()
         super().__init__(run_dir / self.run_symbol)
         self.run_dir = run_dir
+
+    @property
+    def symbol(self) -> str:
+        return self.run_symbol
 
     @staticmethod
     def save_run_info(run_dir, trader_id: TraderId, run_start: str, paper: bool, symbols: list[str]):

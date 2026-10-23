@@ -64,7 +64,7 @@ def run_single_news_backtest(
                 {
                     "news_file": news_file,
                     "strategy_overrides": strategy_overrides,
-                    "instrument_id": f"{symbol}.ALPACA",  # TODO: make dynaamic
+                    "symbol": symbol,
                 }
             )
 
