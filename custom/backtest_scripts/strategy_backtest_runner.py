@@ -25,7 +25,7 @@ def run_single_backtest(
     symbol,
     start_str_est,
     end_str_est,
-    params,
+    config: MomoStrategyConfig,
     random_seed=42,
     save_artifacts=True,
     allow_trading_times=None,
@@ -53,7 +53,6 @@ def run_single_backtest(
     )
     register_custom_statistics(engine.portfolio.analyzer)
 
-    config = MomoStrategyConfig(**params)
     strategy = MomoStrategy(config=config, symbol=symbol)
 
     if allow_trading_times is not None:
@@ -106,7 +105,7 @@ def run_single_backtest_from_top_gainers_candidate(
         symbol,
         start_str_est,
         end_str_est,
-        params,
+        MomoStrategyConfig(**params),
         save_artifacts=artifacts_location,
         allow_trading_times=allow_trading_times,
         log_level=log_level,
@@ -117,7 +116,7 @@ def run_single_backtest_from_top_gainers_candidate(
 def replay_live_run(live_run_artifacts_dir, symbol, log_level="ERROR", random_seed=1):
     """Run a backtest with the same parameters as one symbol of a live run."""
     artifacts_io = LiveArtifactsIO(live_run_artifacts_dir, symbol)
-    config = artifacts_io.load_config()
+    config = MomoStrategyConfig(**artifacts_io.load_config())
 
     # Derive dataset name from run date and symbol
     ticks = artifacts_io.load_ticks_and_metrics_file()
@@ -146,7 +145,7 @@ if __name__ == "__main__":
     # log_level = "ERROR"
     # log_level = "WARNING"
 
-    params = dict(
+    config = MomoStrategyConfig(
         allow_trades=True,
         max_position_multiplier=1,
         trade_size=100,
@@ -166,17 +165,10 @@ if __name__ == "__main__":
         num_exit_tiers=2,
         entry_strategy=EntryStrategy.SIT_AT_DISTANCE,
         entry_distance=25,  # bps
-        random_seed=1,
         start_trading_at="09:29:58",
         stop_entries_after="09:31",
         force_exit_at="09:45",
         entry_exclusion_band=None,
-        # --- TOP GAINERS PARAMS ----------------
-        # price_min=0.8,
-        # price_max=20.0,
-        # vol_30min_min=100_000,
-        # perc_gain_min=30,
-        # rank_max=5,
     )
 
     # candidate_str = "2026-03-19_LNKS"
@@ -193,7 +185,7 @@ if __name__ == "__main__":
         symbol,
         start_str_est,
         end_str_est,
-        params,
+        config,
         save_artifacts=BACKTEST_RUNS_PATH,
         allow_trading_times=None,
         log_level=log_level,

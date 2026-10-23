@@ -19,8 +19,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from nautilus_trader import PACKAGE_ROOT
 
-STORE_PATH = Path("optuna_dbs") / "studies.db"
+STORE_PATH = PACKAGE_ROOT / "optuna_dbs" / "studies.db"
 HASH_DISPLAY_LEN = 8
 
 _SCHEMA = """
@@ -104,9 +105,9 @@ def spec_hash(symbol, start_time, end_time, params) -> str:
     return _hash("study", symbol, start_time, end_time, params)
 
 
-def params_hash(symbol, start_time, end_time, params) -> str:
-    """Hash one concrete backtest config: the things that decide a day's result."""
-    return _hash("params", symbol, start_time, end_time, params)
+def params_hash(symbol, start_time, end_time, config) -> str:
+    """Hash one concrete backtest: the things that decide a day's result."""
+    return _hash("params", symbol, start_time, end_time, config.config_hash)
 
 
 def _to_json(obj) -> str:
@@ -139,25 +140,25 @@ def swept_names(spec_params: dict) -> list[str]:
 # STUDIES ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 
-def upsert_study(conn, symbol, start_time, end_time, params) -> str:
-    """Create the study for this spec if it is new, register its param sets, and return its hash."""
+def upsert_study(conn, symbol, start_time, end_time, params, configs) -> str:
+    """Create the study for this spec if it is new, register its configs (`params` expanded), and return its hash."""
     study_hash = spec_hash(symbol, start_time, end_time, params)
     conn.execute(
         "INSERT OR IGNORE INTO studies (study_hash, symbol, start_time, end_time, spec_json, created_at)"
         " VALUES (?, ?, ?, ?, ?, ?)",
         (study_hash, symbol, start_time, end_time, _to_json(params), _now()),
     )
-    for param_set in expand_grid(params):
-        add_param_set(conn, study_hash, symbol, start_time, end_time, param_set)
+    for config in configs:
+        add_param_set(conn, study_hash, symbol, start_time, end_time, config)
     conn.commit()
     return study_hash
 
 
-def add_param_set(conn, study_hash, symbol, start_time, end_time, param_set) -> str:
-    p_hash = params_hash(symbol, start_time, end_time, param_set)
+def add_param_set(conn, study_hash, symbol, start_time, end_time, config) -> str:
+    p_hash = params_hash(symbol, start_time, end_time, config)
     conn.execute(
         "INSERT OR IGNORE INTO param_sets (params_hash, symbol, params_json) VALUES (?, ?, ?)",
-        (p_hash, symbol, _to_json(param_set)),
+        (p_hash, symbol, config.json().decode()),
     )
     conn.execute("INSERT OR IGNORE INTO study_param_sets (study_hash, params_hash) VALUES (?, ?)", (study_hash, p_hash))
     return p_hash

@@ -32,6 +32,7 @@ import json
 import multiprocessing
 from datetime import datetime
 
+import msgspec
 import numpy as np
 import pandas as pd
 
@@ -45,6 +46,7 @@ from custom.strategies.momo import DirectionStrategy
 from custom.strategies.momo import DirectionThreshold
 from custom.strategies.momo import EntryStrategy
 from custom.strategies.momo import ExitStrategy
+from custom.strategies.momo import MomoStrategyConfig
 
 
 # Backtests run concurrently.
@@ -70,12 +72,12 @@ def run_day(task):
     "Total Entered" or "Average Entry Price" key at all. Default `pnl` and `entered` to zero so the
     day drops out of the sums.
     """
-    p_hash, symbol, day_str, start_time, end_time, params = task
+    p_hash, symbol, day_str, start_time, end_time, config = task
     stats = run_single_backtest(
         symbol,
         f"{day_str} {start_time}",
         f"{day_str} {end_time}",
-        params,
+        config,
         save_artifacts=None,
         allow_trading_times=None,
         log_level="ERROR",
@@ -155,7 +157,7 @@ def linspace_int(low, high, step):
 
 
 def linspace_float(low, high, step):
-    return [round(val, 4) for val in np.arange(low, high + step * 0.90, step)]
+    return [round(float(val), 4) for val in np.arange(low, high + step * 0.90, step)]
 
 
 # RUN ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -163,7 +165,10 @@ def linspace_float(low, high, step):
 
 def run_study(conn, symbol, start_time, end_time, params, restart=False) -> str:
     """Create or resume the study for this spec and backtest every (param set, day) it is missing."""
-    study_hash = study_store.upsert_study(conn, symbol, start_time, end_time, params)
+    # `convert` rather than `MomoStrategyConfig(**param_set)`: it type-checks each param set and turns
+    # ints into floats for float fields, so `stop_loss=3` and `3.0` are one config with one hash
+    configs = [msgspec.convert(param_set, MomoStrategyConfig) for param_set in study_store.expand_grid(params)]
+    study_hash = study_store.upsert_study(conn, symbol, start_time, end_time, params, configs)
     if restart:
         deleted = study_store.delete_study_results(conn, study_hash)
         print(f"Restart: deleted {deleted} day results")
@@ -171,8 +176,7 @@ def run_study(conn, symbol, start_time, end_time, params, restart=False) -> str:
     days = catalog_days_available(symbol)
     if not days:
         raise ValueError(f"No catalog days for {symbol}")
-    expand_grid = study_store.expand_grid(params)
-    grid = {study_store.params_hash(symbol, start_time, end_time, param_set): param_set for param_set in expand_grid}
+    grid = {study_store.params_hash(symbol, start_time, end_time, config): config for config in configs}
     missing = study_store.missing_pairs(conn, study_hash, days)
     print(
         f"Study {study_hash[:HASH_DISPLAY_LEN]} | {symbol} {start_time}-{end_time} | {len(grid)} param sets x "
