@@ -10,7 +10,6 @@ from custom.strategies.base import ET_TZ, BaseStrategy, BaseStrategyConfig
 from custom.strategies._exit_tiers import ExitTiers
 from custom.strategies.metric import Metric
 from nautilus_trader.common.enums import LogColor
-from nautilus_trader.indicators.trend import MACDHistogram
 from nautilus_trader.model.data import TradeTick
 from nautilus_trader.model.enums import OrderStatus
 
@@ -53,18 +52,14 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     stop_loss: float
     take_profit: float | None # Defaults to stop_loss
 
-    upper_scalar_multiplier: float = 1.0
-    lower_scalar_multiplier: float | None = None  # Defaults to upper_scalar_multiplier
-    vwap_window: int = 150
-    variance_window: int = 300
-    outer_band_multiplier: float = 1.0
-    pressure_window: int = 50
-    rolling_vwap_window: int = 1000
+    band_multiplier: float = 1.0
+    band_window: int = 150
+    band_variance_window: int = 300
+    rolling_vwap_window: int = 3000
 
     direction_strategy: DirectionStrategy = DirectionStrategy.LONG_ONLY
     direction_threshold: DirectionThreshold = DirectionThreshold.OPEN
     flip_side_confirm_ticks: int = 150
-    only_buy_if_macd_positive: bool = False
     entry_strategy: EntryStrategy = EntryStrategy.SIT_AT_DISTANCE
     entry_distance: float | None = None # Required by SIT_AT_DISTANCE, ignored by others.
     exit_strategy: ExitStrategy
@@ -73,9 +68,6 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     stop_entries_after: str | None = None
     force_exit_at: str | None = None
 
-    # Price distance from the direction threshold. With `reversion`, entries are blocked while the
-    # price is within this band of the threshold. With `momentum`, entries are only allowed while
-    # the price is within it. None disables the band; long_only/short_only ignore it.
     entry_exclusion_band: float | None = None
 
     print_update_every_secs: int | None = None
@@ -110,7 +102,7 @@ def is_market_open(now_utc: pd.Timestamp) -> bool:
 
 class MomoStrategy(BaseStrategy):
     _ADJUST_EXITS_ONLY_EVERY_NS = 80e6  # e6 converts from ms to ns
-    _ADJUST_ENTRIES_ONLY_EVERY_NS = 100e6
+    _ADJUST_ENTRIES_ONLY_EVERY_NS = 1000e6
     _MAX_ALLOWED_EXIT_DIFF_SECS = 5
     _LOG_FLIP_WAIT_EVERY_NS = 5e9  # Throttle for the "flip still waiting" line
 
@@ -171,24 +163,14 @@ class MomoStrategy(BaseStrategy):
                 )
 
         self.take_profit = self.config.take_profit
-        lower_scalar_multiplier = (
-            self.config.lower_scalar_multiplier
-            if self.config.lower_scalar_multiplier is not None
-            else self.config.upper_scalar_multiplier
-        )
-        # self.vwap = PressureVWAPBands(
         self.vwap = VWAPBands(
-            lower_scalar_multiplier=lower_scalar_multiplier,
-            upper_scalar_multiplier=self.config.upper_scalar_multiplier,
-            rolling_window=self.config.vwap_window,
-            variance_window=self.config.variance_window,
-            # Below used for PressureVWAPBands
-            # outer_band_multiplier=self.config.outer_band_multiplier,
-            # pressure_window=self.config.pressure_window,
+            lower_scalar_multiplier=self.config.band_multiplier,
+            upper_scalar_multiplier=self.config.band_multiplier,
+            rolling_window=self.config.band_window,
+            variance_window=self.config.band_variance_window,
         )
         # self.vwap_day = VolumeWeightedAveragePrice()
-        self.rolling_vwap = RollingVWAP(rolling_window=self.config.rolling_vwap_window, update_every_secs=5)
-        self.macd = MACDHistogram(fast_period=12, slow_period=26, signal_period=9)
+        self.rolling_vwap = RollingVWAP(rolling_window=self.config.rolling_vwap_window, update_every_secs=None)
         self.metrics_to_save_on_tick = [
             Metric(
                 obj=self.vwap,
@@ -208,8 +190,6 @@ class MomoStrategy(BaseStrategy):
             Metric(obj=self.rolling_vwap, name="rolling_vwap", attrs=["value"]),
             Metric(obj=self, name="", attrs=["direction_value"]),
         ]
-        if self.config.only_buy_if_macd_positive:
-            self.metrics_to_save_on_1min.append(Metric(obj=self.macd, name="macd", attrs=["value"]))
 
         self.last_entry_price = None
 
@@ -364,9 +344,6 @@ class MomoStrategy(BaseStrategy):
             allow_entries = False
         if self._flipping:
             allow_entries = False
-        if self.config.only_buy_if_macd_positive:
-            if not self.macd.initialized or self.macd.value < 0:
-                allow_entries = False
         if self._entries_stopped_for_the_day():
             allow_entries = False
             # Entries resting from before the cutoff would otherwise sit unrepriced and could

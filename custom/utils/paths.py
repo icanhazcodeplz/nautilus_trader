@@ -12,8 +12,7 @@ def repo_path(*dirs):
         directory = Path(directory, dir)
         if isinstance(dir, str) and "." in dir:
             return directory
-        if not directory.exists():
-            directory.mkdir()
+        directory.mkdir(exist_ok=True)
     return directory
 
 

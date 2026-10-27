@@ -25,8 +25,9 @@ from nautilus_trader.serialization.serializer import MsgSpecSerializer
 from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.model.identifiers import TraderId
 
-BACKTEST_RUNS_PATH = data_subdir("backtest_runs")
+BACKTEST_RUNS_TEMP_FOLDER = data_subdir("backtest_runs", "temp", "temp")
 BACKTEST_DIR_DATE_FORMAT = "%Y%m%d-%H%M"
+
 
 
 def backtest_dir(symbol: str, config: BaseStrategyConfig, start_str_est: str, end_str_est: str):

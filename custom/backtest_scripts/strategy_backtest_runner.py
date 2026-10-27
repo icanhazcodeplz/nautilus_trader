@@ -3,14 +3,14 @@ import random
 
 import pandas as pd
 
-from custom.artifacts import LiveArtifactsIO, BacktestArtifactsIO, backtest_dir
+from custom.artifacts import LiveArtifactsIO, BacktestArtifactsIO, backtest_dir, BACKTEST_RUNS_TEMP_FOLDER
 from custom.backtest_scripts.backtest_config import DATA_DELAY_SECS
 from custom.backtest_scripts.backtest_config import DATA_DELAY_WINDOWS
 from custom.backtest_utils.backtest_run_utils import add_default_venue, run_strategy
 from custom.backtest_utils.backtest_run_utils import analyze_backtest
 from custom.backtest_utils.backtest_run_utils import build_backtest_engine
 from custom.backtest_utils.backtest_run_utils import save_backtest_order_updates
-from custom.backtest_utils.load_catalog_data import et_to_utc_str
+from custom.backtest_utils.load_catalog_data import et_to_utc_str, catalog_days_available
 from custom.backtest_utils.load_catalog_data import load_catalog_data_to_engine
 from custom.backtest_utils.load_catalog_data import to_et_str
 from custom.backtest_utils.prepare_top_gainers import get_allow_trading_times_for_candidate
@@ -27,6 +27,7 @@ def run_single_backtest(
     config: MomoStrategyConfig,
     random_seed=42,
     save_artifacts:bool=True,
+    save_artifacts_to_temp:bool=False,
     allow_trading_times=None,
     log_level:str="ERROR",
     analyze:bool=False,
@@ -37,7 +38,10 @@ def run_single_backtest(
     random.seed(random_seed)
 
     if save_artifacts:
-        _bt_dir = backtest_dir(symbol, config, start_str_est, end_str_est)
+        if save_artifacts_to_temp:
+            _bt_dir = BACKTEST_RUNS_TEMP_FOLDER
+        else:
+            _bt_dir = backtest_dir(symbol, config, start_str_est, end_str_est)
         artifacts_io = BacktestArtifactsIO(directory=_bt_dir)
         artifacts_io.save_run_info(symbol)
         artifacts_location = artifacts_io.directory
@@ -149,25 +153,21 @@ if __name__ == "__main__":
         allow_trades=True,
         max_position_multiplier=1,
         trade_size=100,
-        stop_loss=80,  # bps, ~$2.00 on AMZN
-        take_profit=24,  # bps, ~$0.60 on AMZN
-        upper_scalar_multiplier=0.5,
-        lower_scalar_multiplier=0.5,
-        rolling_vwap_window=3000,
-        vwap_window=150,
-        variance_window=300,
-        outer_band_multiplier=2.5,
-        pressure_window=25,
-        only_buy_if_macd_positive=False,
+        stop_loss=100,  # bps, ~$2.00 on AMZN
+        take_profit=22,  # bps, ~$0.60 on AMZN
+        band_multiplier=1,
+        band_window=1000,
+        band_variance_window=2000,
+        rolling_vwap_window=1000,
         direction_strategy=DirectionStrategy.REVERSION,
         direction_threshold=DirectionThreshold.ROLLING_VWAP,
-        exit_strategy=ExitStrategy.SIT_ON_ROLLING_VWAP,
-        num_exit_tiers=2,
+        exit_strategy=ExitStrategy.SIMPLE_TAKE,
+        num_exit_tiers=1,
         entry_strategy=EntryStrategy.SIT_AT_DISTANCE,
-        entry_distance=25,  # bps
+        entry_distance=22,  # bps
         start_trading_at="09:29:58",
         stop_entries_after="09:31",
-        force_exit_at="09:45",
+        force_exit_at="09:40",
         entry_exclusion_band=None,
     )
 
@@ -177,20 +177,25 @@ if __name__ == "__main__":
     #     candidate_str, strategy_name, params, artifacts_location=BACKTEST_RUNS_PATH, log_level="ERROR", analyze=True
     # )
 
-    symbol = "AMZN"
-    day_str = "2026-10-07"
-    start_str_est = f"{day_str} 09:29"
-    end_str_est = f"{day_str} 09:36"
-    run_single_backtest(
-        symbol,
-        start_str_est,
-        end_str_est,
-        config,
-        save_artifacts=True,
-        allow_trading_times=None,
-        log_level=log_level,
-        analyze=True,
-    )
+    symbol = "AAPL"
+
+    day_strs = ["2026-1-21"]
+    day_strs = catalog_days_available(symbol)
+    for day_str in day_strs:
+        start_str_est = f"{day_str} 09:29"
+        end_str_est = f"{day_str} 09:41"
+        run_single_backtest(
+            symbol,
+            start_str_est,
+            end_str_est,
+            config,
+            save_artifacts=True,
+            save_artifacts_to_temp=False,
+            allow_trading_times=None,
+            log_level=log_level,
+            analyze=True,
+            bypass_logging=True,
+        )
 
     # datasets = ["0129_vivssm"]
     # all_stats = []

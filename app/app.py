@@ -1,3 +1,4 @@
+import math
 import os
 import sys
 
@@ -10,12 +11,12 @@ from flask import jsonify
 from flask_cors import CORS
 from flask_restful import Api
 
-from custom.artifacts import BacktestArtifactsIO
+from custom.artifacts import BacktestArtifactsIO, BACKTEST_RUNS_TEMP_FOLDER
 from custom.artifacts import CreateMarkers
 from custom.artifacts import LiveArtifactsIO
 from custom.backtest_utils.backtest_run_utils import analyze_trades
 from custom.utils.orders_to_trades import orders_to_trades
-from custom.utils.paths import RUN_INFO_FILE
+from custom.utils.paths import RUN_INFO_FILE, data_subdir
 from nautilus_trader import PACKAGE_ROOT
 
 app = Flask(__name__)
@@ -24,8 +25,30 @@ CORS(app, resources={r"/*": {"origins": "*"}}, expose_headers=["Content-Range"])
 api = Api(app)
 # Runs to choose from, one per subfolder: either a folder of backtests (subfolders like
 # "20260105-0929_20260105-0941") or a live run's folder (one subfolder per symbol)
-RUNS_FOLDER = PACKAGE_ROOT / "data/backtest_runs/AMZN/2d0a4a21"
-# RUNS_FOLDER = PACKAGE_ROOT / "data/runs/20261023_092741"
+RUNS_FOLDER = PACKAGE_ROOT / "data/backtest_runs/AAPL/3ee29512"
+RUNS_FOLDER = PACKAGE_ROOT / "data/runs/20261027_092854"
+# RUNS_FOLDER = data_subdir("backtest_runs", "temp")
+
+PARAMS_TO_SHOW = [
+    # "trade_size",
+    # "max_position_multiplier",
+    "stop_loss",
+    "take_profit",
+    # "band_multiplier",
+    # "band_window",
+    # "band_variance_window",
+    # "rolling_vwap_window",
+    # "direction_strategy",
+    # "direction_threshold",
+    # "flip_side_confirm_ticks",
+    # "entry_strategy",
+    "entry_distance",
+    "exit_strategy",
+    # "num_exit_tiers",
+    # "start_trading_at",
+    # "stop_entries_after",
+    # "force_exit_at",
+]
 
 
 baby_blue = "#59e5ea"
@@ -227,6 +250,15 @@ def get_data(run):
     # Only a live run has run_info.json at the top; each backtest has its own inside its folder
     is_live = (RUNS_FOLDER / RUN_INFO_FILE).exists()
     artifacts_io = LiveArtifactsIO(RUNS_FOLDER, run) if is_live else BacktestArtifactsIO(RUNS_FOLDER / run)
+
+    # NaN (e.g. "Avg Winner" with no winners) isn't valid JSON, so the browser couldn't parse the response
+    performance_metrics = {
+        key: None if isinstance(value, float) and math.isnan(value) else value
+        for key, value in artifacts_io.load_performance_metrics().items()
+    }
+    config = artifacts_io.load_config()
+    params_to_show = {key: config[key] for key in PARAMS_TO_SHOW if key in config}
+
     ticks_dict = artifacts_io.load_ticks_and_metrics_file()
     orders_report, fills, positions, order_durations_list = artifacts_io.get_run_data()
 
@@ -297,13 +329,10 @@ def get_data(run):
     records = dict(
         title=title,
         ticks=ticks,
-        ten_sec=[],
-        one_min=[],
-        macd=[],
         fill_markers=markers,
         orderDurations=order_durations_list,
         TickChartLines=[
-            # dict(key="vwap_value", color=light_green, width=2, type=0),
+            dict(key="vwap_value", color=light_green, width=2, type=0),
             dict(key="vwap_low", color="red", width=1.5, type=0),
             # dict(key="vwap_low_inner", color=baby_blue, width=1, type=0),
             # dict(key="vwap_low_outer", color=baby_blue, width=1, type=0),
@@ -315,7 +344,6 @@ def get_data(run):
         TickChart2Lines=[
             # dict(key="vwap_pressure", color="#e70f0f", color_negative=baby_blue, width=1, type=0),
             # dict(key="allow_trading", color="#e70f0f", color_negative=baby_blue, width=1, type=1),
-            # dict(key="macd_value", color="#e70f0f", color_negative=baby_blue, width=1, type=1),
             # dict(key="pnl", color="green", color_negative="red", width=1, type=1),
             dict(key="direction_value", color="green", color_negative="red", width=1, type=1),
         ],
@@ -324,6 +352,8 @@ def get_data(run):
         ],
         VertLines=vert_lines,
         HorizLines=create_horiz_lines_items(ticks),
+        performance_metrics=performance_metrics,
+        params_to_show=params_to_show,
     )
     return jsonify(records)
 

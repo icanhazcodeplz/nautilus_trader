@@ -8,10 +8,8 @@ swept lists), not by a name; see `custom/optimize/study_store.py`. Results are s
 have no result yet: a new grid, days added to the catalog since the last run, or whatever an
 interrupted run left over.
 
-A param set's score is Pnl Per100 over the days: sum of each day's realized PnL divided by the
-sum of each day's shares entered, times 100. That is the same definition
-`custom.statistics.trade_avg_scaled.PnlPer100` applies within a day, so a single day and the full
-set are scored on one scale.
+A param set's score is its total PnL over the days: the sum of each day's realized PnL. Every
+param set is scored on the same days, so the totals compare like for like.
 
 Backtests run in a pool of long-lived worker processes, which take them in chunks of one day's
 param sets. A worker therefore loads a day's ticks from the catalog once and reuses them for every
@@ -62,7 +60,7 @@ MAX_CHUNKS_PER_WORKER = 20
 # so a fixed seed keeps results the same whichever worker runs them.
 WORKER_HASH_SEED = "0"
 N_BOOTSTRAP = 2000
-SAVE_ARTIFACTS = True
+SAVE_ARTIFACTS = False
 
 def run_day(task):
     """
@@ -213,7 +211,7 @@ def _max_drawdown(daily_pnl):
 
 
 def score_param_sets(results: pd.DataFrame, days: list[str]) -> pd.DataFrame:
-    """Pnl Per100 and risk stats per param set, over `days` only."""
+    """Total PnL and risk stats per param set, over `days` only."""
     results = results[results["day"].isin(days)]
     pnl = results.pivot(index="params_hash", columns="day", values="pnl")[days]
     entered = results.pivot(index="params_hash", columns="day", values="entered")[days]
@@ -230,8 +228,7 @@ def score_param_sets(results: pd.DataFrame, days: list[str]) -> pd.DataFrame:
         rows.append(
             {
                 "params_hash": p_hash,
-                "value": round(day_pnl.sum() / total_entered * 100, 3) if total_entered else np.nan,
-                "pnl": round(day_pnl.sum(), 2),
+                "value": round(day_pnl.sum(), 2),
                 "entered": total_entered,
                 "days_traded": int(traded.sum()),
                 "win_rate": round((day_pnl[traded] > 0).mean(), 3) if traded.any() else np.nan,
@@ -361,6 +358,7 @@ if __name__ == "__main__":
     # A past study's hash prefix (see "list"). None = the study defined by the spec below.
     STUDY_HASH = None
 
+    # SYMBOL = "TSLA"
     SYMBOL = "AMZN"
     # Backtest window applied to every day, as New York wall-clock "HH:MM:SS". Each day's UTC
     # offset (EST or EDT) is worked out in `run_single_backtest`.
@@ -373,30 +371,27 @@ if __name__ == "__main__":
         allow_trades=True,
         max_position_multiplier=1,
         trade_size=100,
-        stop_loss=160,
+        stop_loss=130,
         # stop_loss=linspace_int(low=160, high=160, step=80),
         # take_profit=linspace_int(low=20, high=36, step=4),
-        take_profit=40,
-        upper_scalar_multiplier=0.5,
-        rolling_vwap_window=3000,
+        take_profit=linspace_int(low=20, high=24, step=2),
+        band_multiplier=0.5,
+        rolling_vwap_window=[2800, 3000, 3200],
         # rolling_vwap_window=linspace_int(low=2000, high=6000, step=1000),
-        vwap_window=150,
-        variance_window=300,
-        outer_band_multiplier=2.5,
+        band_window=150,
+        band_variance_window=300,
         flip_side_confirm_ticks=150,
-        pressure_window=25,
-        only_buy_if_macd_positive=False,
-        direction_strategy=DirectionStrategy.REVERSION,
-        # direction_strategy=[DirectionStrategy.REVERSION, DirectionStrategy.MOMENTUM],
+        # direction_strategy=[DirectionStrategy.REVERSION, DirectionStrategy.SHORT_ONLY],
+        direction_strategy=DirectionStrategy.SHORT_ONLY,
         direction_threshold=DirectionThreshold.ROLLING_VWAP,
-        # direction_threshold=[DirectionThreshold.OPEN, DirectionThreshold.ROLLING_VWAP],
         exit_strategy=ExitStrategy.SIMPLE_TAKE,
         # exit_strategy=[ExitStrategy.SIT_ON_ROLLING_VWAP, ExitStrategy.SIMPLE_TAKE],
-        num_exit_tiers=2,
-        # num_exit_tiers=linspace_int(1, 3, step=1),
+        num_exit_tiers=1,
         entry_strategy=EntryStrategy.SIT_AT_DISTANCE,
-        entry_distance=linspace_int(low=55, high=60, step=5),
-        start_trading_at="09:29:58",
+        # entry_distance=linspace_int(low=20, high=35, step=5),
+        entry_distance=[33, 35, 37],
+        start_trading_at="09:29:57",
+        # stop_entries_after=["09:30:30", "09:31"],
         stop_entries_after="09:31",
         force_exit_at="09:40",
         entry_exclusion_band=None,

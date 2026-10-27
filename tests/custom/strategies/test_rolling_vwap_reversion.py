@@ -441,7 +441,6 @@ def _tick_strategy(
     s.take_profit = 0.10
     s.vwap = MagicMock(low=9.0, high=11.0)
     s.config = MagicMock(
-        only_buy_if_macd_positive=False,
         trade_size=50,
         entry_distance=entry_distance,
     )
