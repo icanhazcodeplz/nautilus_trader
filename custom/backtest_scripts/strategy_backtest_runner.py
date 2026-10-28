@@ -153,19 +153,19 @@ if __name__ == "__main__":
         allow_trades=True,
         max_position_multiplier=1,
         trade_size=100,
-        stop_loss=100,  # bps, ~$2.00 on AMZN
+        stop_loss=130,  # bps, ~$2.00 on AMZN
         take_profit=22,  # bps, ~$0.60 on AMZN
         band_multiplier=1,
         band_window=1000,
         band_variance_window=2000,
-        rolling_vwap_window=1000,
+        rolling_vwap_window=3000,
         direction_strategy=DirectionStrategy.REVERSION,
         direction_threshold=DirectionThreshold.ROLLING_VWAP,
         exit_strategy=ExitStrategy.SIMPLE_TAKE,
         num_exit_tiers=1,
         entry_strategy=EntryStrategy.SIT_AT_DISTANCE,
-        entry_distance=22,  # bps
-        start_trading_at="09:29:58",
+        entry_distance=33,  # bps
+        start_trading_at="09:29:57",
         stop_entries_after="09:31",
         force_exit_at="09:40",
         entry_exclusion_band=None,
@@ -177,11 +177,12 @@ if __name__ == "__main__":
     #     candidate_str, strategy_name, params, artifacts_location=BACKTEST_RUNS_PATH, log_level="ERROR", analyze=True
     # )
 
-    symbol = "AAPL"
+    symbol = "AMZN"
 
-    day_strs = ["2026-1-21"]
-    day_strs = catalog_days_available(symbol)
+    day_strs = ["2026-10-21"]
+    day_strs = catalog_days_available(symbol)[100:]
     for day_str in day_strs:
+        print(f"\nRUNNING {day_str}")
         start_str_est = f"{day_str} 09:29"
         end_str_est = f"{day_str} 09:41"
         run_single_backtest(
@@ -191,7 +192,6 @@ if __name__ == "__main__":
             config,
             save_artifacts=True,
             save_artifacts_to_temp=False,
-            allow_trading_times=None,
             log_level=log_level,
             analyze=True,
             bypass_logging=True,

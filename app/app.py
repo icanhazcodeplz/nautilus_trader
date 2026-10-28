@@ -112,7 +112,7 @@ def create_horiz_lines_items(ticks):
 
     day_start = pd.Timestamp(int(ticks[0]["time"]), unit="ns", tz="UTC").tz_convert("US/Eastern").normalize()
     start_ns = (day_start + pd.Timedelta(hours=9, minutes=30)).value
-    end_ns = (day_start + pd.Timedelta(hours=9, minutes=35)).value
+    end_ns = (day_start + pd.Timedelta(hours=9, minutes=31)).value
 
     first_min_end_ns = (day_start + pd.Timedelta(hours=9, minutes=31)).value
     first_10s_end_ns = (day_start + pd.Timedelta(hours=9, minutes=30, seconds=10)).value
@@ -140,15 +140,15 @@ def create_horiz_lines_items(ticks):
             "line_style": "dotted",
             "opacity": 0.8,
         },
-        {
-            "start_time": str(start_ns),
-            "end_time": str(end_ns),
-            "price": open_price + 0.75,
-            "color": highlight_green,
-            "annotation": "+.75",
-            "line_style": "dotted",
-            "opacity": 0.8,
-        },
+        # {
+        #     "start_time": str(start_ns),
+        #     "end_time": str(end_ns),
+        #     "price": open_price + 0.75,
+        #     "color": highlight_green,
+        #     "annotation": "+.75",
+        #     "line_style": "dotted",
+        #     "opacity": 0.8,
+        # },
         {
             "start_time": str(start_ns),
             "end_time": str(end_ns),
@@ -158,15 +158,15 @@ def create_horiz_lines_items(ticks):
             "line_style": "dotted",
             "opacity": 0.8,
         },
-        {
-            "start_time": str(start_ns),
-            "end_time": str(end_ns),
-            "price": open_price - 0.75,
-            "color": highlight_green,
-            "annotation": "-.75",
-            "line_style": "dotted",
-            "opacity": 0.8,
-        },
+        # {
+        #     "start_time": str(start_ns),
+        #     "end_time": str(end_ns),
+        #     "price": open_price - 0.75,
+        #     "color": highlight_green,
+        #     "annotation": "-.75",
+        #     "line_style": "dotted",
+        #     "opacity": 0.8,
+        # },
         {
             "start_time": str(start_ns),
             "end_time": str(end_ns),
@@ -344,11 +344,11 @@ def get_data(run):
         TickChart2Lines=[
             # dict(key="vwap_pressure", color="#e70f0f", color_negative=baby_blue, width=1, type=0),
             # dict(key="allow_trading", color="#e70f0f", color_negative=baby_blue, width=1, type=1),
-            # dict(key="pnl", color="green", color_negative="red", width=1, type=1),
-            dict(key="direction_value", color="green", color_negative="red", width=1, type=1),
+            dict(key="pnl", color="green", color_negative="red", width=1, type=1, style="histogram"),
+            # dict(key="direction_value", color="green", color_negative="red", width=1, type=1),
         ],
         TickChart3Lines=[
-            dict(key="position", color="#e70f0f", color_negative=baby_blue, width=1, type=1),
+            dict(key="position", color="green", color_negative="red", width=1, type=1, style="histogram"),
         ],
         VertLines=vert_lines,
         HorizLines=create_horiz_lines_items(ticks),

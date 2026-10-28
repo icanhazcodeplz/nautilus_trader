@@ -1,4 +1,5 @@
 import random
+from datetime import date
 from datetime import time
 from enum import StrEnum
 
@@ -9,6 +10,7 @@ from custom.strategies._side import Side
 from custom.strategies.base import ET_TZ, BaseStrategy, BaseStrategyConfig
 from custom.strategies._exit_tiers import ExitTiers
 from custom.strategies.metric import Metric
+from custom.utils.paths import data_subdir
 from nautilus_trader.common.enums import LogColor
 from nautilus_trader.model.data import TradeTick
 from nautilus_trader.model.enums import OrderStatus
@@ -62,6 +64,7 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     flip_side_confirm_ticks: int = 150
     entry_strategy: EntryStrategy = EntryStrategy.SIT_AT_DISTANCE
     entry_distance: float | None = None # Required by SIT_AT_DISTANCE, ignored by others.
+    opening_range_pred_pull: int | None = None
     exit_strategy: ExitStrategy
     num_exit_tiers: int = 1
     start_trading_at: str | None = None # "HH:MM" or "HH:MM:SS" in US/Eastern
@@ -87,6 +90,18 @@ def parse_est_time(value: str | None) -> time | None:
         raise ValueError(
             f"Expected a time formatted as 'HH:MM' or 'HH:MM:SS' (e.g. '09:31' or '09:31:15'), got {value!r}",
         ) from None
+
+
+def load_opening_range_predictions(symbol: str) -> dict[date, float]:
+    """
+    The predicted opening range in bps per ET day, from the CSV that
+    custom/scripts/opening_range_predictions.py writes. Empty if there is no file for `symbol`.
+    """
+    path = data_subdir("analysis") / f"{symbol}_opening_range_predictions.csv"
+    if not path.exists():
+        return {}
+    predictions = pd.read_csv(path, index_col="day", parse_dates=True)["predicted_or_bps"].dropna()
+    return {day.date(): float(bps) for day, bps in predictions.items()}
 
 
 def _opposite(side: Side) -> Side:
@@ -145,6 +160,9 @@ class MomoStrategy(BaseStrategy):
             raise ValueError(f"entry_exclusion_band must be >= 0 or None, got {self.config.entry_exclusion_band!r}")
         self._entry_exclusion_band: float | None = self.config.entry_exclusion_band
 
+        if self.config.opening_range_pred_pull is not None and self.config.opening_range_pred_pull < 0:
+            raise ValueError(f"opening_range_pred_pull must be >= 0 or None, got {self.config.opening_range_pred_pull!r}")
+
         if self.entry_strategy == EntryStrategy.SIT_AT_DISTANCE:
             if self.config.entry_distance is None:
                 raise ValueError(f"entry_distance is required with entry_strategy '{self.entry_strategy}'")
@@ -161,6 +179,15 @@ class MomoStrategy(BaseStrategy):
                     f"direction_strategy '{DirectionStrategy.MOMENTUM}' cannot be used with "
                     f"entry_strategy '{self.entry_strategy}'"
                 )
+
+        # Today's SIT_AT_DISTANCE distance in bps; see `_resolve_et_cutoffs`
+        # FIXME: Need to make prediction for current day for running live
+        self._entry_distance: float | None = self.config.entry_distance
+        self._opening_range_predictions: dict[date, float] = (
+            load_opening_range_predictions(self.instrument_id.symbol.value)
+            if self.config.opening_range_pred_pull is not None
+            else {}
+        )
 
         self.take_profit = self.config.take_profit
         self.vwap = VWAPBands(
@@ -326,6 +353,7 @@ class MomoStrategy(BaseStrategy):
     def _on_trade_tick(self, tick: TradeTick) -> None:
         # TODO: Refactor: move "allow_entries" to base.
         self._on_first_tick(tick)
+        self._et_now_ns()  # Resolves the day's cutoffs and entry distance on its first tick
         # self.log.info(f"Trade tick: {tick}")
         # NOTE: Need to be subscribed to order book deltas to get best bid/ask prices
         # ob = self.cache.order_book(self.instrument_id)
@@ -391,12 +419,12 @@ class MomoStrategy(BaseStrategy):
                     self.enter(self.config.trade_size, trail_price, cancel_after_secs=None)
 
             elif self.entry_strategy == EntryStrategy.SIT_AT_DISTANCE:
-                # Keep one entry resting `entry_distance` basis points of the rolling VWAP from the
-                # threshold, below it when long and above it when short.
+                # Keep one entry resting today's entry distance in basis points of the rolling VWAP
+                # from the threshold, below it when long and above it when short.
                 threshold = self._direction_threshold_value
                 rolling_vwap = self.rolling_vwap.value
                 if threshold is not None and rolling_vwap is not None:
-                    distance = rolling_vwap * self.config.entry_distance / 10_000
+                    distance = rolling_vwap * self._entry_distance / 10_000
                     offset = -distance if self.is_long else distance
                     entry_price = self.instrument.make_price(threshold + offset)
                     for order in self.open_entries:
@@ -487,6 +515,35 @@ class MomoStrategy(BaseStrategy):
         self._start_trading_ns = at(self._start_trading_at)
         self._stop_entries_ns = at(self._stop_entries_after)
         self._force_exit_ns = at(self._force_exit_at)
+        self._entry_distance = self._entry_distance_for(day.date())
+
+    def _entry_distance_for(self, day: date) -> float | None:
+        """
+        `entry_distance`, moved `opening_range_pred_pull` bps toward half `day`'s predicted opening
+        range when that is more than `opening_range_pred_pull` away from it. `entry_distance` as is
+        without `opening_range_pred_pull`, and on days without a prediction.
+        """
+        adder = self.config.opening_range_pred_pull
+        if adder is None:
+            return self.config.entry_distance
+        predicted_bps = self._opening_range_predictions.get(day)
+        if predicted_bps is None:
+            self.log.warning(
+                f"No opening range prediction for {day}; using entry_distance {self.config.entry_distance}"
+            )
+            return self.config.entry_distance
+        entry_distance = self.config.entry_distance
+        bps = predicted_bps / 2
+        if bps > entry_distance + adder:
+            entry_distance += adder
+        elif bps < entry_distance - adder:
+            entry_distance -= adder
+        self.log.info(
+            f"Predicted opening range for {day} is {predicted_bps:.2f} bps (half {bps:.2f}); "
+            f"entry_distance {entry_distance}",
+            color=LogColor.BLUE,
+        )
+        return entry_distance
 
     def _entry_blocked_by_exclusion_band(self, price: float) -> bool:
         """Apply `entry_exclusion_band` around the direction threshold."""

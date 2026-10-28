@@ -269,7 +269,18 @@ if __name__ == "__main__":
     # TSEM 2026-05-13 07:00. Received 07:00:01.2 - earnings
     # EOSE 2026-05-13 06:30. Received 06:30:03 - deploy american-made long duration energy storage at scale
 
-    nasdaq_holidays_2026 = [
+    nasdaq_holidays = [
+        pd.Timestamp("2025-01-01"),  # New Year's Day
+        pd.Timestamp("2025-01-09"),  # National Day of Mourning (President Carter)
+        pd.Timestamp("2025-01-20"),  # MLK Day
+        pd.Timestamp("2025-02-17"),  # Presidents' Day
+        pd.Timestamp("2025-04-18"),  # Good Friday
+        pd.Timestamp("2025-05-26"),  # Memorial Day
+        pd.Timestamp("2025-06-19"),  # Juneteenth
+        pd.Timestamp("2025-07-04"),  # Independence Day
+        pd.Timestamp("2025-09-01"),  # Labor Day
+        pd.Timestamp("2025-11-27"),  # Thanksgiving
+        pd.Timestamp("2025-12-25"),  # Christmas
         pd.Timestamp("2026-01-01"),  # New Year's Day
         pd.Timestamp("2026-01-19"),  # MLK Day
         pd.Timestamp("2026-02-16"),  # Presidents' Day
@@ -281,10 +292,10 @@ if __name__ == "__main__":
         pd.Timestamp("2026-11-26"),  # Thanksgiving
         pd.Timestamp("2026-12-25"),  # Christmas
     ]
-    trading_days = pd.bdate_range("2026-01-01", "2026-10-26", freq="C", holidays=nasdaq_holidays_2026)
+    trading_days = pd.bdate_range("2025-01-01", "2026-10-27", freq="C", holidays=nasdaq_holidays)
 
     symbols = ["AMZN", "AAPL", "MSFT", "GOOG", "TSLA"]
-    # symbols = ["GOOG"]
+    symbols = ["AMZN"]
     # New York wall-clock window to download each day. `None` for either end means midnight.
     start_time = None
     end_time = None

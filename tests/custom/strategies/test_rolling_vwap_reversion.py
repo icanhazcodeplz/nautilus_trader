@@ -22,6 +22,7 @@ from custom.strategies.momo import (
     ExitStrategy,
     MomoStrategy,
     MomoStrategyConfig,
+    load_opening_range_predictions,
     parse_est_time,
 )
 
@@ -415,6 +416,8 @@ def _tick_strategy(
     entry_strategy=EntryStrategy.CROSS_VWAP_BAND,
     entry_distance=None,
     is_long=True,
+    opening_range_pred_pull=None,
+    opening_range_predictions=None,
 ):
     """A MomoStrategy mock wired for the real _on_trade_tick."""
     s = MagicMock(spec=MomoStrategy)
@@ -443,7 +446,11 @@ def _tick_strategy(
     s.config = MagicMock(
         trade_size=50,
         entry_distance=entry_distance,
+        opening_range_pred_pull=opening_range_pred_pull,
     )
+    s._entry_distance = entry_distance
+    s._opening_range_predictions = opening_range_predictions or {}
+    s._entry_distance_for = MomoStrategy._entry_distance_for.__get__(s, MomoStrategy)
     s.instrument = MagicMock(make_price=lambda price: round(price, 2))
     s.modify_open_order = MagicMock()
     s._ADJUST_ENTRIES_ONLY_EVERY_NS = 0
@@ -680,7 +687,7 @@ def test_no_band_means_no_effect():
 # ---------------------------------------------------------------------------
 
 
-def _distance_strategy(threshold=10.0, distance=500, is_long=True, resting=(), rolling_vwap=10.0):
+def _distance_strategy(threshold=10.0, distance=500, is_long=True, resting=(), rolling_vwap=10.0, **kw):
     """`distance` is in bps of `rolling_vwap`, so the defaults put the entry $0.50 from the threshold."""
     s = _tick_strategy(
         flipping=False,
@@ -688,6 +695,7 @@ def _distance_strategy(threshold=10.0, distance=500, is_long=True, resting=(), r
         entry_distance=distance,
         threshold=threshold,
         is_long=is_long,
+        **kw,
     )
     s.rolling_vwap = MagicMock(value=rolling_vwap)
     s.open_entries = set(resting)
@@ -757,6 +765,82 @@ def test_zero_distance_rests_on_the_threshold():
     s.enter.assert_called_once_with(50, 10.0, cancel_after_secs=None)
 
 
+def _pull_strategy(predicted_bps, distance=500, pull=20):
+    """A SIT_AT_DISTANCE strategy with `predicted_bps` predicted for POST_OPEN's day."""
+    return _distance_strategy(
+        distance=distance,
+        opening_range_pred_pull=pull,
+        opening_range_predictions={POST_OPEN.tz_convert("US/Eastern").date(): predicted_bps},
+    )
+
+
+def test_opening_range_pred_pull_moves_out_toward_a_wider_predicted_range():
+    s = _pull_strategy(predicted_bps=1100)  # half is 550, more than 20 past 500
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.enter.assert_called_once_with(50, 9.48, cancel_after_secs=None)  # 520 bps of $10
+
+
+def test_opening_range_pred_pull_moves_in_toward_a_narrower_predicted_range():
+    s = _pull_strategy(predicted_bps=800)  # half is 400, more than 20 short of 500
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.enter.assert_called_once_with(50, 9.52, cancel_after_secs=None)  # 480 bps of $10
+
+
+def test_opening_range_pred_pull_leaves_a_prediction_within_the_pull_alone():
+    for predicted_bps in (960, 1000, 1040):  # half is within 20 of 500
+        s = _pull_strategy(predicted_bps=predicted_bps)
+        s._on_trade_tick(MagicMock(price=8.0))
+        s.enter.assert_called_once_with(50, 9.5, cancel_after_secs=None)
+
+
+def test_opening_range_pred_pull_of_zero_never_moves():
+    s = _pull_strategy(predicted_bps=1100, pull=0)
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.enter.assert_called_once_with(50, 9.5, cancel_after_secs=None)
+
+
+def test_opening_range_pred_pull_falls_back_to_entry_distance_on_a_day_without_one():
+    s = _distance_strategy(
+        distance=500,
+        opening_range_pred_pull=20,
+        opening_range_predictions={pd.Timestamp("2026-03-09").date(): 1100.0},
+    )
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.enter.assert_called_once_with(50, 9.5, cancel_after_secs=None)
+
+
+def test_predictions_are_ignored_without_opening_range_pred_pull():
+    s = _pull_strategy(predicted_bps=1100, pull=None)
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.enter.assert_called_once_with(50, 9.5, cancel_after_secs=None)
+
+
+def test_the_entry_distance_is_re_resolved_each_day():
+    today = POST_OPEN.tz_convert("US/Eastern").date()
+    s = _distance_strategy(
+        distance=500,
+        opening_range_pred_pull=20,
+        opening_range_predictions={today: 1100.0, today + pd.Timedelta(days=1): 800.0},
+    )
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.enter.assert_called_once_with(50, 9.48, cancel_after_secs=None)
+    next_day = POST_OPEN + pd.Timedelta(days=1)
+    s.clock.timestamp_ns.return_value = next_day.value
+    s.clock.utc_now.return_value = next_day
+    s.enter.reset_mock()
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.enter.assert_called_once_with(50, 9.52, cancel_after_secs=None)
+
+
+def test_load_opening_range_predictions_reads_the_csv_per_day(tmp_path, monkeypatch):
+    (tmp_path / "AMZN_opening_range_predictions.csv").write_text(
+        "day,n_train,predicted_or_bps,or_bps\n2026-05-01,72,117.07,105.45\n2026-05-04,73,,60.0\n"
+    )
+    monkeypatch.setattr("custom.strategies.momo.data_subdir", lambda *dirs: tmp_path)
+    assert load_opening_range_predictions("AMZN") == {pd.Timestamp("2026-05-01").date(): 117.07}
+    assert load_opening_range_predictions("AAPL") == {}
+
+
 # ---------------------------------------------------------------------------
 # sit_at_distance: config combinations it refuses
 # ---------------------------------------------------------------------------
@@ -788,6 +872,11 @@ def test_entry_distance_is_required():
 def test_negative_entry_distance_is_rejected():
     with pytest.raises(ValueError, match="entry_distance must be >= 0"):
         MomoStrategy(config=_config(entry_distance=-0.5), symbol="AMZN")
+
+
+def test_negative_opening_range_pred_pull_is_rejected():
+    with pytest.raises(ValueError, match="opening_range_pred_pull must be >= 0"):
+        MomoStrategy(config=_config(opening_range_pred_pull=-1), symbol="AMZN")
 
 
 def test_entry_exclusion_band_is_rejected():
