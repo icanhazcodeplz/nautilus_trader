@@ -26,7 +26,7 @@ log = Logger(name="MultipleStocks")
 def live_blocking_reasons(config: MomoStrategyConfig) -> list[str]:
     """Return why `config` can't trade a live account, or an empty list when it can."""
     blocking = []
-    if config.trade_size > 4:
+    if config.trade_size > 6:
         blocking.append(f"trade_size={config.trade_size} (max 4)")
     if config.max_position_multiplier > 1:
         blocking.append(f"max_position_multiplier={config.max_position_multiplier} (max 1)")
