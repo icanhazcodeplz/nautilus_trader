@@ -418,9 +418,14 @@ def _tick_strategy(
     is_long=True,
     opening_range_pred_pull=None,
     opening_range_predictions=None,
+    skip_same_side_reentry_after_take_profit=False,
 ):
     """A MomoStrategy mock wired for the real _on_trade_tick."""
     s = MagicMock(spec=MomoStrategy)
+    s._side = Side.LONG if is_long else Side.SHORT
+    s._take_profit_side = None
+    s._stop_out_side = None
+    s._SKIP_SAME_SIDE_REENTRY_AFTER_STOP_OUT = MomoStrategy._SKIP_SAME_SIDE_REENTRY_AFTER_STOP_OUT
     s._stopping_out = False
     s._in_stop_out_cooldown = False
     s._flipping = flipping
@@ -447,6 +452,7 @@ def _tick_strategy(
         trade_size=50,
         entry_distance=entry_distance,
         opening_range_pred_pull=opening_range_pred_pull,
+        skip_same_side_reentry_after_take_profit=skip_same_side_reentry_after_take_profit,
     )
     s._entry_distance = entry_distance
     s._opening_range_predictions = opening_range_predictions or {}
@@ -469,6 +475,7 @@ def _tick_strategy(
     s._et_day_start_ns = 0
     s._et_day_end_ns = 0
     s._entry_blocked_by_exclusion_band = MomoStrategy._entry_blocked_by_exclusion_band.__get__(s, MomoStrategy)
+    s._entry_blocked_by_last_close = MomoStrategy._entry_blocked_by_last_close.__get__(s, MomoStrategy)
     s._flip_side_if_needed = MagicMock()  # exercised on its own above
     s._rolling_tiered_take = MagicMock()
     s.enter = MagicMock()
@@ -609,6 +616,112 @@ def test_resting_entries_are_left_alone_before_the_cutoff():
 def test_bad_cutoff_string_is_rejected(bad):
     with pytest.raises(ValueError):
         parse_est_time(bad)
+
+
+# ---------------------------------------------------------------------------
+# skip_same_side_reentry_after_take_profit and _SKIP_SAME_SIDE_REENTRY_AFTER_STOP_OUT
+# ---------------------------------------------------------------------------
+
+
+def _after_take_profit(take_profit_side, is_long=True, skip=True):
+    """A tick strategy whose last position closed at its take profit on `take_profit_side`."""
+    s = _tick_strategy(flipping=False, is_long=is_long, skip_same_side_reentry_after_take_profit=skip)
+    s._et_now_ns()  # Resolve the day first: a new day clears the take profit side
+    s._take_profit_side = take_profit_side
+    return s
+
+
+def _after_stop_out(stop_out_side, is_long=True):
+    """A tick strategy whose last position was stopped out on `stop_out_side`."""
+    s = _tick_strategy(flipping=False, is_long=is_long)
+    s._et_now_ns()  # Resolve the day first: a new day clears the stop-out side
+    s._stop_out_side = stop_out_side
+    return s
+
+
+@pytest.mark.parametrize("is_long", [True, False])
+def test_no_entry_on_the_side_that_took_profit(is_long):
+    side = Side.LONG if is_long else Side.SHORT
+    s = _after_take_profit(side, is_long=is_long)
+    s._on_trade_tick(MagicMock(price=8.0 if is_long else 12.0))
+    s.enter.assert_not_called()
+
+
+def test_the_rest_of_a_partly_filled_entry_is_canceled_after_a_take_profit():
+    entry = MagicMock()
+    s = _after_take_profit(Side.LONG)
+    s.entries_to_cancel = {entry}
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.cancel_open_order.assert_called_once_with(entry)
+
+
+def test_the_other_side_still_enters_after_a_take_profit():
+    s = _after_take_profit(Side.SHORT, is_long=True)
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.enter.assert_called_once()
+
+
+def test_take_profit_does_not_block_entries_when_unset():
+    s = _after_take_profit(Side.LONG, skip=False)
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.enter.assert_called_once()
+
+
+def test_a_new_day_clears_the_take_profit_side():
+    s = _after_take_profit(Side.LONG)
+    s.clock.timestamp_ns.return_value = _et("09:31").value + pd.Timedelta(days=1).value
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.enter.assert_called_once()
+
+
+@pytest.mark.parametrize("is_long", [True, False])
+def test_no_entry_on_the_side_that_was_stopped_out(is_long):
+    side = Side.LONG if is_long else Side.SHORT
+    s = _after_stop_out(side, is_long=is_long)
+    s._on_trade_tick(MagicMock(price=8.0 if is_long else 12.0))
+    s.enter.assert_not_called()
+
+
+def test_the_other_side_still_enters_after_a_stop_out():
+    s = _after_stop_out(Side.SHORT, is_long=True)
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.enter.assert_called_once()
+
+
+def test_a_new_day_clears_the_stop_out_side():
+    s = _after_stop_out(Side.LONG)
+    s.clock.timestamp_ns.return_value = _et("09:31").value + pd.Timedelta(days=1).value
+    s._on_trade_tick(MagicMock(price=8.0))
+    s.enter.assert_called_once()
+
+
+def _closing_strategy(side, stopping_out, take_profit_side=None, stop_out_side=None):
+    s = MagicMock(spec=MomoStrategy)
+    s._side = side
+    s._stopping_out = stopping_out
+    s._take_profit_side = take_profit_side
+    s._stop_out_side = stop_out_side
+    s._SKIP_SAME_SIDE_REENTRY_AFTER_STOP_OUT = MomoStrategy._SKIP_SAME_SIDE_REENTRY_AFTER_STOP_OUT
+    s.config = MagicMock(skip_same_side_reentry_after_take_profit=True)
+    s._entry_blocked_by_last_close = MomoStrategy._entry_blocked_by_last_close.__get__(s, MomoStrategy)
+    s.log = MagicMock()
+    return s
+
+
+@pytest.mark.parametrize("side", [Side.LONG, Side.SHORT])
+def test_a_close_without_a_stop_out_is_a_take_profit(side):
+    s = _closing_strategy(side, stopping_out=False, stop_out_side=Side.SHORT)
+    MomoStrategy.on_position_closed(s, MagicMock())
+    assert s._take_profit_side == side
+    assert s._stop_out_side is None  # The earlier stop-out no longer blocks anything
+
+
+@pytest.mark.parametrize("side", [Side.LONG, Side.SHORT])
+def test_a_close_while_stopping_out_is_a_stop_out(side):
+    s = _closing_strategy(side, stopping_out=True, take_profit_side=Side.SHORT)
+    MomoStrategy.on_position_closed(s, MagicMock())
+    assert s._stop_out_side == side
+    assert s._take_profit_side is None  # The earlier take profit no longer blocks anything
 
 
 # ---------------------------------------------------------------------------

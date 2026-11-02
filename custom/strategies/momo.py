@@ -14,6 +14,7 @@ from custom.utils.paths import data_subdir
 from nautilus_trader.common.enums import LogColor
 from nautilus_trader.model.data import TradeTick
 from nautilus_trader.model.enums import OrderStatus
+from nautilus_trader.model.events import PositionClosed
 
 
 class DirectionStrategy(StrEnum):
@@ -72,6 +73,7 @@ class MomoStrategyConfig(BaseStrategyConfig, frozen=True, kw_only=True):
     force_exit_at: str | None = None
 
     entry_exclusion_band: float | None = None
+    skip_same_side_reentry_after_take_profit: bool = False
 
     print_update_every_secs: int | None = None
     allow_trades: bool = True
@@ -120,6 +122,7 @@ class MomoStrategy(BaseStrategy):
     _ADJUST_ENTRIES_ONLY_EVERY_NS = 1000e6
     _MAX_ALLOWED_EXIT_DIFF_SECS = 5
     _LOG_FLIP_WAIT_EVERY_NS = 5e9  # Throttle for the "flip still waiting" line
+    _SKIP_SAME_SIDE_REENTRY_AFTER_STOP_OUT = True
 
     def __init__(self, config: MomoStrategyConfig, symbol: str) -> None:
         super().__init__(config, symbol)
@@ -231,6 +234,9 @@ class MomoStrategy(BaseStrategy):
         self._side_signal_count: int = 0
         self._direction_threshold_value: float | None = None
         self._last_flip_wait_log_ns: int = 0
+        # Side of the last position closed today, under whichever of these it closed by
+        self._take_profit_side: Side | None = None
+        self._stop_out_side: Side | None = None
 
     def _on_first_tick(self, tick: TradeTick):
         if self._completed_first_tick_logic:
@@ -381,6 +387,12 @@ class MomoStrategy(BaseStrategy):
                 self.cancel_open_order(order)
         if self._entry_blocked_by_exclusion_band(float(price)):
             allow_entries = False
+        if self._entry_blocked_by_last_close():
+            allow_entries = False
+            # A partly filled entry can still be resting for the rest of its size. Re-issued
+            # every tick, as a cancel can be a no-op or be refused.
+            for order in self.entries_to_cancel:
+                self.cancel_open_order(order)
 
         # ENTRY LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         if (
@@ -516,6 +528,8 @@ class MomoStrategy(BaseStrategy):
         self._stop_entries_ns = at(self._stop_entries_after)
         self._force_exit_ns = at(self._force_exit_at)
         self._entry_distance = self._entry_distance_for(day.date())
+        self._take_profit_side = None
+        self._stop_out_side = None
 
     def _entry_distance_for(self, day: date) -> float | None:
         """
@@ -560,6 +574,23 @@ class MomoStrategy(BaseStrategy):
             # to it are allowed. No threshold yet means an entry cannot qualify.
             return threshold is None or abs(price - threshold) > band
         return False
+
+    def _entry_blocked_by_last_close(self) -> bool:
+        """Apply `skip_same_side_reentry_after_take_profit` and `_SKIP_SAME_SIDE_REENTRY_AFTER_STOP_OUT`."""
+        if self.config.skip_same_side_reentry_after_take_profit and self._side == self._take_profit_side:
+            return True
+        return self._SKIP_SAME_SIDE_REENTRY_AFTER_STOP_OUT and self._side == self._stop_out_side
+
+    def on_position_closed(self, event: PositionClosed) -> None:
+        # A stop-out or force exit sets `_stopping_out` before it reprices the exits, so a close
+        # without it is the take profit filling. The side can't have changed yet: set_side only
+        # switches once flat, on a later tick.
+        stopped_out = self._stopping_out
+        self._take_profit_side = None if stopped_out else self._side
+        self._stop_out_side = self._side if stopped_out else None
+        if self._entry_blocked_by_last_close():
+            reason = "Stopped out" if stopped_out else "Take profit"
+            self.log.info(f"{reason} on '{self._side}': no more '{self._side}' entries", color=LogColor.YELLOW)
 
     def _rolling_tiered_take(self):
         exposure_qty = self.exposure
