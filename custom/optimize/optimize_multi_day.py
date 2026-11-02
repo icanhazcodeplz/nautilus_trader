@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Grid-search MomoStrategy params for one symbol over every day in the catalog.
+Grid-search MomoStrategy params for one symbol over every catalog day in `YEAR`.
 
 A study is identified by the hash of its spec (symbol, time window and the `params` dict with its
 swept lists), not by a name; see `custom/optimize/study_store.py`. Results are stored per
 `(param set, day)` and shared between studies, so `MODE = "run"` only ever backtests pairs that
 have no result yet: a new grid, days added to the catalog since the last run, or whatever an
-interrupted run left over.
+interrupted run left over. With `SAVE_ARTIFACTS`, it also re-runs pairs that have a result but no
+saved artifacts.
 
 A param set's score is its total PnL over the days: the sum of each day's realized PnL. Every
 param set is scored on the same days, so the totals compare like for like.
@@ -34,6 +35,7 @@ import msgspec
 import numpy as np
 import pandas as pd
 
+from custom.artifacts import backtest_artifacts_exist
 from custom.backtest_scripts.strategy_backtest_runner import run_single_backtest
 from custom.backtest_utils.load_catalog_data import BACKTESTING_CATALOG
 from custom.backtest_utils.load_catalog_data import catalog_days_available
@@ -61,6 +63,17 @@ MAX_CHUNKS_PER_WORKER = 20
 WORKER_HASH_SEED = "0"
 N_BOOTSTRAP = 2000
 SAVE_ARTIFACTS = False
+# Only catalog days in this year are run and scored. None = every catalog day.
+YEAR = 2026
+
+
+def study_days(symbol) -> list[str]:
+    """The catalog days studies run and score on: those in `YEAR`."""
+    days = catalog_days_available(symbol)
+    if YEAR is None:
+        return days
+    return [day for day in days if day.startswith(f"{YEAR}-")]
+
 
 def run_day(task):
     """
@@ -171,19 +184,22 @@ def run_study(conn, symbol, start_time, end_time, params, restart=False) -> str:
         deleted = study_store.delete_study_results(conn, study_hash)
         print(f"Restart: deleted {deleted} day results")
 
-    days = catalog_days_available(symbol)
+    days = study_days(symbol)
     if not days:
-        raise ValueError(f"No catalog days for {symbol}")
+        raise ValueError(f"No catalog days for {symbol} in {YEAR}")
     grid = {study_store.params_hash(symbol, start_time, end_time, config): config for config in configs}
     missing = study_store.missing_pairs(conn, study_hash, days)
+    no_artifacts = _pairs_without_artifacts(grid, symbol, days, start_time, end_time, skip=missing)
     print(
         f"Study {study_hash[:HASH_DISPLAY_LEN]} | {symbol} {start_time}-{end_time} | {len(grid)} param sets x "
-        f"{len(days)} days | {len(grid) * len(days) - len(missing)} done, {len(missing)} to run\n"
+        f"{len(days)} days | {len(grid) * len(days) - len(missing)} done, {len(missing)} to run, "
+        f"{len(no_artifacts)} to re-run for their artifacts\n"
     )
-    if not missing:
+    to_run = missing + no_artifacts
+    if not to_run:
         return study_hash
 
-    tasks = [(p_hash, symbol, day, start_time, end_time, grid[p_hash]) for p_hash, day in missing]
+    tasks = [(p_hash, symbol, day, start_time, end_time, grid[p_hash]) for p_hash, day in to_run]
     started = datetime.now()
     # `chunksize=1` hands each worker one of our day chunks at a time, rather than the pool
     # batching several of them together. Each chunk's results are stored as it lands; a backtest
@@ -200,6 +216,23 @@ def run_study(conn, symbol, start_time, end_time, params, restart=False) -> str:
     study_store.touch_study(conn, study_hash)
     print(f"TOTAL RUN TIME: {datetime.now() - started}\n")
     return study_hash
+
+
+def _pairs_without_artifacts(grid, symbol, days, start_time, end_time, skip) -> list[tuple[str, str]]:
+    """
+    With `SAVE_ARTIFACTS`, the `(params_hash, day)` pairs that have a result but no saved artifacts,
+    e.g. ones run while `SAVE_ARTIFACTS` was off. Re-running one stores the same result again.
+    """
+    if not SAVE_ARTIFACTS:
+        return []
+    skip = set(skip)
+    return [
+        (p_hash, day)
+        for p_hash, config in grid.items()
+        for day in days
+        if (p_hash, day) not in skip
+        and not backtest_artifacts_exist(symbol, config, f"{day} {start_time}", f"{day} {end_time}")
+    ]
 
 
 # SHOW ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -263,7 +296,10 @@ def show_study(conn, study_hash_prefix):
     study_hash = study["study_hash"]
     spec = study["spec"]
     param_sets = study_store.study_param_sets(conn, study_hash)
+    all_days = study_days(study["symbol"])
+    # Results are shared between studies, so there can be some for days outside `YEAR`
     results = study_store.load_study_results(conn, study_hash)
+    results = results[results["day"].isin(all_days)]
 
     swept = [p for p in study_store.swept_names(spec) if param_sets[p].astype(str).nunique() > 1]
     fixed = {name: val for name, val in spec.items() if not isinstance(val, list)}
@@ -275,7 +311,7 @@ def show_study(conn, study_hash_prefix):
     print(f"fixed: {fixed}\n")
 
     days = _comparable_days(results, param_sets["params_hash"])
-    n_missing = len(set(catalog_days_available(study["symbol"])) - set(days))
+    n_missing = len(set(all_days) - set(days))
     if n_missing:
         print(f"NOTE: {n_missing} catalog day(s) not run for every param set; MODE='run' backfills them.\n")
     if not days:
@@ -316,16 +352,18 @@ def list_studies(conn, symbol=None):
         print(f"No studies{f' for {symbol}' if symbol else ''}")
         return
 
-    catalog_days = {}
+    days_by_symbol = {}
     rows = []
     for study in studies.itertuples():
+        if study.symbol not in days_by_symbol:
+            days_by_symbol[study.symbol] = study_days(study.symbol)
+        all_days = days_by_symbol[study.symbol]
         param_sets = study_store.study_param_sets(conn, study.study_hash)
         results = study_store.load_study_results(conn, study.study_hash)
+        results = results[results["day"].isin(all_days)]
         days = _comparable_days(results, param_sets["params_hash"])
         best = score_param_sets(results, days)["value"].max() if days else np.nan
-        if study.symbol not in catalog_days:
-            catalog_days[study.symbol] = len(catalog_days_available(study.symbol))
-        total_days = catalog_days[study.symbol]
+        total_days = len(all_days)
         swept = {name: val for name, val in study.spec.items() if isinstance(val, list)}
         rows.append(
             {
@@ -363,7 +401,7 @@ if __name__ == "__main__":
     # Backtest window applied to every day, as New York wall-clock "HH:MM:SS". Each day's UTC
     # offset (EST or EDT) is worked out in `run_single_backtest`.
     START_TIME = "09:29:00"
-    END_TIME = "09:41:00"
+    END_TIME = "09:46:00"
     # Momo params. A list is swept by the grid; anything else is fixed. A study's hash covers all
     # of it, so any edit here starts a new study -- one that reuses every result it shares with
     # earlier studies.
@@ -371,30 +409,29 @@ if __name__ == "__main__":
         allow_trades=True,
         max_position_multiplier=1,
         trade_size=100,
-        stop_loss=130,
+        stop_loss=120,
         # stop_loss=linspace_int(low=160, high=160, step=80),
-        # take_profit=linspace_int(low=20, high=36, step=4),
-        take_profit=linspace_int(low=20, high=26, step=2),
+        # take_profit=linspace_int(low=30, high=36, step=2), # AAPL
+        take_profit=linspace_int(low=21, high=26, step=1),  # AMZN
         band_multiplier=0.5,
         rolling_vwap_window=3000,
         # rolling_vwap_window=linspace_int(low=2000, high=6000, step=1000),
         band_window=150,
         band_variance_window=300,
         flip_side_confirm_ticks=150,
-        direction_strategy=[DirectionStrategy.REVERSION, DirectionStrategy.SHORT_ONLY],
-        # direction_strategy=DirectionStrategy.SHORT_ONLY,
-        direction_threshold=[DirectionThreshold.OPEN, DirectionThreshold.ROLLING_VWAP],
+        direction_strategy=[DirectionStrategy.SHORT_ONLY, DirectionStrategy.REVERSION],
+        direction_threshold=DirectionThreshold.ROLLING_VWAP,
         exit_strategy=ExitStrategy.SIMPLE_TAKE,
-        # exit_strategy=[ExitStrategy.SIT_ON_ROLLING_VWAP, ExitStrategy.SIMPLE_TAKE],
         num_exit_tiers=1,
         entry_strategy=EntryStrategy.SIT_AT_DISTANCE,
-        # entry_distance=linspace_int(low=20, high=35, step=5),
-        entry_distance=[32, 33, 34],
-        opening_range_pred_pull=[0, 1,2],
+        entry_distance=[30,31,32,33,34,35],
+        opening_range_pred_pull=None,
         start_trading_at="09:29:57",
         # stop_entries_after=["09:30:30", "09:31"],
         stop_entries_after="09:31",
-        force_exit_at="09:40",
+        force_exit_at=["09:33", "09:35", "09:40"],
+        # skip_same_side_reentry_after_take_profit=[True, False],
+        skip_same_side_reentry_after_take_profit=True,
         entry_exclusion_band=None,
     )
 
