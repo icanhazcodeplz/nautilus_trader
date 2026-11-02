@@ -10,6 +10,8 @@ import msgspec
 import numpy as np
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from custom.strategies.base import BaseStrategyConfig
 from custom.utils.market_utils import market_round
@@ -29,14 +31,10 @@ BACKTEST_RUNS_TEMP_FOLDER = data_subdir("backtest_runs", "temp", "temp")
 BACKTEST_DIR_DATE_FORMAT = "%Y%m%d-%H%M"
 
 
-
-def backtest_dir(symbol: str, config: BaseStrategyConfig, start_str_est: str, end_str_est: str):
-    """Return "YYYYMMDD-HHMM_YYYYMMDD-HHMM" for a New York wall-clock "YYYY-MM-DD HH:MM[:SS]" window."""
-
+def backtest_dir(symbol: str, config: BaseStrategyConfig, start_str_est: str, end_str_est: str, mkdir:bool=True):
     start_str = datetime.datetime.fromisoformat(start_str_est).strftime(BACKTEST_DIR_DATE_FORMAT)
     end_str = datetime.datetime.fromisoformat(end_str_est).strftime(BACKTEST_DIR_DATE_FORMAT)
-    return data_subdir("backtest_runs", symbol.upper(), config.config_hash, f"{start_str}_{end_str}")
-
+    return data_subdir("backtest_runs", symbol.upper(), config.config_hash, f"{start_str}_{end_str}", mkdir=mkdir)
 
 def dict_to_file(dict_, filename):
     with open(filename, "w") as f:
@@ -176,11 +174,13 @@ class _ArtifactsIO(ABC):
 
         return df
 
-    def save_ticks_and_metrics(self, metrics):
-        self._save_pickle(metrics, "ticks_and_metrics.pkl")
+    @abstractmethod
+    def save_ticks_and_metrics(self, ticks_and_metrics):
+        pass
 
+    @abstractmethod
     def load_ticks_and_metrics_file(self):
-        return self._load_pickle("ticks_and_metrics.pkl")
+        pass
 
     @abstractmethod
     def save_run_info(self, symbol: str):
@@ -192,6 +192,58 @@ class _ArtifactsIO(ABC):
 
 
 class BacktestArtifactsIO(_ArtifactsIO):
+
+    def save_ticks_and_metrics(self, ticks_and_metrics):
+        """
+        Save the strategy's {ts: row} dict as Parquet, one column per row key and a `ts` column.
+        """
+        rows = ticks_and_metrics.values()
+        columns = {"ts": pa.array(list(ticks_and_metrics), type=pa.int64())}
+        for key in dict.fromkeys(key for row in rows for key in row):
+            values = [row.get(key) for row in rows]
+            if any(isinstance(v, float) for v in values):
+                columns[key] = pa.array(values, type=pa.float32())
+            else:
+                columns[key] = pa.array(values)  # ints (and bools) keep their type
+        table = pa.table(columns)
+
+        # Deltas suit the timestamps and slowly changing ints; splitting floats into byte streams
+        # lets zstd find the repeated sign/exponent bytes. Dictionary encoding has to be off to use them.
+        encodings = {}
+        for field in table.schema:
+            if pa.types.is_integer(field.type):
+                encodings[field.name] = "DELTA_BINARY_PACKED"
+            elif pa.types.is_floating(field.type):
+                encodings[field.name] = "BYTE_STREAM_SPLIT"
+        pq.write_table(
+            table,
+            self.directory / "ticks_and_metrics.parquet",
+            compression="zstd",
+            compression_level=22,
+            use_dictionary=False,
+            column_encoding=encodings,
+        )
+
+    def load_ticks_and_metrics_file(self):
+        """The {ts: row} dict that save_ticks_and_metrics saved, each row without its missing keys."""
+        path = self.directory / "ticks_and_metrics.parquet"
+        if not path.exists():
+            return self._load_pickle("ticks_and_metrics.pkl")  # Backtests saved before Parquet
+
+        table = pq.read_table(path)
+        times = table.column("ts").to_pylist()
+        columns = {name: table.column(name).to_pylist() for name in table.column_names if name != "ts"}
+        # Catalog prices are whole cents (4 decimals under $1, see alpaca_download._price_precision),
+        # and float32 is within half a cent of them up to $131,072, so rounding restores them exactly
+        if "price" in columns:
+            columns["price"] = [None if p is None else market_round(p) for p in columns["price"]]
+        if "pnl" in columns:
+            columns["pnl"] = [None if p is None else round(p, 2) for p in columns["pnl"]]
+        return {
+            ts: {name: values[i] for name, values in columns.items() if values[i] is not None}
+            for i, ts in enumerate(times)
+        }
+
     def save_run_info(self, symbol: str):
         """Record the facts about a backtest, mirroring a live run's run_info.json."""
         info = {"run_start": RUN_START_TIME_AS_STR, "symbol": symbol.upper(), **git_info()}
@@ -346,6 +398,12 @@ class LiveArtifactsIO(_ArtifactsIO):
         """Record the node-wide facts about a live run. MultipleStocks calls this before the node starts."""
         info = {"trader_id": trader_id.value, "run_start": run_start, "paper": paper, "symbols": symbols, **git_info()}
         dict_to_file(info, Path(run_dir) / RUN_INFO_FILE)
+
+    def save_ticks_and_metrics(self, ticks_and_metrics):
+        self._save_pickle(ticks_and_metrics, "ticks_and_metrics.pkl")
+
+    def load_ticks_and_metrics_file(self):
+        return self._load_pickle("ticks_and_metrics.pkl")
 
     def load_run_info(self) -> dict | None:
         path = self.run_dir / RUN_INFO_FILE

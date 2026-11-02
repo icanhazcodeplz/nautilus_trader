@@ -35,7 +35,7 @@ import msgspec
 import numpy as np
 import pandas as pd
 
-from custom.artifacts import backtest_artifacts_exist
+from custom.artifacts import backtest_dir
 from custom.backtest_scripts.strategy_backtest_runner import run_single_backtest
 from custom.backtest_utils.load_catalog_data import BACKTESTING_CATALOG
 from custom.backtest_utils.load_catalog_data import catalog_days_available
@@ -231,7 +231,7 @@ def _pairs_without_artifacts(grid, symbol, days, start_time, end_time, skip) -> 
         for p_hash, config in grid.items()
         for day in days
         if (p_hash, day) not in skip
-        and not backtest_artifacts_exist(symbol, config, f"{day} {start_time}", f"{day} {end_time}")
+        and not backtest_dir(symbol, config, f"{day} {start_time}", f"{day} {end_time}", mkdir=False).exists()
     ]
 
 

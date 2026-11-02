@@ -6,18 +6,19 @@ from nautilus_trader import PACKAGE_ROOT, ENV
 from nautilus_trader.model.identifiers import TraderId
 
 
-def repo_path(*dirs):
+def repo_path(*dirs, mkdir=True):
     directory = Path(PACKAGE_ROOT)
     for dir in dirs:
         directory = Path(directory, dir)
         if isinstance(dir, str) and "." in dir:
             return directory
-        directory.mkdir(exist_ok=True)
+        if mkdir:
+            directory.mkdir(exist_ok=True)
     return directory
 
 
-def data_subdir(*dirs):
-    return repo_path("data", *dirs)
+def data_subdir(*dirs, mkdir=True):
+    return repo_path("data", *dirs, mkdir=mkdir)
 
 
 def live_run_artifacts_dir(*dirs, paper=True):
