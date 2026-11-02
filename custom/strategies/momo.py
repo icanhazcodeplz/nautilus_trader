@@ -119,7 +119,7 @@ def is_market_open(now_utc: pd.Timestamp) -> bool:
 
 class MomoStrategy(BaseStrategy):
     _ADJUST_EXITS_ONLY_EVERY_NS = 80e6  # e6 converts from ms to ns
-    _ADJUST_ENTRIES_ONLY_EVERY_NS = 1000e6
+    _ADJUST_ENTRIES_ONLY_IF_CHANGE_BY_BPS = 2
     _MAX_ALLOWED_EXIT_DIFF_SECS = 5
     _LOG_FLIP_WAIT_EVERY_NS = 5e9  # Throttle for the "flip still waiting" line
     _SKIP_SAME_SIDE_REENTRY_AFTER_STOP_OUT = True
@@ -227,7 +227,6 @@ class MomoStrategy(BaseStrategy):
 
         self._exit_diff_start_ns: int | None = None
         self._last_exit_adjustment_ns: int | None = None
-        self._last_entry_adjustment_ns: int | None = None
         self._completed_first_tick_logic: bool = False
 
         self._pending_side_signal: Side | None = None
@@ -250,8 +249,6 @@ class MomoStrategy(BaseStrategy):
             pass
         if self._last_exit_adjustment_ns is None:
             self._last_exit_adjustment_ns = self.clock.timestamp_ns()
-        if self._last_entry_adjustment_ns is None:
-            self._last_entry_adjustment_ns = self.clock.timestamp_ns()
 
         self._completed_first_tick_logic = True
 
@@ -395,13 +392,7 @@ class MomoStrategy(BaseStrategy):
                 self.cancel_open_order(order)
 
         # ENTRY LOGIC ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-        if (
-            allow_entries
-            and (exposure < self.max_position_allowed)
-            and (self.clock.timestamp_ns() - self._last_entry_adjustment_ns > self._ADJUST_ENTRIES_ONLY_EVERY_NS)
-        ):
-            self._last_entry_adjustment_ns = self.clock.timestamp_ns()
-
+        if allow_entries and (exposure < self.max_position_allowed):
             if self.entry_strategy == EntryStrategy.RANDOM:
                 if (
                     len(entry_orders) == 0
@@ -424,7 +415,7 @@ class MomoStrategy(BaseStrategy):
                 # band on the side the entry sits: the lower band when long, upper when short.
                 trail_price = self.instrument.make_price(self.vwap.high if self.is_short else self.vwap.low)
                 for order in self.open_entries:
-                    if order.price != trail_price:
+                    if self._entry_reprice_due(order, trail_price):
                         self.modify_open_order(order, quantity=order.quantity, price=trail_price)
 
                 if len(entry_orders) == 0:
@@ -440,7 +431,7 @@ class MomoStrategy(BaseStrategy):
                     offset = -distance if self.is_long else distance
                     entry_price = self.instrument.make_price(threshold + offset)
                     for order in self.open_entries:
-                        if order.price != entry_price:
+                        if self._entry_reprice_due(order, entry_price):
                             self.modify_open_order(order, quantity=order.quantity, price=entry_price)
 
                     if len(entry_orders) == 0:
@@ -468,6 +459,18 @@ class MomoStrategy(BaseStrategy):
                         take_price = self.last_entry_price - take_profit
 
                     self.exit(exposure, limit_price=take_price, tag="simple")
+
+    def _entry_reprice_due(self, open_order, target_price) -> bool:
+        """
+        Whether `target_price` is at least `_ADJUST_ENTRIES_ONLY_IF_CHANGE_BY_BPS` from the entry's price.
+
+        The entry's price is the last one requested for it (OpenOrder.price), so a modify still in
+        flight counts as where the entry sits. The 1e-9 absorbs float error on a move of exactly
+        the threshold: $200.00 -> $200.04 is exactly 2 bps but computes as 1.999999999999602.
+        """
+        current = float(open_order.price)
+        move_bps = abs(float(target_price) - current) / current * 10_000
+        return move_bps >= self._ADJUST_ENTRIES_ONLY_IF_CHANGE_BY_BPS - 1e-9
 
     def _bps_of_rolling_vwap(self, bps: float, price: float) -> float:
         reference = self.rolling_vwap.value if self.rolling_vwap.value is not None else price

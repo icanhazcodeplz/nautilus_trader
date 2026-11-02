@@ -25,6 +25,7 @@ from custom.strategies.momo import (
     load_opening_range_predictions,
     parse_est_time,
 )
+from nautilus_trader.model.objects import Price
 
 
 CONFIRM = 3  # Small enough to step through by hand
@@ -459,9 +460,9 @@ def _tick_strategy(
     s._entry_distance_for = MomoStrategy._entry_distance_for.__get__(s, MomoStrategy)
     s.instrument = MagicMock(make_price=lambda price: round(price, 2))
     s.modify_open_order = MagicMock()
-    s._ADJUST_ENTRIES_ONLY_EVERY_NS = 0
+    s._ADJUST_ENTRIES_ONLY_IF_CHANGE_BY_BPS = MomoStrategy._ADJUST_ENTRIES_ONLY_IF_CHANGE_BY_BPS
+    s._entry_reprice_due = MomoStrategy._entry_reprice_due.__get__(s, MomoStrategy)
     s._ADJUST_EXITS_ONLY_EVERY_NS = 0
-    s._last_entry_adjustment_ns = 0
     s._last_exit_adjustment_ns = 0
     s.clock = MagicMock()
     s.clock.timestamp_ns.return_value = now.value
@@ -876,6 +877,75 @@ def test_zero_distance_rests_on_the_threshold():
     s = _distance_strategy(threshold=10.0, distance=0.0)
     s._on_trade_tick(MagicMock(price=8.0))
     s.enter.assert_called_once_with(50, 10.0, cancel_after_secs=None)
+
+
+# A resting entry is only repriced once its target moves _ADJUST_ENTRIES_ONLY_IF_CHANGE_BY_BPS
+# (2 bps) from where it sits. At $250, 2 bps is exactly $0.05.
+
+
+def _resting_at_250(target_threshold, is_long=True):
+    """An entry resting at $250.00, with the threshold placing its target at `target_threshold`."""
+    order = MagicMock(price=250.0, quantity=50)
+    s = _distance_strategy(
+        threshold=target_threshold, distance=0.0, rolling_vwap=250.0, resting=[order], is_long=is_long
+    )
+    return s, order
+
+
+@pytest.mark.parametrize("is_long", [True, False])
+def test_a_move_under_2_bps_does_not_reprice(is_long):
+    s, _order = _resting_at_250(250.04, is_long=is_long)  # 1.6 bps
+    s._on_trade_tick(MagicMock(price=250.0))
+    s.modify_open_order.assert_not_called()
+
+
+@pytest.mark.parametrize("target", [250.05, 249.95])
+def test_a_move_of_exactly_2_bps_reprices_either_way(target):
+    s, order = _resting_at_250(target)
+    s._on_trade_tick(MagicMock(price=250.0))
+    s.modify_open_order.assert_called_once_with(order, quantity=50, price=target)
+
+
+@pytest.mark.parametrize("target", [200.04, 199.96])
+def test_a_move_of_exactly_2_bps_reprices_where_float_math_lands_just_under(target):
+    """$200.00 -> $200.04 is exactly 2 bps but computes as 1.999999999999602."""
+    order = MagicMock(price=200.0, quantity=50)
+    s = _distance_strategy(threshold=target, distance=0.0, rolling_vwap=200.0, resting=[order])
+    s._on_trade_tick(MagicMock(price=200.0))
+    s.modify_open_order.assert_called_once_with(order, quantity=50, price=target)
+
+
+def test_a_move_over_2_bps_reprices():
+    s, order = _resting_at_250(250.10)  # 4 bps
+    s._on_trade_tick(MagicMock(price=250.0))
+    s.modify_open_order.assert_called_once_with(order, quantity=50, price=250.10)
+
+
+def test_entries_are_repriced_on_consecutive_ticks_with_no_time_throttle():
+    """The 1s throttle is gone: the move alone decides, tick after tick."""
+    s, order = _resting_at_250(250.10)
+    s._on_trade_tick(MagicMock(price=250.0))
+    s._on_trade_tick(MagicMock(price=250.0))
+    assert s.modify_open_order.call_count == 2
+
+
+def test_a_new_entry_is_still_sent_when_none_rests():
+    """The threshold only gates repricing; with nothing resting the entry goes out right away."""
+    s = _distance_strategy(threshold=250.04, distance=0.0, rolling_vwap=250.0)
+    s._on_trade_tick(MagicMock(price=250.0))
+    s.enter.assert_called_once_with(50, 250.04, cancel_after_secs=None)
+
+
+def test_the_move_is_measured_from_the_last_requested_price():
+    """OpenOrder.price is the in-flight modify's price, so a target 1 bp past it isn't re-sent."""
+    from custom.strategies._open_order import OpenOrder
+
+    venue_order = MagicMock(price=Price.from_str("250.00"), quantity=50, events=[], filled_qty=0)
+    open_order = OpenOrder(venue_order)
+    open_order._last_modify_price = Price.from_str("250.10")  # modify to 250.10 in flight
+    s = _distance_strategy(threshold=250.12, distance=0.0, rolling_vwap=250.0, resting=[open_order])
+    s._on_trade_tick(MagicMock(price=250.0))
+    s.modify_open_order.assert_not_called()
 
 
 def _pull_strategy(predicted_bps, distance=500, pull=20):
