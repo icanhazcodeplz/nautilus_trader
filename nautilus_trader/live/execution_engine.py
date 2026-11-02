@@ -125,6 +125,12 @@ class LiveExecutionEngine(ExecutionEngine):
 
     _sentinel: Final[None] = None
 
+    # How long a PENDING_UPDATE order whose report still shows the pre-modify venue_order_id is
+    # left for its WS 'replaced' event before reconciliation forces OrderUpdated anyway. Must stay
+    # well under what the in-flight check takes to give up and resolve the order as CANCELED
+    # (threshold + retries * interval: ~30s with the live runner's 5s / 5 / 5s).
+    _PENDING_UPDATE_SAME_ID_GRACE_NS: Final[int] = 15_000_000_000
+
     def __init__(
         self,
         loop: asyncio.AbstractEventLoop,
@@ -3356,6 +3362,23 @@ class LiveExecutionEngine(ExecutionEngine):
             if order.status in (OrderStatus.INITIALIZED, OrderStatus.SUBMITTED):
                 self._generate_order_accepted(order, report)
             elif order.status == OrderStatus.PENDING_UPDATE:
+                # A report still carrying the pre-modify venue_order_id is the old order, not
+                # a replacement: the replace is still pending at the venue (Alpaca held one for
+                # ~5s at the 2026-11-02 open). Forcing OrderUpdated from it reverts the order
+                # to its old price and ACCEPTED, inviting modifies the venue then refuses
+                # ("order already pending replacement"). Leave it for the WS 'replaced' event,
+                # unless it has been pending long enough that the event was likely dropped.
+                replacement_reported = (
+                    report.venue_order_id is not None and report.venue_order_id != order.venue_order_id
+                )
+                pending_ns = self._clock.timestamp_ns() - order.last_event.ts_event
+                if not replacement_reported and pending_ns < self._PENDING_UPDATE_SAME_ID_GRACE_NS:
+                    self._log.info(
+                        f"Order {order.client_order_id} PENDING_UPDATE and report still shows "
+                        f"venue_order_id={report.venue_order_id}; replace not yet landed, leaving it pending",
+                    )
+                    return True  # Reconciled: nothing to apply yet
+
                 # The WS 'replaced' event was likely dropped. The report confirms
                 # the replacement landed (new venue_order_id, possibly new qty/price).
                 # Generate the OrderUpdated that the missing WS event should have produced.
