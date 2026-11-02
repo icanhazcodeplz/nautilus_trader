@@ -55,6 +55,7 @@ class _FakeStrategy(BaseStrategy):
         self._last_stop_out_attempt = 0
         self._entries_blocked_until_ns = 0
         self._last_wrong_way_flatten_ns = 0
+        self._cancel_blocked_until_ns = {}
         self._trader_helper = None
         self._total_entry_qty = 0
         self._last_tick = MagicMock(price=10.0)
@@ -706,3 +707,75 @@ def test_the_full_path_a_refused_cancel_takes_after_a_switch():
     s._reconcile()
     assert s.cancel_open_order.call_count == 1
     assert s.cancel_open_order.call_args.args[0].client_order_id == "O-stale"
+
+
+# ---------------------------------------------------------------------------
+# A refused cancel is held off, not re-sent every tick
+# ---------------------------------------------------------------------------
+# 2026-10-30 open: Alpaca held a replace pending for 5s and refused every cancel in that window
+# ("original order pending replacement"). The flip re-issues cancels per tick, so 164 went out in
+# 4.6s and used up the rate limit that reconciliation needed for the next ~40s.
+
+NOW_NS = 10_000_000_000  # what the harness clock reads
+
+
+def _refused_cancel_setup():
+    cache_order = MagicMock(is_open=True, side=OrderSide.SELL, status="ACCEPTED", ts_init=0)
+    cache_order.client_order_id = "O-1"
+    s = _with_real_cancel(_FakeStrategy("short", position_qty=0))
+    s._cache_mock.order.return_value = cache_order
+    s.on_order_event(_cancel_rejected("O-1", reason="original order pending replacement"))
+    (open_order,) = s.open_orders
+    return s, open_order
+
+
+def test_a_refused_cancel_is_not_resent_on_every_tick():
+    s, open_order = _refused_cancel_setup()
+
+    for _ in range(100):
+        s.cancel_open_order(open_order)
+
+    s.cancel_order.assert_not_called()
+    assert open_order in s.open_orders, "still tracked, so the flip keeps waiting on it"
+
+
+def test_the_cancel_goes_out_once_the_hold_expires():
+    s, open_order = _refused_cancel_setup()
+
+    s._clock_mock.timestamp_ns.return_value = NOW_NS + int(s._CANCEL_REJECT_COOLDOWN_SECS * 1e9)
+    s.cancel_open_order(open_order)
+
+    s.cancel_order.assert_called_once()
+    assert open_order not in s.open_orders
+    assert s._cancel_blocked_until_ns == {}
+
+
+def test_the_replace_landing_lifts_the_hold_early():
+    from nautilus_trader.model.events import OrderUpdated
+
+    s, open_order = _refused_cancel_setup()
+    updated = MagicMock(spec=OrderUpdated)
+    updated.client_order_id = "O-1"
+
+    s.on_order_event(updated)
+    s.cancel_open_order(open_order)
+
+    s.cancel_order.assert_called_once()
+
+
+def test_the_hold_is_per_order():
+    s, held = _refused_cancel_setup()
+    other = _dated_order(0, OrderSide.SELL, "O-2")
+    s._sell_orders.add(other)
+
+    s.cancel_open_order(other)
+
+    s.cancel_order.assert_called_once()
+    assert held in s.open_orders
+
+
+def test_a_cancel_refused_because_the_order_filled_sets_no_hold():
+    s = _with_real_cancel(_FakeStrategy("short", position_qty=0))
+    s._exec_engine = None
+    s.on_order_event(_cancel_rejected("O-1", reason="order is already in \"filled\" state"))
+    assert s._cancel_blocked_until_ns == {}

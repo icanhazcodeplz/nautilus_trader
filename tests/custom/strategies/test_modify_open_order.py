@@ -11,6 +11,8 @@ pin that the full target is sent, and that the modify is skipped once the target
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from custom.strategies._open_order import OpenOrder
 from custom.strategies.base import BaseStrategy, Side
 from nautilus_trader.common.component import TestClock
@@ -50,9 +52,12 @@ class _ModifyHarness(BaseStrategy):
         self.instrument = MagicMock()
         self.instrument.make_qty.side_effect = lambda q: Quantity.from_int(int(q))
         self.modify_order = MagicMock()
+        self._cache_mock = MagicMock()
+        self._cache_mock.order.return_value = None
 
     log = property(lambda s: s._log_mock)
     clock = property(lambda s: s._clock_mock)
+    cache = property(lambda s: s._cache_mock)
 
     def _on_trade_tick(self, tick):  # abstract
         pass
@@ -167,3 +172,28 @@ def test_a_modify_rejected_in_a_backtest_does_not_try_to_reconcile():
 
     assert strategy._force_reconcile_count == 0
     assert strategy._reconciliation_task is None
+
+
+@pytest.mark.parametrize("reason", ["BROKER", '{"code":42210000,"message":"order is not open"}'])
+def test_a_modify_rejected_after_the_order_filled_is_ignored(reason):
+    """
+    A fill can land at Alpaca while the PATCH is in flight. Alpaca then rejects the replace -- with a
+    bare "BROKER" over the WS, or "order is not open" over REST -- and the fill has already closed
+    the order in the cache. Both happened in the 2026-10-29 09:28 run; the "BROKER" one was logged
+    as an unknown-reason ERROR and each set off a reconciliation that found nothing to fix.
+    """
+    from nautilus_trader.model.events import OrderModifyRejected
+
+    strategy = _ModifyHarness()
+    strategy._buy_orders = set()
+    strategy._sell_orders = set()
+    strategy._trigger_nt_reconciliation = MagicMock()
+    strategy._cache_mock.order.return_value = _order(quantity=4, filled_qty=4, status=OrderStatus.FILLED)
+    event = MagicMock(spec=OrderModifyRejected)
+    event.client_order_id = "O-1"
+    event.reason = reason
+
+    strategy.on_order_event(event)
+
+    strategy._trigger_nt_reconciliation.assert_not_called()
+    strategy._log_mock.error.assert_not_called()

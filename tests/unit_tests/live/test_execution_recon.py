@@ -5087,6 +5087,108 @@ async def test_handle_order_status_transitions_accepted(live_exec_engine, cache,
     assert event_generated
 
 
+# PENDING_UPDATE recovery: only force OrderUpdated once the replacement exists. At the 2026-11-02
+# open, Alpaca held a replace pending ~5s; a reconcile 116ms after the PATCH saw the old order
+# (same venue_order_id, old price) and forced it back to ACCEPTED at the old price.
+
+
+def _pending_update_order(live_exec_engine, cache, account_id, pending_since_ns):
+    if AUDUSD_SIM.id not in [i.id for i in cache.instruments()]:
+        cache.add_instrument(AUDUSD_SIM)
+    order = TestExecStubs.limit_order(instrument=AUDUSD_SIM)
+    cache.add_order(order)
+    order.apply(TestEventStubs.order_submitted(order, account_id=account_id))
+    order.apply(TestEventStubs.order_accepted(order, account_id=account_id, venue_order_id=VenueOrderId("V-OLD")))
+    order.apply(TestEventStubs.order_pending_update(order, ts_event=pending_since_ns))
+    cache.update_order(order)
+    assert order.status == OrderStatus.PENDING_UPDATE
+    return order
+
+
+def _accepted_report(order, account_id, venue_order_id, ts_ns):
+    return OrderStatusReport(
+        account_id=account_id,
+        instrument_id=AUDUSD_SIM.id,
+        client_order_id=order.client_order_id,
+        venue_order_id=VenueOrderId(venue_order_id),
+        order_side=order.side,
+        order_type=order.order_type,
+        time_in_force=TimeInForce.GTC,
+        order_status=OrderStatus.ACCEPTED,
+        price=order.price,
+        quantity=order.quantity,
+        filled_qty=Quantity.from_int(0),
+        report_id=UUID4(),
+        ts_accepted=ts_ns,
+        ts_last=ts_ns,
+        ts_init=ts_ns,
+    )
+
+
+@pytest.mark.asyncio
+async def test_pending_update_is_left_pending_while_report_shows_the_old_order(
+    live_exec_engine,
+    cache,
+    account_id,
+):
+    now_ns = live_exec_engine._clock.timestamp_ns()
+    order = _pending_update_order(live_exec_engine, cache, account_id, pending_since_ns=now_ns)
+
+    result = live_exec_engine._handle_order_status_transitions(
+        order,
+        _accepted_report(order, account_id, "V-OLD", now_ns),
+        trades=[],
+        instrument=AUDUSD_SIM,
+    )
+
+    assert result is True
+    assert order.status == OrderStatus.PENDING_UPDATE
+    assert order.venue_order_id == VenueOrderId("V-OLD")
+
+
+@pytest.mark.asyncio
+async def test_pending_update_is_resolved_when_report_shows_the_replacement(
+    live_exec_engine,
+    cache,
+    account_id,
+):
+    now_ns = live_exec_engine._clock.timestamp_ns()
+    order = _pending_update_order(live_exec_engine, cache, account_id, pending_since_ns=now_ns)
+
+    result = live_exec_engine._handle_order_status_transitions(
+        order,
+        _accepted_report(order, account_id, "V-NEW", now_ns),
+        trades=[],
+        instrument=AUDUSD_SIM,
+    )
+
+    assert result is True
+    assert order.status == OrderStatus.ACCEPTED
+    assert order.venue_order_id == VenueOrderId("V-NEW")
+
+
+@pytest.mark.asyncio
+async def test_pending_update_is_forced_after_the_grace_even_with_the_old_venue_id(
+    live_exec_engine,
+    cache,
+    account_id,
+):
+    """The WS 'replaced' event was probably dropped; don't wait for in-flight retries to cancel it."""
+    now_ns = live_exec_engine._clock.timestamp_ns()
+    stale_ns = now_ns - live_exec_engine._PENDING_UPDATE_SAME_ID_GRACE_NS - 1
+    order = _pending_update_order(live_exec_engine, cache, account_id, pending_since_ns=stale_ns)
+
+    result = live_exec_engine._handle_order_status_transitions(
+        order,
+        _accepted_report(order, account_id, "V-OLD", now_ns),
+        trades=[],
+        instrument=AUDUSD_SIM,
+    )
+
+    assert result is True
+    assert order.status == OrderStatus.ACCEPTED
+
+
 @pytest.mark.asyncio
 async def test_handle_order_status_transitions_canceled(live_exec_engine, cache, account_id):
     """
