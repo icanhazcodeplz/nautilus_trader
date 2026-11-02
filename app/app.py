@@ -25,8 +25,8 @@ CORS(app, resources={r"/*": {"origins": "*"}}, expose_headers=["Content-Range"])
 api = Api(app)
 # Runs to choose from, one per subfolder: either a folder of backtests (subfolders like
 # "20260105-0929_20260105-0941") or a live run's folder (one subfolder per symbol)
-RUNS_FOLDER = PACKAGE_ROOT / "data/backtest_runs/AAPL/3ee29512"
-RUNS_FOLDER = PACKAGE_ROOT / "data/runs/20261027_092854"
+# RUNS_FOLDER = PACKAGE_ROOT / "data/backtest_runs/AMZN/e2dc4368"
+RUNS_FOLDER = PACKAGE_ROOT / "data/runs/20261102_090839"
 # RUNS_FOLDER = data_subdir("backtest_runs", "temp")
 
 PARAMS_TO_SHOW = [
@@ -97,12 +97,12 @@ def create_vert_lines_items(day):
             "color": "blue",
             "thickness": 2,
         },
-        {
-            "time": str((day_start + pd.Timedelta(hours=9, minutes=35)).value),
-            "annotation": "9:35",
-            "color": "blue",
-            "thickness": 2,
-        },
+        # {
+        #     "time": str((day_start + pd.Timedelta(hours=9, minutes=35)).value),
+        #     "annotation": "9:35",
+        #     "color": "blue",
+        #     "thickness": 2,
+        # },
     ]
 
 
@@ -277,7 +277,7 @@ def get_data(run):
 
     # Markers may not have same time as a tick
     for m in markers:
-        time_ = str(m["time"])
+        time_ = int(m["time"])
         if time_ in ticks_dict:
             # If tick already exists, add fill price to that tick
             ticks_dict[time_]["fill"] = m["price"]
@@ -291,9 +291,7 @@ def get_data(run):
         # Order durations may not have same time as a tick
         for od in order_durations_list:
             for time_key in ("start_time", "end_time"):
-                time_ = str(od[time_key])
-                if time_ not in ticks_dict:
-                    ticks_dict[time_] = {}
+                ticks_dict.setdefault(int(od[time_key]), {})
             od["start_time"] = str(od["start_time"])
             od["end_time"] = str(od["end_time"])
 
@@ -303,17 +301,15 @@ def get_data(run):
 
     # Vertical lines may not have same time as a tick
     for vl in vert_lines:
-        if vl["time"] not in ticks_dict:
-            ticks_dict[vl["time"]] = {}
+        ticks_dict.setdefault(int(vl["time"]), {})
 
     # For each item in positions, if the time exists as a key in ticks_dict, add the `position` field to that entry in the ticks_dict
     for p in positions:
-        time_ = str(p["time"])
-        if time_ in ticks_dict:
-            ticks_dict[time_]["position"] = p["position"]
+        if p["time"] in ticks_dict:
+            ticks_dict[p["time"]]["position"] = p["position"]
 
     # Flatten ticks into a list and sort by time
-    ticks = [{"time": int(t), **vals} for t, vals in ticks_dict.items()]
+    ticks = [{"time": t, **vals} for t, vals in ticks_dict.items()]
     ticks = sorted(ticks, key=lambda x: x["time"])
 
     # Convert time to string for JS client
@@ -332,11 +328,11 @@ def get_data(run):
         fill_markers=markers,
         orderDurations=order_durations_list,
         TickChartLines=[
-            dict(key="vwap_value", color=light_green, width=2, type=0),
-            dict(key="vwap_low", color="red", width=1.5, type=0),
+            # dict(key="vwap_value", color=light_green, width=2, type=0),
+            # dict(key="vwap_low", color="red", width=1.5, type=0),
             # dict(key="vwap_low_inner", color=baby_blue, width=1, type=0),
             # dict(key="vwap_low_outer", color=baby_blue, width=1, type=0),
-            dict(key="vwap_high", color=baby_blue, width=1.5, type=0),
+            # dict(key="vwap_high", color=baby_blue, width=1.5, type=0),
             # dict(key="vwap_high_inner", color="red", width=1, type=0),
             # dict(key="vwap_high_outer", color="red", width=1, type=0),
             dict(key="rolling_vwap_value", color=light_purple, width=2, type=0),
@@ -351,7 +347,7 @@ def get_data(run):
             dict(key="position", color="green", color_negative="red", width=1, type=1, style="histogram"),
         ],
         VertLines=vert_lines,
-        HorizLines=create_horiz_lines_items(ticks),
+        HorizLines=create_horiz_lines_items(ticks) ,
         performance_metrics=performance_metrics,
         params_to_show=params_to_show,
     )

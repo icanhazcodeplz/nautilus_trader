@@ -180,7 +180,8 @@ if __name__ == "__main__":
     symbol = "AMZN"
 
     day_strs = ["2026-10-21"]
-    day_strs = catalog_days_available(symbol)[100:]
+    day_strs = catalog_days_available(symbol)
+    day_strs = [d for d in day_strs if d.startswith("2026")]
     for day_str in day_strs:
         print(f"\nRUNNING {day_str}")
         start_str_est = f"{day_str} 09:29"
