@@ -35,7 +35,7 @@ from nautilus_trader.model.data import TradeTick
 from nautilus_trader.model.enums import OrderSide, OrderStatus
 from nautilus_trader.model.enums import TimeInForce
 from nautilus_trader.model.identifiers import InstrumentId
-from nautilus_trader.model.events import OrderRejected, OrderModifyRejected, OrderCancelRejected
+from nautilus_trader.model.events import OrderRejected, OrderModifyRejected, OrderCancelRejected, OrderUpdated
 from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.model.orders import LimitOrder, Order
 from nautilus_trader.model.orders.list import OrderList
@@ -63,15 +63,17 @@ def alpaca_instrument_id(symbol: str) -> InstrumentId:
 
 
 # Fields that don't change what a strategy trades: per-symbol or per-instance names, and logging
-CONFIG_HASH_EXCLUDED_FIELDS = frozenset({
-    "external_order_claims",
-    "strategy_id",
-    "order_id_tag",
-    "print_update_every_secs",
-    "log_events",
-    "log_commands",
-    "log_rejected_due_post_only_as_warning",
-})
+CONFIG_HASH_EXCLUDED_FIELDS = frozenset(
+    {
+        "external_order_claims",
+        "strategy_id",
+        "order_id_tag",
+        "print_update_every_secs",
+        "log_events",
+        "log_commands",
+        "log_rejected_due_post_only_as_warning",
+    }
+)
 
 
 class BaseStrategyConfig(StrategyConfig, frozen=True, kw_only=True):
@@ -96,6 +98,7 @@ class BaseStrategy(Strategy):
     MIN_TICK_LOOKBACK: int = 0
     _POSITION_DISCREPANCY_ALLOW_SECS = 10  # Raise if alpaca vs nt discrepancy lasts for longer than this
     _MODIFY_REJECT_COOLDOWN_SECS = 1  # Seconds to block retries after a ModifyRejected
+    _CANCEL_REJECT_COOLDOWN_SECS = 1  # Seconds to block re-cancels after a CancelRejected (see cancel_open_order)
     _RECONCILE_COOLDOWN_SECS = 3  # Minimum seconds between reconciliation attempts
     _ATTEMPT_STOP_OUT_EVERY_MS = 60
     _BLOCK_ENTRIES_AFTER_STOP_OUT_SECS = 10
@@ -150,6 +153,9 @@ class BaseStrategy(Strategy):
         self._force_reconcile_count = 0
         self._last_force_reconcile_ns = 0
         self._last_wrong_way_flatten_ns = 0
+        # ClientOrderId -> ns until which cancel_open_order holds off re-cancelling it. Keyed by id,
+        # not kept on OpenOrder, because a rejected cancel re-adds the order as a fresh OpenOrder.
+        self._cancel_blocked_until_ns: dict = {}
         self._reconciliation_task: asyncio.Task | None = None
         self._historical_loaded = False
         self._historical_ticks: list[TradeTick] = []
@@ -412,6 +418,13 @@ class BaseStrategy(Strategy):
         return False
 
     def cancel_open_order(self, open_order, client_id=None, params=None):
+        # Callers re-issue cancels every tick, so without this a refused cancel is re-sent as fast
+        # as ticks arrive.
+        blocked_until_ns = self._cancel_blocked_until_ns.get(open_order.client_order_id)
+        if blocked_until_ns is not None:
+            if self.clock.timestamp_ns() < blocked_until_ns:
+                return
+            del self._cancel_blocked_until_ns[open_order.client_order_id]
         if open_order in self.open_orders:
             # TODO: Perhaps use order status instead of the existence of venue_order_id?
             if open_order.venue_order_id is not None:
@@ -520,18 +533,14 @@ class BaseStrategy(Strategy):
         else:
             self._tick_event_dt_adjusted = tick.ts_event
 
-        # FIXME: BRENT add this back in after refactoring folder structure
-        # tick_data = {}
-        # if not self.is_backtest:
-        tick_data = {
-            "price": float(tick.price),
-            "size": int(tick.size),
-            "ts_event": tick.ts_event,
+        tick_data = {"price": float(tick.price), "size": int(tick.size)}
+
+        if not self.is_backtest:
             # These can be used to measure data latency
-            "ts_init": tick.ts_init,
-            "ts_clock": self.clock.utc_now(),
-            # "ts_now": pd.Timestamp.utcnow(),
-        }
+            tick_data["ts_event"] = tick.ts_event
+            tick_data["ts_init"] = tick.ts_init
+            tick_data["ts_clock"] = self.clock.utc_now()
+
         for metric in self.metrics_to_save_on_tick:
             tick_data = {**tick_data, **metric.get_vals()}
         if tick_data:
@@ -855,6 +864,17 @@ class BaseStrategy(Strategy):
                 self.log.debug(f"Modify for {order_event.client_order_id} was held while pending_new; retrying")
                 return
 
+            # The order filled (or otherwise closed) before the modify reached Alpaca, so there is
+            # nothing to retry or reconcile. Alpaca reports this as "order is not open" over REST, but
+            # over the WS order_replace_rejected event the reason is a bare "BROKER".
+            cache_order = self.cache.order(order_event.client_order_id)
+            if cache_order is not None and cache_order.status in CLOSED_STATUS_LIST:
+                self.log.info(
+                    f"Modify for {order_event.client_order_id} rejected after the order closed "
+                    f"({cache_order.status_string()}): {order_event.reason}"
+                )
+                return
+
             # Only apply cooldown for errors where retrying quickly won't help
             _COOLDOWN_REASONS = (
                 "order is not open",
@@ -902,6 +922,15 @@ class BaseStrategy(Strategy):
                 if cache_order and self._exec_engine is not None:
                     self._exec_engine._loop.create_task(self._exec_engine._query_and_reconcile_order(cache_order))
                 return
+            # Retrying right away gets the same answer; mid-replace, Alpaca refuses until the
+            # replace lands (cleared early on that OrderUpdated, below).
+            self._cancel_blocked_until_ns[order_event.client_order_id] = self.clock.timestamp_ns() + int(
+                self._CANCEL_REJECT_COOLDOWN_SECS * 1e9
+            )
+            self.log.info(
+                f"Holding cancels of {order_event.client_order_id} for {self._CANCEL_REJECT_COOLDOWN_SECS}s "
+                f"or until its pending replace lands: {reason}"
+            )
             cache_order = self.cache.order(order_event.client_order_id)
             if cache_order and cache_order.is_open:
                 # Re-add to open_orders if missing (e.g. cancel was rejected after cancel_open_order optimistically
@@ -918,6 +947,10 @@ class BaseStrategy(Strategy):
                         f"status={cache_order.status}). Tracking is by venue side, so if it predates a side "
                         f"switch it counts as neither entry nor exit and _reconcile will cancel it."
                     )
+        elif isinstance(order_event, OrderUpdated):
+            # The replace that was refusing cancels has landed, so the next cancel can succeed
+            # now rather than waiting out the rest of the hold.
+            self._cancel_blocked_until_ns.pop(order_event.client_order_id, None)
 
     def close_position_limit_order(self):
         last_trade = self.cache.trade_tick(self.instrument_id)
@@ -1025,7 +1058,7 @@ class BaseStrategy(Strategy):
                 )
                 for open_order in self.open_orders:
                     self.log.warning(f"Strategy OpenOrder {open_order.order}")
-                for order in set(self.cache.orders_open() + self.cache.orders_inflight()):
+                for order in set(self.orders_live_at_venue):
                     self.log.warning(f"Cache order {order}")
                 return
             # Trigger reconciliation on every check (cooldown enforced inside)
@@ -1036,7 +1069,7 @@ class BaseStrategy(Strategy):
 
         # COMPARE OPEN ORDERS TO CACHED ORDERS
         self_open_orders = set(open_order.order for open_order in self.open_orders)
-        cache_open_orders = set(self.cache.orders_open() + self.cache.orders_inflight())
+        cache_open_orders = set(self.orders_live_at_venue)
         cache_open_orders = set(order for order in cache_open_orders if order.status != OrderStatus.PENDING_CANCEL)
         if (len(self_open_orders) + len(cache_open_orders)) > 0:
             for order in cache_open_orders - self_open_orders:
