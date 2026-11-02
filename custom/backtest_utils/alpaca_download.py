@@ -1,4 +1,10 @@
 import json
+import multiprocessing
+import threading
+from collections import deque
+from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
+from itertools import pairwise
 
 import pandas as pd
 from alpaca.data.historical import StockHistoricalDataClient
@@ -19,6 +25,7 @@ from nautilus_trader.model.enums import AggressorSide
 from nautilus_trader.model.identifiers import TradeId
 from nautilus_trader.model.objects import Price
 from nautilus_trader.model.objects import Quantity
+from nautilus_trader.persistence.catalog import ParquetDataCatalog
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
 
 
@@ -55,7 +62,23 @@ ALPACA_EXCHANGE_CODES = {
 }
 
 api_key, api_secret = get_alpaca_key_and_secret(paper=True)
-client = StockHistoricalDataClient(api_key, api_secret, raw_data=False)
+
+# Alpaca pages through a request one cursor at a time, and trades pages can take seconds each, so a day is
+# fetched as `SLICE_MINUTES` windows in parallel. Worker processes each run a thread pool of fetches;
+# `DAYS_IN_FLIGHT` bounds how many days per process are held in memory (~1GB each) before being written.
+N_PROCESSES = 2
+N_THREADS_PER_PROCESS = 8
+SLICE_MINUTES = 30
+DAYS_IN_FLIGHT = 4
+
+_thread_local = threading.local()
+
+
+def _client():
+    """Return this thread's client, since its `requests.Session` shouldn't be shared across threads."""
+    if not hasattr(_thread_local, "client"):
+        _thread_local.client = StockHistoricalDataClient(api_key, api_secret, raw_data=False)
+    return _thread_local.client
 
 
 def _price_precision(price):
@@ -95,30 +118,108 @@ def _delete_range(instrument_id, start_dt_str, end_dt_str, data_type):
     )
 
 
-def get_trades_and_save_to_catalog_if_needed(
-    symbol, day_in_question: pd.Timestamp, force=False, start_time=None, end_time=None
-):
-    """Download trades from Alpaca between New York `start_time` and `end_time` and save to catalog."""
+def _slices(start_dt_str, end_dt_str):
+    """Split the download range into `SLICE_MINUTES` windows, returned as (start, end, is_last) tuples."""
+    bounds = list(pd.date_range(start_dt_str, end_dt_str, freq=f"{SLICE_MINUTES}min"))
+    if bounds[-1] != pd.Timestamp(end_dt_str):
+        bounds.append(pd.Timestamp(end_dt_str))
+    return [(s, e, e == bounds[-1]) for s, e in pairwise(bounds)]
+
+
+def _fetch_slice(data_type, symbol, start, end, is_last):
+    """Fetch one window of trades or quotes as alpaca models."""
+    client = _client()
+    if data_type is TradeTick:
+        get, request_cls = client.get_stock_trades, StockTradesRequest
+    else:
+        get, request_cls = client.get_stock_quotes, StockQuotesRequest
+    request = request_cls(feed="sip", symbol_or_symbols=symbol, start=start.isoformat(), end=end.isoformat())
+    rows = get(request).data.get(symbol, [])
+    # The next window starts at `end`, so drop anything on the boundary in case Alpaca's `end` is inclusive
+    return rows if is_last else [row for row in rows if row.timestamp < end]
+
+
+def _start_download_if_needed(pool, data_type, symbol, day_in_question, force, start_time, end_time):
+    """
+    Submit the fetches for one day's `data_type` to `pool`.
+
+    Returns (instrument_id, data_type, futures), or `None` if it's already in the catalog and `force` is off.
+    """
     start_dt_str, end_dt_str = _download_range(day_in_question, start_time, end_time)
     instrument_id = TestInstrumentProvider.equity(symbol=symbol, venue=ALPACA).id
 
-    # Check if trades exist for the range in BACKTESTING_CATALOG (reads filenames only, no data loaded)
-    data_type = TradeTick
+    # Check if data exists for the range in BACKTESTING_CATALOG (reads filenames only, no data loaded)
     if _data_exists(instrument_id, day_in_question, data_type):
         if force:
             _delete_range(instrument_id, start_dt_str, end_dt_str, data_type)
         else:
             print("\tForce is off, skipping")
-            return
+            return None
 
-    request = StockTradesRequest(feed="sip", symbol_or_symbols=symbol, start=start_dt_str, end=end_dt_str)
+    print(f"\tGetting {data_type.__name__}s for {instrument_id} on {day_in_question.date()}")
+    futures = [
+        pool.submit(_fetch_slice, data_type, symbol, start, end, is_last)
+        for start, end, is_last in _slices(start_dt_str, end_dt_str)
+    ]
+    return instrument_id, data_type, futures
 
-    # Fetch the tick data
-    print(f"\tGetting Trades for {instrument_id}")
-    alpaca_response = client.get_stock_trades(request)
-    trades = alpaca_response.data[symbol]
 
-    trade_ticks = [
+def _finish_download(instrument_id, data_type, futures):
+    """Wait for one day's fetches, then convert them in order and write them to the catalog."""
+    rows = [row for future in futures for row in future.result()]
+    to_ticks = _trade_ticks if data_type is TradeTick else _quote_ticks
+    BACKTESTING_CATALOG.write_data(to_ticks(instrument_id, rows))
+
+
+def _download_jobs(jobs):
+    """
+    Download (symbol, day, force, start_time, end_time) `jobs` in this process.
+
+    Up to `DAYS_IN_FLIGHT` days keep fetching while the oldest is converted and written.
+    """
+    in_flight = deque()
+    with ThreadPoolExecutor(N_THREADS_PER_PROCESS) as pool:
+        for symbol, day, force, start_time, end_time in jobs:
+            window = f"{start_time or '00:00'}-{end_time or '24:00'} ET"
+            print(f"\nGetting data for {symbol} on {day.date()} {window}, force={force}")
+            for data_type in (TradeTick, QuoteTick):
+                started = _start_download_if_needed(pool, data_type, symbol, day, force, start_time, end_time)
+                if started is not None:
+                    in_flight.append(started)
+            while len(in_flight) > 2 * DAYS_IN_FLIGHT:
+                _finish_download(*in_flight.popleft())
+        while in_flight:
+            _finish_download(*in_flight.popleft())
+
+
+def _download_jobs_in_worker(catalog_path, jobs):
+    global BACKTESTING_CATALOG  # noqa: PLW0603 - so a worker writes where its parent would
+    BACKTESTING_CATALOG = ParquetDataCatalog(catalog_path)
+    _download_jobs(jobs)
+
+
+def download_alpaca_data(symbols, days, force=False, start_time=None, end_time=None):
+    """
+    Download trades and quotes for every symbol and day, spread over `N_PROCESSES` processes.
+
+    `start_time`/`end_time` are as in `prepare_alpaca_data`.
+    """
+    jobs = [(symbol, day, force, start_time, end_time) for symbol in symbols for day in days]
+    if N_PROCESSES == 1:
+        _download_jobs(jobs)
+        return
+
+    # Every Nth job goes to each worker so they share the load evenly. Workers use the parent's catalog
+    chunks = [jobs[i::N_PROCESSES] for i in range(N_PROCESSES)]
+    ctx = multiprocessing.get_context("spawn")
+    with ProcessPoolExecutor(N_PROCESSES, mp_context=ctx) as executor:
+        futures = [executor.submit(_download_jobs_in_worker, BACKTESTING_CATALOG.path, chunk) for chunk in chunks]
+        for future in futures:
+            future.result()
+
+
+def _trade_ticks(instrument_id, trades):
+    return [
         TradeTick(
             instrument_id=instrument_id,
             price=Price(trade.price, precision=_price_precision(trade.price)),
@@ -134,32 +235,9 @@ def get_trades_and_save_to_catalog_if_needed(
         and not has_excluded_condition(trade.conditions)
     ]
 
-    BACKTESTING_CATALOG.write_data(trade_ticks)
 
-
-def get_quotes_and_save_to_catalog_if_needed(
-    symbol, day_in_question: pd.Timestamp, force=False, start_time=None, end_time=None
-):
-    """Download quotes from Alpaca between New York `start_time` and `end_time` and save as QuoteTicks."""
-    start_dt_str, end_dt_str = _download_range(day_in_question, start_time, end_time)
-    instrument_id = TestInstrumentProvider.equity(symbol=symbol, venue=ALPACA).id
-
-    # Check if trades exist for the range in BACKTESTING_CATALOG (reads filenames only, no data loaded)
-    data_type = QuoteTick
-    if _data_exists(instrument_id, day_in_question, data_type):
-        if force:
-            _delete_range(instrument_id, start_dt_str, end_dt_str, data_type)
-        else:
-            print("\tForce is off, skipping")
-            return
-
-    request = StockQuotesRequest(feed="sip", symbol_or_symbols=symbol, start=start_dt_str, end=end_dt_str)
-
-    print(f"\tGetting Quotes for {instrument_id}")
-    alpaca_response = client.get_stock_quotes(request)
-    quotes = alpaca_response.data[symbol]
-
-    quote_ticks = [
+def _quote_ticks(instrument_id, quotes):
+    return [
         QuoteTick(
             instrument_id=instrument_id,
             bid_price=Price(quote.bid_price, precision=_price_precision(quote.bid_price)),
@@ -172,18 +250,13 @@ def get_quotes_and_save_to_catalog_if_needed(
         for quote in quotes
     ]
 
-    BACKTESTING_CATALOG.write_data(quote_ticks)
-
 
 def prepare_alpaca_data(symbol, day_in_question: pd.Timestamp, force=False, start_time=None, end_time=None):
     """
     Download one day's trades and quotes. `start_time`/`end_time` are New York wall-clock "HH:MM"
     strings (EST or EDT, whichever applies that day); `None` means the whole day.
     """
-    window = f"{start_time or '00:00'}-{end_time or '24:00'} ET"
-    print(f"\nGetting data for {symbol} on {day_in_question.date()} {window}, force={force}")
-    get_trades_and_save_to_catalog_if_needed(symbol, day_in_question, force, start_time, end_time)
-    get_quotes_and_save_to_catalog_if_needed(symbol, day_in_question, force, start_time, end_time)
+    _download_jobs([(symbol, day_in_question, force, start_time, end_time)])
 
 
 def add_entry_to_catalog_options(key, symbol, data_start_dt, data_end_dt, notes=None):
@@ -292,16 +365,14 @@ if __name__ == "__main__":
         pd.Timestamp("2026-11-26"),  # Thanksgiving
         pd.Timestamp("2026-12-25"),  # Christmas
     ]
-    trading_days = pd.bdate_range("2025-01-01", "2026-10-27", freq="C", holidays=nasdaq_holidays)
+    trading_days = pd.bdate_range("2026-1-01", "2026-11-01", freq="C", holidays=nasdaq_holidays)
 
-    symbols = ["AMZN", "AAPL", "MSFT", "GOOG", "TSLA"]
-    symbols = ["AMZN"]
+    symbols = ["AMZN", "AAPL", "MSFT", "GOOG", "TSLA", "WMT", "META"]
+    symbols = ["AAPL"]
     # New York wall-clock window to download each day. `None` for either end means midnight.
     start_time = None
     end_time = None
-    for symbol in symbols:
-        for day in trading_days:
-            prepare_alpaca_data(symbol, day, force=False, start_time=start_time, end_time=end_time)
+    download_alpaca_data(symbols, trading_days, force=False, start_time=start_time, end_time=end_time)
 
     if False:
         end_dt_str = pd.Timestamp(start_dt_str) + pd.Timedelta(days=1)
