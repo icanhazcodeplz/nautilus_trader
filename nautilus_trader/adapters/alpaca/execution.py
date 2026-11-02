@@ -1079,8 +1079,12 @@ class AlpacaExecutionClient(LiveExecutionClient):
             stop_price = str(command.trigger_price) if command.trigger_price else None
 
             # Store pending params so the WS "replaced" handler uses the correct values
-            # (the "replaced" event only contains the OLD order's data)
-            self._pending_modify_params[command.client_order_id] = (command.quantity, command.price)
+            # (the "replaced" event only contains the OLD order's data). Set before the PATCH,
+            # as the WS event can beat the HTTP response.
+            prev_pending = self._pending_modify_params.get(command.client_order_id)
+            pending = (command.quantity, command.price)
+            self._pending_modify_params[command.client_order_id] = pending
+            patch_accepted = False
 
             # Modify order via HTTP API (Alpaca uses PATCH for replace)
             try:
@@ -1091,6 +1095,7 @@ class AlpacaExecutionClient(LiveExecutionClient):
                     limit_price=limit_price,
                     stop_price=stop_price,
                 )
+                patch_accepted = True
                 # Register the new replacement venue order ID immediately so that
                 # fill lookups during reconciliation can resolve it (the WebSocket
                 # "replaced" event may arrive later than REST fill queries)
@@ -1122,6 +1127,8 @@ class AlpacaExecutionClient(LiveExecutionClient):
                         self._log.error(f"Failed to cancel ghost replacement {ghost_order_id}: {cancel_err}")
 
             except Exception as e:
+                if not patch_accepted:
+                    self._restore_pending_modify_params(command.client_order_id, pending, prev_pending)
                 string = e.args[0]
                 start = string.find("{")
                 json_text = string[start:]
@@ -1164,6 +1171,30 @@ class AlpacaExecutionClient(LiveExecutionClient):
                 reason=str(e),
                 ts_event=self._clock.timestamp_ns(),
             )
+
+    def _restore_pending_modify_params(
+        self,
+        client_order_id: ClientOrderId,
+        failed: tuple[Quantity | None, Price | None],
+        prev: tuple[Quantity | None, Price | None] | None,
+    ) -> None:
+        """
+        Undo a refused PATCH's write to `_pending_modify_params`.
+
+        Without this a refused modify's values outlive it, and the WS "replaced" event of a
+        replace still pending from an earlier modify applies them: at the 2026-11-02 open a
+        replacement resting at 344.41 was cached at 344.02, the price of a modify Alpaca had
+        refused with "order already pending replacement".
+
+        Only undoes the entry if it is still the failed one. If a "replaced" event already
+        consumed it, there is nothing left to restore.
+        """
+        if self._pending_modify_params.get(client_order_id) is not failed:
+            return
+        if prev is None:
+            del self._pending_modify_params[client_order_id]
+        else:
+            self._pending_modify_params[client_order_id] = prev
 
     async def _cancel_order(self, command: CancelOrder) -> None:
         """
