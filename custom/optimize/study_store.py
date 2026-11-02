@@ -21,7 +21,7 @@ import pandas as pd
 
 from nautilus_trader import PACKAGE_ROOT
 
-STORE_PATH = PACKAGE_ROOT / "optuna_dbs" / "studies.db"
+STORE_PATH = PACKAGE_ROOT / "data" / "studies.db"
 HASH_DISPLAY_LEN = 8
 
 _SCHEMA = """
