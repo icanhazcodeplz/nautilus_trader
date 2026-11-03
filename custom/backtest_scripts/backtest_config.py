@@ -38,3 +38,11 @@ DATA_DELAY_WINDOWS = [
 ]
 # DATA_DELAY_SECS = 0.0
 # DATA_DELAY_WINDOWS = []
+
+# Alpaca replace latency (secs) for modifies sent in each window: the median of the live runs,
+# from custom/scripts/venue_latency.py. A replace usually lands in ~20ms but can take seconds right
+# after the open, and cancels are refused until it does. See custom/backtest_utils/open_replace_latency.py.
+OPEN_REPLACE_LATENCY_WINDOWS = [
+    ("09:30:00.0", "09:30:02.5", 2.5),
+    ("09:30:02.5", "09:30:05.0", 1.0),
+]

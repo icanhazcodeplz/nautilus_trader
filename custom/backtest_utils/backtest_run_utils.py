@@ -4,6 +4,8 @@ import glob
 import os
 
 from custom.backtest_scripts.backtest_config import DATA_VENUE, prob_fill_on_limit, latency_model
+from custom.backtest_scripts.backtest_config import OPEN_REPLACE_LATENCY_WINDOWS
+from custom.backtest_utils.open_replace_latency import OpenReplaceLatency
 from custom.nt_extensions.limit_fill_model import LimitFillModel
 from custom.utils.orders_to_trades import orders_to_trades
 from custom.backtest_utils.load_catalog_data import BACKTESTING_CATALOG
@@ -90,6 +92,15 @@ def add_default_venue(engine, random_seed):
         reject_stop_orders=False,
         latency_model=latency_model,
     )
+    if OPEN_REPLACE_LATENCY_WINDOWS:
+        engine.add_actor(
+            OpenReplaceLatency(
+                exec_engine=engine.kernel.exec_engine,
+                windows=OPEN_REPLACE_LATENCY_WINDOWS,
+                modify_latency_ns=latency_model.update_latency_nanos,
+                cancel_latency_ns=latency_model.cancel_latency_nanos,
+            ),
+        )
 
 
 def run_strategy(strategy, engine: BacktestEngine, run_config, artifacts_io=None, raise_errors=False):
