@@ -55,9 +55,14 @@ def live_performance_stats(analyzer: PortfolioAnalyzer, cache, instrument_id: In
     Return the performance stats for one symbol of a live run.
 
     Nothing on a live node calls `calculate_statistics` (only `BacktestEngine` does at the end of a
-    run), so without this every stat is zero or NaN. `calculate_statistics` resets the analyzer, so
-    the node's own analyzer can be reused for one symbol after another. `PnL%` is relative to the
-    whole account, since every symbol trades from the same one.
+    run), so without this every stat is zero or NaN.
+
+    Every symbol trades from the one account, so two things in the node's analyzer span all of
+    them: the PnL the portfolio records as each position closes, which `calculate_statistics` does
+    not clear and the PnL stats merge back in, and the account balance `PnL (total)` is the change
+    in. So the analyzer is reset (which keeps its registered statistics) before it is fed only this
+    symbol's positions, and `PnL (total)` is their realized PnL. `PnL%` is that over the account's
+    starting balance. The node's analyzer can be reused for one symbol after another.
     """
     account = cache.account_for_venue(Venue(ALPACA))
     if account is None:
@@ -66,8 +71,17 @@ def live_performance_stats(analyzer: PortfolioAnalyzer, cache, instrument_id: In
     # NETTING reuses one position ID per instrument, so every cycle before the current one lives on
     # as a snapshot. BacktestEngine passes them in too.
     snapshots = [s for s in cache.position_snapshots() if s.instrument_id == instrument_id]
+    analyzer.reset()
     analyzer.calculate_statistics(account, cache.positions(instrument_id=instrument_id) + snapshots)
-    return performance_stats(analyzer)
+    stats = performance_stats(analyzer)
+
+    realized_pnls = analyzer.realized_pnls()
+    pnl = float(realized_pnls.sum()) if realized_pnls is not None else 0.0
+    starting_balances = list(account.starting_balances().values())
+    starting = starting_balances[0].as_double() if len(starting_balances) == 1 else 0.0
+    stats["PnL (total)"] = pnl
+    stats["PnL% (total)"] = pnl / starting * 100 if starting else 0.0
+    return stats
 
 
 def register_custom_statistics(analyzer):
