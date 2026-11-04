@@ -88,9 +88,7 @@ import pandas as pd
 from scipy import stats as sps
 
 from custom.optimize import study_store
-from custom.scripts.opening_range_features import AT_OPEN_PREFIX
 from custom.scripts.opening_range_features import LABEL
-from custom.scripts.opening_range_features import UP30
 from custom.utils.paths import data_subdir
 
 
@@ -137,9 +135,9 @@ def load_grid(conn, symbol, end_time) -> tuple[pd.DataFrame, pd.DataFrame]:
 def load_features(symbol, days) -> pd.DataFrame:
     """The pre-open features of `opening_range_features` plus the opening-range prediction and actual, on `days`."""
     analysis = Path(data_subdir("analysis"))
-    features = pd.read_csv(analysis / f"{symbol}_{LABEL}_features.csv", index_col=0, parse_dates=True)
+    features = pd.read_csv(analysis / f"{symbol}_opening_range_features.csv", index_col=0, parse_dates=True)
     preds = pd.read_csv(analysis / f"{symbol}_opening_range_predictions.csv", index_col=0, parse_dates=True)
-    return features.join(preds[["predicted_or_bps", "or_bps"]]).reindex(days)
+    return features.drop(columns=LABEL).join(preds[["predicted_or_bps", LABEL]]).reindex(days)
 
 
 # RULES ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -259,7 +257,7 @@ def feature_spreads(P, params, days, features) -> pd.DataFrame:
         targets[f"{col}: {hi} - {lo}"] = P[(params[col] == hi).to_numpy()].mean(0) - P[
             (params[col] == lo).to_numpy()
         ].mean(0)
-    candidates = [c for c in features.columns if c not in (UP30, LABEL, "or_bps") and not c.startswith(AT_OPEN_PREFIX)]
+    candidates = [c for c in features.columns if c != LABEL]
 
     rows = []
     for target, values in targets.items():

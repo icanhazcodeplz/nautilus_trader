@@ -10,7 +10,6 @@ from custom.strategies._side import Side
 from custom.strategies.base import ET_TZ, BaseStrategy, BaseStrategyConfig
 from custom.strategies._exit_tiers import ExitTiers
 from custom.strategies.metric import Metric
-from custom.utils.paths import data_subdir
 from nautilus_trader.common.enums import LogColor
 from nautilus_trader.model.data import TradeTick
 from nautilus_trader.model.enums import OrderStatus
@@ -94,18 +93,6 @@ def parse_est_time(value: str | None) -> time | None:
         ) from None
 
 
-def load_opening_range_predictions(symbol: str) -> dict[date, float]:
-    """
-    The predicted opening range in bps per ET day, from the CSV that
-    custom/scripts/opening_range_predictions.py writes. Empty if there is no file for `symbol`.
-    """
-    path = data_subdir("analysis") / f"{symbol}_opening_range_predictions.csv"
-    if not path.exists():
-        return {}
-    predictions = pd.read_csv(path, index_col="day", parse_dates=True)["predicted_or_bps"].dropna()
-    return {day.date(): float(bps) for day, bps in predictions.items()}
-
-
 def _opposite(side: Side) -> Side:
     return Side.SHORT if side == Side.LONG else Side.LONG
 
@@ -186,11 +173,9 @@ class MomoStrategy(BaseStrategy):
         # Today's SIT_AT_DISTANCE distance in bps; see `_resolve_et_cutoffs`
         # FIXME: Need to make prediction for current day for running live
         self._entry_distance: float | None = self.config.entry_distance
-        self._opening_range_predictions: dict[date, float] = (
-            load_opening_range_predictions(self.instrument_id.symbol.value)
-            if self.config.opening_range_pred_pull is not None
-            else {}
-        )
+        # The predicted opening range in bps per ET day, for `opening_range_pred_pull`. Nothing
+        # fills it yet, so every day uses `entry_distance`.
+        self._opening_range_predictions: dict[date, float] = {}
 
         self.take_profit = self.config.take_profit
         self.vwap = VWAPBands(

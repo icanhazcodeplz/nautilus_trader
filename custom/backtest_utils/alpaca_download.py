@@ -343,6 +343,16 @@ if __name__ == "__main__":
     # EOSE 2026-05-13 06:30. Received 06:30:03 - deploy american-made long duration energy storage at scale
 
     nasdaq_holidays = [
+        pd.Timestamp("2024-01-01"),  # New Year's Day
+        pd.Timestamp("2024-01-15"),  # MLK Day
+        pd.Timestamp("2024-02-19"),  # Presidents' Day
+        pd.Timestamp("2024-03-29"),  # Good Friday
+        pd.Timestamp("2024-05-27"),  # Memorial Day
+        pd.Timestamp("2024-06-19"),  # Juneteenth
+        pd.Timestamp("2024-07-04"),  # Independence Day
+        pd.Timestamp("2024-09-02"),  # Labor Day
+        pd.Timestamp("2024-11-28"),  # Thanksgiving
+        pd.Timestamp("2024-12-25"),  # Christmas
         pd.Timestamp("2025-01-01"),  # New Year's Day
         pd.Timestamp("2025-01-09"),  # National Day of Mourning (President Carter)
         pd.Timestamp("2025-01-20"),  # MLK Day
@@ -365,10 +375,10 @@ if __name__ == "__main__":
         pd.Timestamp("2026-11-26"),  # Thanksgiving
         pd.Timestamp("2026-12-25"),  # Christmas
     ]
-    trading_days = pd.bdate_range("2026-1-01", "2026-11-01", freq="C", holidays=nasdaq_holidays)
+    trading_days = pd.bdate_range("2024-1-01", "2026-11-02", freq="C", holidays=nasdaq_holidays)
 
-    symbols = ["AMZN", "AAPL", "MSFT", "GOOG", "TSLA", "WMT", "META"]
-    symbols = ["AAPL"]
+    symbols = ["AMZN", "AAPL", "MSFT", "GOOG", "WMT", "META"]
+    # symbols = ["AMZN", "WMT", "GOOG", "MSFT"]
     # New York wall-clock window to download each day. `None` for either end means midnight.
     start_time = None
     end_time = None

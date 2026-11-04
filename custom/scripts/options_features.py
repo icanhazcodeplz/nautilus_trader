@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 A symbol's options features per day, from the data `alpaca_options_download` saves in
-``data/options/<SYMBOL>/``. `opening_range_features` uses them as features of the next open.
+``data/options/<SYMBOL>/``. They were tried as features of the next open in `opening_range_features`
+and didn't help, so it no longer uses them.
 
 Equity options trade only 09:30-16:00, so every feature describes a whole session: its closing
 implied volatility (from the 1-minute bars of its last 30 minutes) and its options volume and flow.

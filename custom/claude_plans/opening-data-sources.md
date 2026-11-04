@@ -111,6 +111,33 @@ docstring.
 - **Classifier:** with five years, `pre0400_range_bps` alone beats the base rate in each of
   2023-2026, the first held-out win for the up-move classifier. News and earnings don't help it.
 
+## Done (2026-11-02): 1, the opening-cross imbalance
+
+Bought AMZN's 2025+ Nasdaq imbalance messages from Databento for $0.40
+(`custom/backtest_utils/databento_imbalance_download.py`, saved to `data/imbalance/`). Features are in
+`build_imbalance_features`, behind `IMBALANCE` (off by default). They didn't help either label. Full
+results are in the "OPENING CROSS IMBALANCE" section of `opening_range_features.py`'s docstring.
+- **Opening range:** the auction's size (paired shares, the reference price's range) has Spearman
+  0.19-0.31 on its own, but adds at most +0.09 +- 0.10 bps of MAE over the pre-open range features.
+- **Classifier:** the imbalance's side is too weak. The best version, the 09:28:30 imbalance (contrarian,
+  AUC 0.42-0.45), gains 0.003 +- 0.008 in log loss.
+- **So a live NOII feed isn't worth paying for.** The other sources (Webull: live only, from 09:28;
+  Interactive Brokers: live only; Massive and Alpaca: none for Nasdaq stocks) don't need pursuing.
+- **Side finding:** the label's open (the first trade from 09:30) is a median 4.1 bps from the Nasdaq
+  cross, often an odd lot printed first on another venue.
+- **More imbalance features** (side flips, the imbalance at 09:29 and 09:29:30) didn't help either.
+
+## Done (2026-11-02): pre-open trades and quotes from the catalog
+
+`micro_stats` / `build_micro_features` in `opening_range_features.py`, behind `MICRO` (off by
+default), cached in `data/analysis/<SYMBOL>_opening_micro_stats.parquet`. Covers 2022-2026.
+- **Opening range:** the last 5 seconds' trade count over its trailing median gains +0.20 +- 0.08 bps,
+  better in all 4 scored years, on the model without the peers. It doesn't help the 2026 model with
+  the peers, which still predicts best. It's a candidate for the no-peer fallback in
+  `opening_range_predictions`.
+- **Spreads, depth, trade sizes:** nothing. Trade sizes looked like they predicted the up-move until
+  converted to dollars: the catalog isn't split-adjusted (AMZN split 20:1 in June 2022).
+
 ## Sources
 
 - [Databento pricing](https://databento.com/pricing)
