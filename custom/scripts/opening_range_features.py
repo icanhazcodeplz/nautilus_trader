@@ -108,6 +108,10 @@ Each was added to the earlier top-8 features with `earnings_open`:
     - Fitting windows longer than about a year did worse: the opening range's level shifts from year
       to year (median 59, 49, 44, 49 and 66 bps in 2022-2026).
 
+Each run also writes `FEATURES`' predictions for every day from `PREDICT_START` (2026), each from a fit
+on the `TRAIN_DAYS` days before it, to ``data/analysis/AMZN_opening_range_predictions.csv``
+(`write_predictions`; columns `predicted_or_bps` and `or_bps`).
+
 Edit the values under ``if __name__ == "__main__"`` and run from the repo root:
     python custom/scripts/opening_range_features.py
 """
@@ -461,10 +465,26 @@ def feature_summary(d, df, candidates, chosen, positions, train_days, tune_quart
     return table.sort_values(["step", "alone_gain"], ascending=[True, False], na_position="last")
 
 
+def write_predictions(symbol: str, df: pd.DataFrame, d: Design, start: str) -> Path:
+    """
+    `FEATURES`' prediction for every day from `start` that has all of them, each from an OLS fit on
+    the `TRAIN_DAYS` days before it, written with the actual `LABEL` to
+    ``data/analysis/<SYMBOL>_opening_range_predictions.csv``.
+    """
+    has_features = np.isfinite(d.z[:, d.cols(FEATURES)]).all(axis=1)
+    positions = np.flatnonzero((df.index >= start) & has_features)
+    pred = predict(d.z, d.ylog, d.cols(FEATURES), positions, TRAIN_DAYS)
+    out = pd.DataFrame({"predicted_or_bps": pred, LABEL: df[LABEL].iloc[positions].to_numpy()}, index=df.index[positions].rename("day"))
+    out_path = Path(data_subdir("analysis")) / f"{symbol}_opening_range_predictions.csv"
+    out.round(3).to_csv(out_path)
+    print(f"\n{len(out)} predictions from {out.index.min().date()} to {out.index.max().date()} (MAE {(out['predicted_or_bps'] - out[LABEL]).abs().mean():.2f} bps) written to {out_path}")
+    return out_path
+
+
 # MAIN ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 
-def main(symbol, venue, tune_quarters, holdout_quarter, grid, max_features, refresh_stats):
+def main(symbol, venue, tune_quarters, holdout_quarter, grid, max_features, refresh_stats, predict_start):
     df = build_dataset(symbol, venue, refresh_stats)
     candidates = [c for c in df.columns if c != LABEL]
     d = Design(df, candidates)
@@ -524,6 +544,7 @@ def main(symbol, venue, tune_quarters, holdout_quarter, grid, max_features, refr
     out_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(out_path)
     print(f"\nPer-day label and features written to {out_path}")
+    write_predictions(symbol, df, d, predict_start)
 
 
 if __name__ == "__main__":
@@ -538,5 +559,7 @@ if __name__ == "__main__":
     MAX_FEATURES = 10
     # Re-read every day from the catalog rather than using cached window stats
     REFRESH_STATS = False
+    # `FEATURES`' predictions are written for every day from here (`write_predictions`)
+    PREDICT_START = "2026-01-01"
 
-    main(SYMBOL, VENUE, TUNE_QUARTERS, HOLDOUT_QUARTER, TRAIN_DAYS_GRID, MAX_FEATURES, REFRESH_STATS)
+    main(SYMBOL, VENUE, TUNE_QUARTERS, HOLDOUT_QUARTER, TRAIN_DAYS_GRID, MAX_FEATURES, REFRESH_STATS, PREDICT_START)
