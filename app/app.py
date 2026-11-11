@@ -23,11 +23,10 @@ app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, expose_headers=["Content-Range"])
 
 api = Api(app)
-# Runs to choose from, one per subfolder: either a folder of backtests (subfolders like
-# "20260105-0929_20260105-0941") or a live run's folder (one subfolder per symbol)
-# RUNS_FOLDER = PACKAGE_ROOT / "data/backtest_runs/AMZN/e2dc4368"
-RUNS_FOLDER = PACKAGE_ROOT / "data/runs/20261102_090839"
-# RUNS_FOLDER = data_subdir("backtest_runs", "temp")
+
+RUNS_FOLDER = PACKAGE_ROOT / "data/runs/20261109_092857"
+RUNS_FOLDER = data_subdir("backtest_runs", "temp")
+RUNS_FOLDER = data_subdir("backtest_runs", "GOOG", "3055684e")
 
 PARAMS_TO_SHOW = [
     # "trade_size",
