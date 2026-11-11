@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Grid-search MomoStrategy params for one symbol over every catalog day in `YEAR`.
+Grid-search MomoStrategy params for one symbol over every catalog day from `START_ON` on.
 
 A study is identified by the hash of its spec (symbol, time window and the `params` dict with its
 swept lists), not by a name; see `custom/optimize/study_store.py`. Results are stored per
@@ -63,16 +63,16 @@ MAX_CHUNKS_PER_WORKER = 20
 WORKER_HASH_SEED = "0"
 N_BOOTSTRAP = 2000
 SAVE_ARTIFACTS = False
-# Only catalog days in this year are run and scored. None = every catalog day.
-YEAR = 2026
+# Only catalog days on or after this date (YYYY-MM-DD) are run and scored. None = every catalog day.
+START_ON = "2026-06-01"
 
 
 def study_days(symbol) -> list[str]:
-    """The catalog days studies run and score on: those in `YEAR`."""
+    """The catalog days studies run and score on: those on or after `START_ON`."""
     days = catalog_days_available(symbol)
-    if YEAR is None:
+    if START_ON is None:
         return days
-    return [day for day in days if day.startswith(f"{YEAR}-")]
+    return [day for day in days if day >= START_ON]
 
 
 def run_day(task):
@@ -186,7 +186,7 @@ def run_study(conn, symbol, start_time, end_time, params, restart=False) -> str:
 
     days = study_days(symbol)
     if not days:
-        raise ValueError(f"No catalog days for {symbol} in {YEAR}")
+        raise ValueError(f"No catalog days for {symbol} on or after {START_ON}")
     grid = {study_store.params_hash(symbol, start_time, end_time, config): config for config in configs}
     missing = study_store.missing_pairs(conn, study_hash, days)
     no_artifacts = _pairs_without_artifacts(grid, symbol, days, start_time, end_time, skip=missing)
@@ -297,7 +297,7 @@ def show_study(conn, study_hash_prefix):
     spec = study["spec"]
     param_sets = study_store.study_param_sets(conn, study_hash)
     all_days = study_days(study["symbol"])
-    # Results are shared between studies, so there can be some for days outside `YEAR`
+    # Results are shared between studies, so there can be some for days before `START_ON`
     results = study_store.load_study_results(conn, study_hash)
     results = results[results["day"].isin(all_days)]
 
@@ -396,44 +396,94 @@ if __name__ == "__main__":
     # A past study's hash prefix (see "list"). None = the study defined by the spec below.
     STUDY_HASH = None
 
-    # SYMBOL = "TSLA"
-    SYMBOL = "AMZN"
-    # Backtest window applied to every day, as New York wall-clock "HH:MM:SS". Each day's UTC
-    # offset (EST or EDT) is worked out in `run_single_backtest`.
+    SYMBOL = "GOOG"
+
     START_TIME = "09:29:00"
-    END_TIME = "09:46:00"
-    # Momo params. A list is swept by the grid; anything else is fixed. A study's hash covers all
-    # of it, so any edit here starts a new study -- one that reuses every result it shares with
-    # earlier studies.
-    params = dict(
-        allow_trades=True,
-        max_position_multiplier=1,
-        trade_size=100,
-        stop_loss=120,
-        # stop_loss=linspace_int(low=160, high=160, step=80),
-        # take_profit=linspace_int(low=30, high=36, step=2), # AAPL
-        take_profit=linspace_int(low=21, high=26, step=1),  # AMZN
-        band_multiplier=0.5,
-        rolling_vwap_window=3000,
-        # rolling_vwap_window=linspace_int(low=2000, high=6000, step=1000),
-        band_window=150,
-        band_variance_window=300,
-        flip_side_confirm_ticks=150,
-        direction_strategy=[DirectionStrategy.SHORT_ONLY, DirectionStrategy.REVERSION],
-        direction_threshold=DirectionThreshold.ROLLING_VWAP,
-        exit_strategy=ExitStrategy.SIMPLE_TAKE,
-        num_exit_tiers=1,
-        entry_strategy=EntryStrategy.SIT_AT_DISTANCE,
-        entry_distance=[30,31,32,33,34,35],
-        opening_range_pred_pull=None,
-        start_trading_at="09:29:57",
-        # stop_entries_after=["09:30:30", "09:31"],
-        stop_entries_after="09:31",
-        force_exit_at=["09:33", "09:35", "09:40"],
-        # skip_same_side_reentry_after_take_profit=[True, False],
-        skip_same_side_reentry_after_take_profit=True,
-        entry_exclusion_band=None,
-    )
+    END_TIME = "09:36:00"
+
+    params = {}
+    if SYMBOL == "AAPL":
+        params = dict(
+            allow_trades=True,
+            max_position_multiplier=1,
+            trade_size=100,
+            band_multiplier=0.5,
+            rolling_vwap_window=[3000,3200],
+            band_window=150,
+            band_variance_window=300,
+            flip_side_confirm_ticks=150,
+            direction_strategy=DirectionStrategy.REVERSION,
+            direction_threshold=DirectionThreshold.ROLLING_VWAP,
+            exit_strategy=ExitStrategy.SIMPLE_TAKE,
+            num_exit_tiers=1,
+            entry_strategy=EntryStrategy.SIT_AT_DISTANCE,
+            take_profit=None,
+            stop_loss=linspace_int(low=30, high=45, step=1),
+            entry_distance=linspace_int(low=29, high=42, step=1),
+            opening_range_pred_pull=None,
+            start_trading_at="09:30",
+            stop_entries_after="09:31",
+            force_exit_at="09:35",
+            # skip_same_side_reentry_after_take_profit=[True, False],
+            skip_same_side_reentry_after_take_profit=False,
+            entry_exclusion_band=None,
+        )
+    elif SYMBOL == "AMZN":
+        params = dict(
+            allow_trades=True,
+            max_position_multiplier=1,
+            trade_size=100,
+            stop_loss=linspace_int(low=22, high=34, step=1),
+            band_multiplier=0.5,
+            rolling_vwap_window=[3000, 3200, 3400],
+            band_window=150,
+            band_variance_window=300,
+            flip_side_confirm_ticks=150,
+            direction_strategy=[DirectionStrategy.REVERSION, DirectionStrategy.SHORT_ONLY],
+            # direction_strategy=DirectionStrategy.REVERSION,
+            direction_threshold=DirectionThreshold.ROLLING_VWAP,
+            exit_strategy=ExitStrategy.SIMPLE_TAKE,
+            num_exit_tiers=1,
+            entry_strategy=EntryStrategy.SIT_AT_DISTANCE,
+            # take_profit=linspace_int(low=18, high=36, step=1),
+            take_profit=None,
+            entry_distance=linspace_int(low=26, high=35, step=1),
+            opening_range_pred_pull=None,
+            start_trading_at="09:30",
+            stop_entries_after="09:31",
+            force_exit_at="09:35",
+            skip_same_side_reentry_after_take_profit=True,
+            entry_exclusion_band=None,
+        )
+    elif SYMBOL == "GOOG":
+        params = dict(
+            allow_trades=True,
+            max_position_multiplier=1,
+            trade_size=100,
+            take_profit=None,
+            # stop_loss=linspace_int(low=160, high=160, step=80),
+            # take_profit=linspace_int(low=30, high=36, step=2), # AAPL
+            band_multiplier=0.5,
+            rolling_vwap_window=3200,
+            # rolling_vwap_window=linspace_int(low=2000, high=6000, step=1000),
+            band_window=150,
+            band_variance_window=300,
+            flip_side_confirm_ticks=150,
+            direction_strategy=DirectionStrategy.REVERSION,
+            direction_threshold=DirectionThreshold.ROLLING_VWAP,
+            exit_strategy=ExitStrategy.SIMPLE_TAKE,
+            num_exit_tiers=1,
+            entry_strategy=EntryStrategy.SIT_AT_DISTANCE,
+            stop_loss=linspace_int(low=38, high=58, step=1),
+            entry_distance=linspace_int(low=40, high=54, step=1),
+            opening_range_pred_pull=None,
+            start_trading_at="09:30",
+            stop_entries_after="09:31",
+            force_exit_at="09:35",
+            skip_same_side_reentry_after_take_profit=True,
+            # skip_same_side_reentry_after_take_profit=False,
+            entry_exclusion_band=None,
+        )
 
     for param_name, param_vals in params.items():
         if isinstance(param_vals, list) and len(param_vals) == 1:

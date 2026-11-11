@@ -375,10 +375,10 @@ if __name__ == "__main__":
         pd.Timestamp("2026-11-26"),  # Thanksgiving
         pd.Timestamp("2026-12-25"),  # Christmas
     ]
-    trading_days = pd.bdate_range("2024-1-01", "2026-11-02", freq="C", holidays=nasdaq_holidays)
+    trading_days = pd.bdate_range("2026-1-01", "2026-11-10", freq="C", holidays=nasdaq_holidays)
 
     symbols = ["AMZN", "AAPL", "MSFT", "GOOG", "WMT", "META"]
-    # symbols = ["AMZN", "WMT", "GOOG", "MSFT"]
+    symbols = ["AMZN", "AAPL", "GOOG"]
     # New York wall-clock window to download each day. `None` for either end means midnight.
     start_time = None
     end_time = None

@@ -45,6 +45,12 @@ from nautilus_trader.trading.strategy import Strategy
 ET_TZ = "US/Eastern"
 NS_PER_SEC = 1_000_000_000
 
+SYMBOL_LOG_COLORS: dict[str, LogColor] = {
+    "AMZN": LogColor.CYAN,
+    "AAPL": LogColor.MAGENTA,
+    "GOOG": LogColor.GREEN,
+}
+
 
 def parse_et_time(value: time | str) -> time:
     """Parse an "HH:MM", "HH:MM:SS" or "HH:MM:SS.ffffff" US/Eastern wall-clock string into a `time`."""
@@ -105,10 +111,8 @@ class BaseStrategy(Strategy):
     _DELAY_RELEASE_INTERVAL_MS = 100  # How often the delay buffer is checked for ticks now due
 
     def __init__(self, config: BaseStrategyConfig, symbol: str) -> None:
-        # The symbol is kept out of the config so the same settings can run on any symbol. The
-        # strategy claims its instrument's external orders through a copy of the config, because
-        # nautilus only reads external_order_claims from there.
         instrument_id = alpaca_instrument_id(symbol)
+        self.symbol = symbol
         super().__init__(msgspec.structs.replace(config, external_order_claims=[instrument_id]))
         self.instrument_id = instrument_id
         self.instrument: Instrument = None  # Initialized in on_start
@@ -265,7 +269,7 @@ class BaseStrategy(Strategy):
                 f"Cannot switch side to '{new_side}' with {len(live_orders)} order(s) still live at the venue: "
                 f"{[f'{order.client_order_id} ({order.status_string()})' for order in live_orders]}"
             )
-        self.log.info(f"Switching side from '{self._side}' to '{new_side}'", color=LogColor.YELLOW)
+        self.log.debug(f"Switching side from '{self._side}' to '{new_side}'", color=LogColor.YELLOW)
         self._side = new_side
         self._side_changed_ns = self.clock.timestamp_ns()
 
@@ -482,7 +486,7 @@ class BaseStrategy(Strategy):
         if self.exposure > 0 and self.stop_price is None:
             # Below the market when long, above it when short
             self.stop_price = float(tick.price) - sign * self._stop_loss_distance(float(tick.price))
-            self.log.info(f"Setting stop price to {self.stop_price}")
+            self.log.debug(f"Setting stop price to {self.stop_price}")
 
         if self.stop_price is not None or force_exit:
             if force_exit or (float(tick.price) - float(self.stop_price)) * sign <= 0:
@@ -829,10 +833,10 @@ class BaseStrategy(Strategy):
             if self.stop_price is not None:
                 # Only ever tighten: upward when long, downward when short
                 if (new_stop_price - float(self.stop_price)) * sign > 0:
-                    self.log.info(f"Changing stop price from {self.stop_price} to {new_stop_price}")
+                    self.log.debug(f"Changing stop price from {self.stop_price} to {new_stop_price}")
                     self.stop_price = new_stop_price
             else:
-                self.log.info(f"Setting stop price to {new_stop_price}")
+                self.log.debug(f"Setting stop price to {new_stop_price}")
                 self.stop_price = new_stop_price
         else:
             if self.save_artifacts:
@@ -1131,7 +1135,7 @@ class BaseStrategy(Strategy):
         tick_str = ""
         if self._last_tick is not None:
             timestamp = pd.Timestamp(self._last_tick.ts_event, unit="ns")
-            tick_str = f"Last Tick {timestamp} size {self._last_tick.size} @ {self._last_tick.price}"
+            tick_str = f"{self._last_tick.price}"
 
         # Get P&L information
         realized_pnl = self.portfolio.realized_pnl(self.instrument_id)
@@ -1156,21 +1160,22 @@ class BaseStrategy(Strategy):
             diff = self.exposure - OpenExitQty
             if diff > 0:
                 self.log.warning(f"Diff: {diff}")
-            position_str = f"Position {self.position_qty} @ {round(avg_px, 2)} | PerShare {round(gain, 2)} | PnL ${round(unrealized, 2)} | Diff={diff}\n"
+            position_str = f"Position {self.position_qty} @ {round(avg_px, 2)} | PerShare {round(gain, 2)} | PnL ${round(unrealized, 2)}\n"
         metrics_data = {}
         for metric in self.metrics_to_save_on_tick + self.metrics_to_save_on_1min:
             vals = {k: str(round(v, 3)) if v is not None else "None" for k, v in metric.get_vals().items()}
             metrics_data = {**metrics_data, **vals}
         self.log.info(
-            f"UPDATE: {self.instrument_id} | Side: {self._side}\n{tick_str}\n"
-            f"Total Entered {self._total_entry_qty} | Realized: {realized_pnl}\n"
+            f"UPDATE: \n"
+            f"{self.symbol} | {self._side} | {tick_str}\n"
+            f"Entered {self._total_entry_qty} | Realized: {realized_pnl}\n"
+            f"{position_str}"
             f"{OpenEntryQty=} Orders: {open_entries_str}\n"
             f"{OpenExitQty=} Orders: {open_exits_str}\n"
             f"{stale_str}"
-            f"{position_str}"
-            f"{self._print_update()}"
-            f"{metrics_data}",
-            color=LogColor.CYAN,
+            f"{self._print_update()}",
+            # f"{metrics_data}",
+            color=SYMBOL_LOG_COLORS.get(self.symbol, LogColor.NORMAL),
         )
 
     def _set_trading_enabled_based_on_allow_trading_times(self, event: TimeEvent):

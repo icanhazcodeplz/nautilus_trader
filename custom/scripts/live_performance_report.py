@@ -294,13 +294,8 @@ def period_stats(df: pd.DataFrame) -> dict[str, Any]:
             "avg_red_day": red.mean() if len(red) else 0.0,
             "best_day": f"{daily.max():,.2f} ({daily.idxmax()})",
             "worst_day": f"{daily.min():,.2f} ({daily.idxmin()})",
-            "daily_std": std,
             "sharpe_daily_pnl_ann": daily.mean() / std * math.sqrt(252) if std else math.nan,
             "sortino_daily_pnl_ann": daily.mean() / downside * math.sqrt(252) if downside else math.nan,
-            "max_drawdown_daily": _max_drawdown(daily),
-            "max_consec_green_days": _max_streak(daily > 0),
-            "max_consec_red_days": _max_streak(daily < 0),
-            "avg_trades_per_day": len(df) / len(daily),
         },
     )
     return stats
@@ -353,7 +348,7 @@ def monthly_table(df: pd.DataFrame) -> pd.DataFrame:
                 "avg_trade": s["avg_trade"],
                 "PF": s["profit_factor"],
                 "W/L": s["win_loss_ratio"],
-                "max_dd": s["max_drawdown_daily"],
+                "max_dd": _max_drawdown(g.groupby("date")["net_pnl"].sum()),
                 "best_day": s["best_day"],
                 "worst_day": s["worst_day"],
             },
@@ -408,11 +403,10 @@ def print_report(symbol: str, start: str, end: str, df: pd.DataFrame, open_trade
         _print_section("MONTHLY SUMMARY")
         print(monthly_table(df).to_string())
 
-    _print_section("TOTAL")
-    stats = period_stats(df)
-    width = max(len(k) for k in stats)
-    for key, value in stats.items():
-        print(f"  {key:<{width}}  {_fmt_value(key, value)}")
+    # _print_section("TOTAL")
+    # stats = period_stats(df)
+    # total = pd.DataFrame([{key: _fmt_value(key, value) for key, value in stats.items()}], index=["TOTAL"])
+    # print(total.to_string())
 
     if open_trade is not None:
         print(
