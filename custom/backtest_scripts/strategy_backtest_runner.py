@@ -165,9 +165,9 @@ if __name__ == "__main__":
         num_exit_tiers=1,
         entry_strategy=EntryStrategy.SIT_AT_DISTANCE,
         entry_distance=33,  # bps
-        start_trading_at="09:29:57",
+        start_trading_at="09:30",
         stop_entries_after="09:31",
-        force_exit_at="09:40",
+        force_exit_at="09:35",
         entry_exclusion_band=None,
     )
 
@@ -183,9 +183,9 @@ if __name__ == "__main__":
     day_strs = catalog_days_available(symbol)
     day_strs = [d for d in day_strs if d.startswith("2026")]
     for day_str in day_strs:
-        print(f"\nRUNNING {day_str}")
+        print(f"\nRUNNING {config.config_hash}: {day_str}")
         start_str_est = f"{day_str} 09:29"
-        end_str_est = f"{day_str} 09:41"
+        end_str_est = f"{day_str} 09:36"
         run_single_backtest(
             symbol,
             start_str_est,

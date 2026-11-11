@@ -334,9 +334,9 @@ class MomoStrategy(BaseStrategy):
             if was_flipping and not self._flipping:
                 # `signal` is the side we just reconfirmed, i.e. the one we already are -- the
                 # abandoned flip was to its opposite, so don't name `signal` as the target here.
-                self.log.info(f"Flip called off; staying '{self._side}'", color=LogColor.YELLOW)
+                self.log.debug(f"Flip called off; staying '{self._side}'", color=LogColor.YELLOW)
             elif self._flipping and not was_flipping:
-                self.log.info(f"Flipping from '{self._side}' to '{signal}'", color=LogColor.YELLOW)
+                self.log.debug(f"Flipping from '{self._side}' to '{signal}'", color=LogColor.YELLOW)
 
     def _on_trade_tick(self, tick: TradeTick) -> None:
         # TODO: Refactor: move "allow_entries" to base.
