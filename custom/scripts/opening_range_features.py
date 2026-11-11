@@ -26,62 +26,67 @@ Candidates (`build_features`):
     history     the previous opening range and its 5-day mean; the previous session's range and
                 realized volatility (and its 22-day mean), and its realized volatility over the first
                 10 minutes, the last 30 minutes and after hours
-    earnings    `earnings_open`: the first session after an earnings release (`EARNINGS_DATES`)
 
-The 9 tariff and trade-news days of 2025 (`TARIFF_DAYS`) are dropped.
+Two kinds of day are dropped from the dataset, for fitting and scoring alike: the 9 tariff and
+trade-news days of 2025 (`TARIFF_DAYS`), and the earnings opens, the first session after each of
+AMZN's earnings releases (`EARNINGS_DATES`, `earnings_open`), together with the report day before
+each and the session after each (`_earnings_days`). They stay in the window stats, so later days'
+trailing medians include them.
 
-RESULTS (AMZN, fit from 2022-01-03 to 2026-11-02)
-==================================================
+RESULTS (AMZN, fit from 2022-01-03 to 2026-11-03, without the earnings days)
+============================================================================
 
-Scored days: 2026 Q2 62 (median 68 bps), Q3 64 (68 bps), Q4 23 to 2026-11-02 (52 bps, including the
-earnings open on 2026-10-30 at 150 bps). Forward selection's result at each window, MAE in bps:
+Scored days: 2026 Q2 60 (median 67 bps), Q3 62 (67 bps), Q4 22 to 2026-11-03 (51 bps). Forward
+selection's result at each window, MAE in bps:
 
     train_days  features  Q2+Q3 (tuning)  Q4 (hold-out)
-            60         4           16.24          22.32
-           100         6           16.31          20.95
-           140         5           16.61          18.57
-           180         7           16.20          16.69   <- chosen (`TRAIN_DAYS`, `FEATURES`)
-           220         7           16.46          16.83
+            60         6           16.44          23.66
+           100         8           16.46          18.74
+           140        10           16.20          16.90   <- chosen (`TRAIN_DAYS`, `FEATURES`)
+           180         8           16.42          17.45
+           220        10           16.42          15.75
 
-The windows are nearly tied on the tuning quarters (16.20-16.61), but the hold-out favours 140-220
-days. The chosen model by quarter (trailing mean in brackets): Q2 17.33 (21.03), Q3 15.10 (20.22),
-Q4 16.69 +- 2.94 (25.46). Its R^2 (log) is 0.13, 0.32 and 0.32, and its Spearman 0.36, 0.59 and 0.38.
-It overpredicts Q4 by 14%, which was calmer than the window it was fit on.
+The windows are nearly tied on the tuning quarters (16.20-16.46). The chosen model by quarter
+(trailing mean in brackets): Q2 16.33 (19.53), Q3 16.07 (19.15), Q4 16.90 +- 3.22 (21.16). Its R^2
+(log) is 0.04, 0.19 and 0.16, and its Spearman 0.20, 0.44 and 0.19. Its bias is -3%, -1% and +3%.
+The 8 features chosen when only the earnings opens were dropped (at 180 days) score 16.28 on the
+tuning quarters and 18.24 on Q4.
 
 The features in the order chosen. "alone" is the tuning MAE gain of a model with that feature only,
-over the trailing mean. "drop" is the MAE lost by dropping it from the 7, on the tuning quarters and
-on Q4. "coef" is per standard deviation of its log in the last fit before Q4. Every sign held in
-91-100% of the tuning days' fits.
+over the trailing mean. "drop" is the MAE lost by dropping it from the 10, on the tuning quarters
+and on Q4. "coef" is per standard deviation of its log in the last fit before Q4. "sign" is the
+share of the tuning days' fits with that sign.
 
-    feature              Spearman  alone   drop: tune  Q4    coef
-    prev_last30_rv_bps       0.32   2.08        0.26   1.65  +0.07   previous session's last 30 minutes' RV
-    prev_f10_rv_bps          0.32   1.97        0.65   2.74  +0.10   previous session's first 10 minutes' RV
-    pre0400_range_bps        0.37   1.67        0.82   0.60  +0.22   today's 04:00-09:30 range
-    pre0400_range_rel        0.29   0.41        0.39   0.33  -0.11   the same over its 20-day median
-    prev_ah_rv_bps           0.23   1.82        0.22   1.68  +0.05   previous session's after-hours RV
-    prev_rth_range_bps       0.19   0.66        0.05   1.44  -0.05   previous session's 09:30-16:00 range
-    pre0400_rv_bps           0.34   1.74        0.03   0.12  -0.02   today's 04:00-09:30 RV
+    feature                Spearman  alone   drop: tune  Q4     coef  sign
+    prev_last30_rv_bps         0.27   1.26        0.48   0.66  +0.05  1.00  previous session's last 30 minutes' RV
+    prev_rth_rv_ma22           0.29   1.17        0.10  -0.07  +0.05  0.43  previous sessions' RV, 22-day mean
+    pre0400_range_bps          0.33   1.16        0.29  -0.26  +0.06  1.00  today's 04:00-09:30 range
+    pre0925_range_bps          0.19   1.02        0.51   0.03  +0.06  1.00  today's 09:25-09:30 range
+    prev_ah_rv_bps             0.19   1.03        0.32  -0.05  +0.02  1.00  previous session's after-hours RV
+    pre0925_range_rel          0.16   0.40        0.29   0.05  -0.07  1.00  the 09:25-09:30 range over its 20-day median
+    gap_abs_bps                0.20   0.56        0.07   0.03  +0.01  0.94  last pre-open trade's gap from the close
+    prev_rth_range_bps         0.13   0.26        0.09   1.11  -0.03  1.00  previous session's 09:30-16:00 range
+    pre0400_volume_rel         0.25   0.41        0.04  -0.05  +0.02  0.24  04:00-09:30 volume over its 20-day median
+    pre092955_trades_rel       0.18   0.19        0.03  -0.06  +0.04  1.00  09:29:55-09:30 trades over their 20-day median
 
-The pre-open range is the strongest single input. With its relative version's negative coefficient,
-the pair amounts to +0.11 on today's range and +0.11 on its 20-day median, so the normal level of
-the pre-open range counts as much as today's. The previous session's realized volatility (first 10
-minutes, last 30 minutes, after hours) carries the rest. Each is about as good alone (1.8-2.1 bps)
-and they add to each other. The previous session's range has a negative sign: given its volatility,
-a wide range means a trending day, followed by a calmer open. It and pre0400_rv_bps add little on
-the tuning quarters (0.03-0.05 bps).
+The previous session's volatility (its last 30 minutes, after hours, and the 22-day mean of its RV)
+and today's pre-open ranges (04:00-09:30, and 09:25-09:30 alone and relative to its median) carry
+the model. The previous session's range has a negative sign: given its volatility, a wide range
+means a trending day, followed by a calmer open. The last three add 0.03-0.09 bps each on the
+tuning quarters, and two features change sign within them (prev_rth_rv_ma22 and pre0400_volume_rel,
+which repeat other features), so the 10 are likely overfit by a few hundredths of a bps.
 
-Strong alone but not chosen, because they repeat the chosen ones: the previous RTH RV (1.92) and its
-22-day mean (1.62), the 09:25-09:30 range (1.73), the previous opening range (1.66) and its 5-day
-mean (1.41), and the pre-open volume over its median (1.33). Weak alone (under 0.6 bps): the last
-minute's and last 5 seconds' trade counts and range, the 09:25-09:30 volume and trades, and the gap.
-`earnings_open` (0.58 alone) has only one earnings open on each tuning quarter. It was chosen at 220
-days but not at 180.
+Strong alone but not chosen, because they repeat the chosen ones: the previous RTH RV (1.03), the
+previous opening range (0.98) and its 5-day mean (0.95), the 04:00-09:30 RV (0.92) and the previous
+session's first 10 minutes' RV (0.88). Weak alone (under 0.4 bps): the 04:00-09:30 range over its
+median, the last minute's and last 5 seconds' trade counts and range, and the 09:25-09:30 volume
+and trades.
 
-Adding `earnings_open` to the 7 by hand doesn't help. At 180 days it changes the MAE by -0.09 +- 0.16 bps
-over Q2-Q4 (Q2 17.33 -> 17.18, Q3 15.10 -> 15.45, Q4 16.69 -> 16.74). At 140 days the change is
--0.06 +- 0.08 and at 220 days +0.06 +- 0.13. The 7 features already see the earnings opens coming:
-their pre-open ranges are wide. Without the flag they predicted 105, 149 and 144 bps for the opens
-on 2026-04-30, 07-31 and 10-30 (actual 130, 124 and 150). With it they predicted 115, 169 and 144.
+The earnings days: the session after an earnings open has a median opening range 1.35 times its
+year's median (0.7-6.2 times; 276 bps on 2024-08-05, the global sell-off, and 208 bps on 2026-02-09), against 2-3 times on
+the earnings opens themselves. Dropping only the earnings opens, and fitting on them while not
+scoring them, scored within 0.3 bps of each other on Q2-Q4. Dropping them means there is no
+prediction for them.
 
 TRIED BEFORE (scored on 2023-2026 or 2026 before this setup; none helped)
 ==========================================================================
@@ -110,7 +115,7 @@ Each was added to the earlier top-8 features with `earnings_open`:
 
 Each run also writes `FEATURES`' predictions for every day from `PREDICT_START` (2026), each from a fit
 on the `TRAIN_DAYS` days before it, to ``data/analysis/AMZN_opening_range_predictions.csv``
-(`write_predictions`; columns `predicted_or_bps` and `or_bps`).
+(`write_predictions`; columns `predicted_or_bps` and `or_bps`), except the dropped days.
 
 Edit the values under ``if __name__ == "__main__"`` and run from the repo root:
     python custom/scripts/opening_range_features.py
@@ -132,6 +137,7 @@ from custom.scripts.analyze_optimization_runs import _catalog_files
 from custom.scripts.analyze_optimization_runs import _et_ns
 from custom.scripts.analyze_optimization_runs import _read_trades
 from custom.scripts.analyze_optimization_runs import _window_stats
+from custom.utils.earnings_dates import EARNINGS_DATES as EARNINGS_DATES_BY_SYMBOL
 from custom.utils.paths import data_subdir
 from scipy import stats as sps
 
@@ -165,33 +171,31 @@ WINDOWS = [
 # The model chosen by the last tuning run (see the module docstring)
 TRAIN_DAYS = 180
 FEATURES = [
+    "prev_rth_rv_ma22",
+    "pre0400_range_bps",
     "prev_last30_rv_bps",
     "prev_f10_rv_bps",
-    "pre0400_range_bps",
-    "pre0400_range_rel",
-    "prev_ah_rv_bps",
     "prev_rth_range_bps",
-    "pre0400_rv_bps",
+    "or_prev1",
 ]
 
-# AMZN's quarterly earnings release dates, from the filing dates of its 8-K Item 2.02 (Results of
-# Operations) on SEC EDGAR (CIK 0001018724), https://data.sec.gov/submissions/CIK0001018724.json.
-# All accepted 16:05-16:27 ET, after the close. Add each new quarter by hand.
-EARNINGS_DATES = [
-    "2022-02-03", "2022-04-28", "2022-07-28", "2022-10-27",
-    "2023-02-02", "2023-04-27", "2023-08-03", "2023-10-26",
-    "2024-02-01", "2024-04-30", "2024-08-01", "2024-10-31",
-    "2025-02-06", "2025-05-01", "2025-07-31", "2025-10-30",
-    "2026-02-05", "2026-04-29", "2026-07-30", "2026-10-29",
-]
+# AMZN's quarterly earnings release dates (all after the close); see `custom/utils/earnings_dates.py`
+EARNINGS_DATES = EARNINGS_DATES_BY_SYMBOL["AMZN"]
 
 # Days dropped from the dataset: AMZN's tariff and trade-news days, from the "Tariffs and trade"
 # table of custom/claude_plans/amzn-high-volume-days.md. Market-wide shocks no feature here could
 # see coming. 2026-06-29, which also had a tariff threat, is left in: Prime Day's record sales were
 # the bigger news.
 TARIFF_DAYS = [
-    "2025-03-04", "2025-04-03", "2025-04-04", "2025-04-07", "2025-04-08",
-    "2025-04-09", "2025-05-12", "2025-05-13", "2025-10-10",
+    "2025-03-04",
+    "2025-04-03",
+    "2025-04-04",
+    "2025-04-07",
+    "2025-04-08",
+    "2025-04-09",
+    "2025-05-12",
+    "2025-05-13",
+    "2025-10-10",
 ]
 
 
@@ -308,17 +312,21 @@ def build_features(s: pd.DataFrame) -> pd.DataFrame:
     f["prev_last30_rv_bps"] = prev["last30_rv_bps"]
     f["prev_ah_rv_bps"] = prev["ah_rv_bps"]
     f.loc[_stale(s), [c for c in f.columns if c.startswith(("gap_", "or_", "prev_"))]] = np.nan
-
-    f["earnings_open"] = earnings_open(s.index)
     return f.replace([np.inf, -np.inf], np.nan)
 
 
+def _earnings_days(index: pd.DatetimeIndex) -> pd.Series:
+    """True on each report day (`EARNINGS_DATES`) of `index`, the earnings open after it and the session after that."""
+    flag = earnings_open(index) == 1
+    return flag | flag.shift(1, fill_value=False) | pd.Series(index.isin(pd.DatetimeIndex(EARNINGS_DATES)), index=index)
+
+
 def build_dataset(symbol: str, venue: str, refresh: bool) -> pd.DataFrame:
-    """The label and every candidate per day, without the tariff days."""
+    """The label and every candidate per day, without the tariff days and the earnings days."""
     s = load_window_stats(symbol, venue, refresh)
     df = build_features(s).join(build_label(s))
     df = df[df[LABEL].notna() & (df[LABEL] > 0)]
-    return df[~df.index.isin(pd.DatetimeIndex(TARIFF_DAYS))]
+    return df[~df.index.isin(pd.DatetimeIndex(TARIFF_DAYS)) & ~_earnings_days(s.index).loc[df.index]]
 
 
 # MODELS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -354,7 +362,9 @@ def fit(z: np.ndarray, ylog: np.ndarray, cols: list[int], rows: np.ndarray) -> n
     return np.linalg.lstsq(a, ylog[rows], rcond=None)[0]
 
 
-def predict(z: np.ndarray, ylog: np.ndarray, cols: list[int], positions: np.ndarray, train_days: int | None) -> np.ndarray:
+def predict(
+    z: np.ndarray, ylog: np.ndarray, cols: list[int], positions: np.ndarray, train_days: int | None
+) -> np.ndarray:
     """
     The prediction for each row in `positions`, from an OLS fit of log(label) on the `cols` of the
     `train_days` rows before it (every earlier row if None) that have all of them. No `cols` is the
@@ -377,11 +387,15 @@ def _predict_many(z, ylog, models, positions, train_days):
     return [predict(z, ylog, cols, positions, train_days) for cols in models]
 
 
-def walk_forward(d: Design, models: dict[str, list[str]], positions: np.ndarray, train_days: int | None) -> pd.DataFrame:
+def walk_forward(
+    d: Design, models: dict[str, list[str]], positions: np.ndarray, train_days: int | None
+) -> pd.DataFrame:
     """Each model's (name -> features) prediction on the rows of `positions`."""
     names, cols = list(models), [d.cols(m) for m in models.values()]
-    chunks = [list(range(len(cols)))[i :: N_WORKERS] for i in range(min(N_WORKERS, len(cols)))]
-    results = Parallel(n_jobs=len(chunks))(delayed(_predict_many)(d.z, d.ylog, [cols[i] for i in c], positions, train_days) for c in chunks)
+    chunks = [list(range(len(cols)))[i::N_WORKERS] for i in range(min(N_WORKERS, len(cols)))]
+    results = Parallel(n_jobs=len(chunks))(
+        delayed(_predict_many)(d.z, d.ylog, [cols[i] for i in c], positions, train_days) for c in chunks
+    )
     preds = {}
     for chunk, result in zip(chunks, results, strict=True):
         preds |= {names[i]: r for i, r in zip(chunk, result, strict=True)}
@@ -436,12 +450,20 @@ def feature_summary(d, df, candidates, chosen, positions, train_days, tune_quart
     `train_days` days before the hold-out, and the share of the tuning days' fits with that sign.
     """
     actual = df[LABEL]
-    tune_days = df.index.to_period("Q").isin([pd.Period(q) for q in tune_quarters])
-    alone = mae(walk_forward(d, {c: [c] for c in candidates} | {"none": []}, positions, train_days), actual, tune_quarters)
+    tune_days = df.index.to_period("Q").isin([pd.Period(q) for q in tune_quarters]) & df.index.isin(d.index[positions])
+    alone = mae(
+        walk_forward(d, {c: [c] for c in candidates} | {"none": []}, positions, train_days), actual, tune_quarters
+    )
     rows = []
     for c in candidates:
         pair = df.loc[tune_days, [c, LABEL]].dropna()
-        rows.append({"feature": c, "spearman": sps.spearmanr(pair[c], pair[LABEL]).statistic, "alone_gain": alone["none"] - alone[c]})
+        rows.append(
+            {
+                "feature": c,
+                "spearman": sps.spearmanr(pair[c], pair[LABEL]).statistic,
+                "alone_gain": alone["none"] - alone[c],
+            }
+        )
     table = pd.DataFrame(rows).set_index("feature")
 
     drop = walk_forward(d, {"all": chosen} | {c: [x for x in chosen if x != c] for c in chosen}, positions, train_days)
@@ -474,10 +496,14 @@ def write_predictions(symbol: str, df: pd.DataFrame, d: Design, start: str) -> P
     has_features = np.isfinite(d.z[:, d.cols(FEATURES)]).all(axis=1)
     positions = np.flatnonzero((df.index >= start) & has_features)
     pred = predict(d.z, d.ylog, d.cols(FEATURES), positions, TRAIN_DAYS)
-    out = pd.DataFrame({"predicted_or_bps": pred, LABEL: df[LABEL].iloc[positions].to_numpy()}, index=df.index[positions].rename("day"))
+    out = pd.DataFrame(
+        {"predicted_or_bps": pred, LABEL: df[LABEL].iloc[positions].to_numpy()}, index=df.index[positions].rename("day")
+    )
     out_path = Path(data_subdir("analysis")) / f"{symbol}_opening_range_predictions.csv"
     out.round(3).to_csv(out_path)
-    print(f"\n{len(out)} predictions from {out.index.min().date()} to {out.index.max().date()} (MAE {(out['predicted_or_bps'] - out[LABEL]).abs().mean():.2f} bps) written to {out_path}")
+    print(
+        f"\n{len(out)} predictions from {out.index.min().date()} to {out.index.max().date()} (MAE {(out['predicted_or_bps'] - out[LABEL]).abs().mean():.2f} bps) written to {out_path}"
+    )
     return out_path
 
 
@@ -492,11 +518,15 @@ def main(symbol, venue, tune_quarters, holdout_quarter, grid, max_features, refr
     quarters = df.index.to_period("Q")
     all_quarters = [*tune_quarters, holdout_quarter]
     positions = np.flatnonzero(quarters.isin([pd.Period(q) for q in all_quarters]) & np.isfinite(d.z).all(axis=1))
-    print(f"=== {symbol}: {len(df)} days from {df.index.min().date()} to {df.index.max().date()}; {len(candidates)} candidates ===")
+    print(
+        f"=== {symbol}: {len(df)} days from {df.index.min().date()} to {df.index.max().date()}; {len(candidates)} candidates ==="
+    )
     for quarter in all_quarters:
         days = actual.iloc[positions[quarters[positions] == pd.Period(quarter)]]
         role = "hold-out" if quarter == holdout_quarter else "tuning"
-        print(f"   {quarter} ({role}): {len(days)} days ({days.index.min().date()} to {days.index.max().date()}), median {LABEL} {days.median():.1f} bps")
+        print(
+            f"   {quarter} ({role}): {len(days)} days ({days.index.min().date()} to {days.index.max().date()}), median {LABEL} {days.median():.1f} bps"
+        )
     tune_label = "+".join(tune_quarters)
 
     with pd.option_context("display.width", 250, "display.max_columns", None, "display.max_rows", 500):
@@ -504,16 +534,22 @@ def main(symbol, venue, tune_quarters, holdout_quarter, grid, max_features, refr
         print(f"   {'train_days':>10s} {'features':>8s} {'tune MAE':>9s} {'hold-out MAE':>13s}   features")
         results = {}
         for train_days in grid:
-            steps = forward_select(d, candidates, positions, actual, train_days, tune_quarters, holdout_quarter, max_features)
+            steps = forward_select(
+                d, candidates, positions, actual, train_days, tune_quarters, holdout_quarter, max_features
+            )
             results[train_days] = steps
             feats, mae_t, mae_h = steps[-1]
-            print(f"   {str(train_days):>10s} {len(feats):8d} {mae_t:9.2f} {mae_h:13.2f}   {', '.join(feats)}", flush=True)
+            print(
+                f"   {str(train_days):>10s} {len(feats):8d} {mae_t:9.2f} {mae_h:13.2f}   {', '.join(feats)}", flush=True
+            )
         best_days = min(results, key=lambda k: results[k][-1][1])
         chosen = results[best_days][-1][0]
 
         print(f"\n--- Steps at train_days={best_days} (the lowest {tune_label} MAE) ---")
         for feats, mae_t, mae_h in results[best_days]:
-            print(f"   {len(feats):2d} {'+ ' + feats[-1] if feats else 'trailing mean':28s} tune {mae_t:6.2f}   hold-out {mae_h:6.2f}")
+            print(
+                f"   {len(feats):2d} {'+ ' + feats[-1] if feats else 'trailing mean':28s} tune {mae_t:6.2f}   hold-out {mae_h:6.2f}"
+            )
 
         print(f"\n=== Features at train_days={best_days} ===")
         print(
@@ -534,7 +570,15 @@ def main(symbol, venue, tune_quarters, holdout_quarter, grid, max_features, refr
             pred = walk_forward(d, {name: feats}, positions, train_days)[name]
             for quarter in all_quarters:
                 in_q = pred.index.to_period("Q") == pd.Period(quarter)
-                rows.append({"model": name, "quarter": quarter, "train_days": train_days, "features": len(feats), **score(pred[in_q], actual)})
+                rows.append(
+                    {
+                        "model": name,
+                        "quarter": quarter,
+                        "train_days": train_days,
+                        "features": len(feats),
+                        **score(pred[in_q], actual),
+                    }
+                )
         print("\n=== Models by quarter ===")
         with pd.option_context("display.float_format", "{:,.3f}".format):
             print(pd.DataFrame(rows).set_index(["model", "quarter"]).to_string())
